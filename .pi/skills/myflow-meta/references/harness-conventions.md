@@ -65,11 +65,10 @@ Keep these consistent across files; change them together or not at all:
 
 ## Gotchas
 
-- **Parallel sub-agents share the working tree.** `myflow_subagent` never
-  creates git worktrees; every child spawns in the caller's directory unless
-  its task passes `cwd`. Use parallel dispatch for read-only work
-  (`myflow-research`), and give a writing task its own checkout via `cwd` when
-  you need isolation.
+- **Sub-agents share one working tree.** `myflow_subagent` always spawns
+  children in the caller's directory and never creates git worktrees. Use
+  parallel dispatch for read-only work (`myflow-research`); run writing agents
+  one at a time.
 - **Windows stdout encoding**: a Python process writing to a pipe defaults to
   the ANSI codepage, so non-ASCII text (em dashes, CJK task titles) becomes
   mojibake for the UTF-8 reader. `get_context.py` and `task.py` both call

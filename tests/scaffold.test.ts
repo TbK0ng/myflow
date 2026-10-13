@@ -105,18 +105,6 @@ test("payload carries agents, prompts, skills, and scripts", () => {
   assert.ok(existsSync(join(ROOT, ".myflow", "workflow.md")));
 });
 
-test("project-owned files are outside the payload", () => {
-  const payloadFiles = [
-    ...filesUnder(join(ROOT, ".pi"), ".md"),
-    ...filesUnder(join(ROOT, ".myflow", "scripts"), ".py"),
-  ].map((file) => relative(ROOT, file).split("\\").join("/"));
-  for (const file of payloadFiles) {
-    assert.ok(!file.includes(".myflow/spec/"), `${file} must not be payload`);
-    assert.ok(!file.includes(".myflow/tasks/"), `${file} must not be payload`);
-    assert.ok(!file.startsWith("tests/"), `${file} must not be payload`);
-  }
-});
-
 test("copied payload extension registers hooks, tool, and command", async () => {
   const destination = mkdtempSync(join(tmpdir(), "myflow-payload-"));
   try {

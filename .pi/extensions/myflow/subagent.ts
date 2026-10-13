@@ -6,12 +6,12 @@
  * definitions from `.pi/agents/` (and `~/.pi/agent/agents/`), in two dispatch
  * modes:
  *
- *   - single:   { agent, task, cwd? }
- *   - parallel: { tasks: [{ agent, task, cwd? }, ...] }   (max 8, 4 concurrent)
+ *   - single:   { agent, task }
+ *   - parallel: { tasks: [{ agent, task }, ...] }   (max 8, 4 concurrent)
  *
- * Children spawn in the caller's working directory unless a task passes `cwd`.
- * Parallel tasks therefore share one working tree; this tool never creates git
- * worktrees, so give each writing task its own checkout via `cwd` when needed.
+ * Children always spawn in the caller's working directory: sub-agents share one
+ * working tree, so parallel dispatch is for read-only work. This tool never
+ * creates git worktrees.
  *
  * Live progress is reported through the tool's `onUpdate` callback and through
  * the `myflow-subagent-progress` event bus channel.
@@ -102,21 +102,12 @@ const SUBAGENT_PARAMETERS = {
   properties: {
     agent: { type: "string", description: "Agent name for single mode" },
     task: { type: "string", description: "Task text for single mode" },
-    cwd: {
-      type: "string",
-      description: "Working directory for the single-mode agent (defaults to the current project)",
-    },
     tasks: {
       type: "array",
-      description:
-        "Parallel dispatch: one { agent, task, cwd? } per subagent. Tasks share the caller's working tree unless each sets its own cwd.",
+      description: "Parallel dispatch: one { agent, task } per subagent",
       items: {
         type: "object",
-        properties: {
-          agent: { type: "string" },
-          task: { type: "string" },
-          cwd: { type: "string", description: "Working directory for this task, for example a separate git worktree" },
-        },
+        properties: { agent: { type: "string" }, task: { type: "string" } },
         required: ["agent", "task"],
       },
     },
@@ -199,11 +190,6 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
   return results;
 }
 
-/** Resolve the directory a child runs in: a task-specific cwd wins over the caller's. */
-export function resolveTaskCwd(defaultCwd: string, taskCwd?: string): string {
-  return taskCwd?.trim() || defaultCwd;
-}
-
 interface DispatchDefaults {
   model?: string;
   thinkingLevel?: string;
@@ -217,7 +203,6 @@ interface RunOptions {
   task: string;
   signal?: AbortSignal;
   contextKey: string | null;
-  taskCwd?: string;
   onUpdate?: (partial: { content: Array<{ type: "text"; text: string }>; details: SubagentDetails }) => void;
   makeDetails: (results: SingleResult[]) => SubagentDetails;
 }
@@ -297,7 +282,7 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
 
     const exitCode = await new Promise<number>((resolveExit) => {
       const proc = spawn(invocation.command, invocation.args, {
-        cwd: resolveTaskCwd(defaultCwd, options.taskCwd),
+        cwd: defaultCwd,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
         env,
@@ -393,7 +378,6 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
     description: [
       "Delegate myflow work to a specialized sub-agent in an isolated context.",
       "Modes: single (agent + task) or parallel (tasks array, max 8).",
-      "Pass cwd to run an agent in another directory; parallel tasks share the caller's working tree and this tool does not create worktrees.",
       "Agents are read from .pi/agents/ (project) and ~/.pi/agent/agents/ (user).",
       "myflow agents: myflow-implement, myflow-check, myflow-research.",
     ].join(" "),
@@ -405,8 +389,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       params: {
         agent?: string;
         task?: string;
-        cwd?: string;
-        tasks?: Array<{ agent: string; task: string; cwd?: string }>;
+        tasks?: Array<{ agent: string; task: string }>;
         agentScope?: AgentScope;
       },
       signal: AbortSignal | undefined,
@@ -448,7 +431,6 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         agentName: string,
         task: string,
         update: RunOptions["onUpdate"],
-        taskCwd?: string,
       ): RunOptions => ({
         defaultCwd: ctx.cwd,
         dispatchDefaults,
@@ -457,7 +439,6 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         task,
         signal,
         contextKey,
-        taskCwd,
         onUpdate: update,
         makeDetails: makeDetails(hasTasks ? "parallel" : "single"),
       });
@@ -496,7 +477,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
               const current = partial.details.results[0];
               if (current) allResults[index] = current;
               emitParallel();
-            }, task.cwd),
+            }),
           );
           allResults[index] = result;
           emitParallel();
@@ -524,7 +505,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       if (params.agent && params.task) {
         emitProgress({ mode: "single", agent: params.agent });
         const result = await runSingleAgent(
-          runOptions(params.agent, params.task, onUpdate as RunOptions["onUpdate"], params.cwd),
+          runOptions(params.agent, params.task, onUpdate as RunOptions["onUpdate"]),
         );
         if (isFailedResult(result)) {
           return {
