@@ -6,6 +6,7 @@ import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 export type { ExtensionAPI };
 
@@ -21,7 +22,10 @@ export interface Message {
 /** Context passed to event hooks. */
 export interface HookContext {
   cwd: string;
-  sessionManager?: { getSessionId?: () => string };
+  sessionManager?: {
+    getSessionId?: () => string | undefined;
+    getSessionFile?: () => string | undefined;
+  };
   ui?: { notify: (msg: string, level: string) => void };
 }
 
@@ -62,10 +66,34 @@ function detectAgentType(): AgentType {
   return null;
 }
 
-function deriveContextKey(ctx: HookContext): string | null {
+export function sanitizeKey(raw: string): string {
+  const safe = raw.trim().replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+|[._-]+$/g, "");
+  return safe ? safe.slice(0, 160) : "";
+}
+
+export function hashValue(raw: string): string {
+  return createHash("sha256").update(raw).digest("hex").slice(0, 24);
+}
+
+export function buildContextKey(platformName: string, kind: string, value: string): string {
+  if (kind === "transcript") {
+    return `${platformName}_transcript_${hashValue(value)}`;
+  }
+  const safeValue = sanitizeKey(value);
+  return safeValue ? `${platformName}_${safeValue}` : `${platformName}_${hashValue(value)}`;
+}
+
+export function deriveContextKey(ctx: HookContext): string | null {
   const sessionId = ctx.sessionManager?.getSessionId?.();
-  if (!sessionId) return null;
-  return `myflow_session_${sessionId}`;
+  if (sessionId) {
+    return buildContextKey("omp", "session", sessionId);
+  }
+  const sessionFile = ctx.sessionManager?.getSessionFile?.();
+  if (sessionFile) {
+    return buildContextKey("omp", "transcript", sessionFile);
+  }
+  const override = process.env.MYFLOW_CONTEXT_ID?.trim();
+  return override ? sanitizeKey(override) || hashValue(override) : null;
 }
 
 
