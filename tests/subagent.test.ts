@@ -17,7 +17,9 @@ import {
   PROGRESS_CHANNEL,
   getPiInvocation,
   isFailedResult,
+  normalizeAgentName,
   registerMyflowSubagent,
+  resolveRunConfig,
 } from "../.pi/extensions/myflow/subagent.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -94,13 +96,13 @@ test("parseToolList: string, array, and empty", () => {
 });
 
 test("discoverAgents: finds the three myflow agents in .pi/agents", () => {
-  const discovery = discoverAgents(ROOT, "project");
+  const discovery = discoverAgents(ROOT);
   const names = discovery.agents.map((agent) => agent.name).sort();
   assert.deepEqual(names, ["myflow-check", "myflow-implement", "myflow-research"]);
   const implement = discovery.agents.find((agent) => agent.name === "myflow-implement")!;
   assert.ok(implement.systemPrompt.includes("Implement Agent"));
   assert.ok((implement.tools ?? []).includes("write"));
-  assert.equal(implement.source, "project");
+  assert.ok(discovery.agentsDir?.endsWith("agents"));
 });
 
 test("findNearestProjectAgentsDir: walks up from a nested directory", () => {
@@ -121,48 +123,88 @@ test("registerMyflowSubagent: registers the myflow_subagent tool", () => {
   const tool = tools.find((candidate) => candidate.name === "myflow_subagent");
   assert.ok(tool, "myflow_subagent must be registered");
   assert.equal(tool!.label, "Myflow Subagent");
-  assert.ok(tool!.parameters.properties.tasks);
-  assert.ok(!tool!.parameters.properties.cwd, "sub-agents share the working tree; there is no per-task cwd");
+  const properties = tool!.parameters.properties;
+  assert.ok(properties.agent, "agent is required");
+  assert.ok(properties.prompt, "prompt is required");
+  assert.deepEqual(properties.mode.enum, ["single", "parallel", "chain"]);
+  assert.ok(properties.prompts, "prompts drives parallel/chain");
+  assert.ok(properties.model && properties.thinking, "per-call model and thinking overrides");
+  assert.ok(!properties.tasks, "parallel takes prompts for one agent, not task objects");
+  assert.ok(!properties.cwd, "sub-agents share the working tree; there is no per-task cwd");
 });
 
-test("myflow_subagent: invalid parameters reports available agents", async () => {
+test("normalizeAgentName: prefixes the myflow namespace and defaults", () => {
+  assert.equal(normalizeAgentName(undefined), "myflow-implement");
+  assert.equal(normalizeAgentName("implement"), "myflow-implement");
+  assert.equal(normalizeAgentName("myflow-check"), "myflow-check");
+  assert.equal(normalizeAgentName(" my-custom "), "myflow-my-custom");
+});
+
+test("resolveRunConfig: parameters beat the agent definition beat the caller", () => {
+  const agent = { name: "myflow-implement", description: "", systemPrompt: "", model: "agent/model", thinking: "low", tools: ["read"], filePath: "" };
+  const fromCaller = resolveRunConfig({}, agent, { model: "inherit/model", thinking: "off" });
+  assert.equal(fromCaller.model, "agent/model");
+  assert.equal(fromCaller.thinking, "low");
+  assert.deepEqual(fromCaller.tools, ["read"]);
+
+  const fromParams = resolveRunConfig({ model: "param/model", thinking: "high" }, agent, { model: "inherit/model" });
+  assert.equal(fromParams.model, "param/model");
+  assert.equal(fromParams.thinking, "high");
+
+  const suffix = resolveRunConfig({ model: "param/model:xhigh" }, agent);
+  assert.equal(suffix.model, "param/model");
+  assert.equal(suffix.thinking, "xhigh");
+
+  const inherited = resolveRunConfig({}, { ...agent, model: undefined, thinking: undefined }, { model: "inherit/model", thinking: "medium" });
+  assert.equal(inherited.model, "inherit/model");
+  assert.equal(inherited.thinking, "medium");
+});
+
+test("myflow_subagent: unknown agent reports the missing definition", async () => {
   const { api, tools } = makeMockAPI();
   registerMyflowSubagent(api as any);
   const tool = tools.find((candidate) => candidate.name === "myflow_subagent")!;
-  const result = await tool.execute("id", {}, undefined, undefined, { cwd: ROOT });
-  assert.ok(result.content[0].text.includes("Invalid parameters"));
+  const result = await tool.execute("id", { agent: "does-not-exist", prompt: "do it" }, undefined, undefined, {
+    cwd: ROOT,
+  });
+  assert.ok(result.content[0].text.includes("No definition found for: myflow-does-not-exist"));
   assert.ok(result.content[0].text.includes("myflow-implement"));
 });
 
-test("myflow_subagent: unknown agent fails without spawning", async () => {
+test("myflow_subagent: missing prompt for single mode is rejected", async () => {
   const { api, tools } = makeMockAPI();
   registerMyflowSubagent(api as any);
   const tool = tools.find((candidate) => candidate.name === "myflow_subagent")!;
-  const result = await tool.execute(
-    "id",
-    { agent: "does-not-exist", task: "do it" },
-    undefined,
-    undefined,
-    { cwd: ROOT },
+  await assert.rejects(
+    () => tool.execute("id", { agent: "myflow-implement", mode: "single" }, undefined, undefined, { cwd: ROOT }),
+    /prompt is required/,
   );
-  assert.equal(result.isError, true);
-  assert.ok(result.content[0].text.includes("Unknown agent"));
 });
 
-test("myflow_subagent: emits myflow-subagent-progress on dispatch", async () => {
+test("myflow_subagent: emits progress before the child starts", async () => {
   const { api, tools, events } = makeMockAPI();
   registerMyflowSubagent(api as any);
   const tool = tools.find((candidate) => candidate.name === "myflow_subagent")!;
-  // Parallel progress is emitted even when every dispatched agent is unknown,
-  // so this never invokes a real model.
-  await tool.execute(
-    "id",
-    { tasks: [{ agent: "does-not-exist", task: "review" }] },
-    undefined,
-    undefined,
-    { cwd: ROOT },
-  );
-  assert.ok(events.some((event) => event.channel === PROGRESS_CHANNEL));
+  // Force the "pi" fallback and an empty PATH so spawning fails immediately:
+  // this exercises the progress event without a model call or a child process.
+  const argv1 = process.argv[1];
+  const pathEnv = process.env.PATH;
+  process.argv[1] = "/nonexistent/not-a-script";
+  process.env.PATH = mkdtempSync(join(tmpdir(), "myflow-no-path-"));
+  try {
+    const result = await tool.execute(
+      "id",
+      { agent: "implement", mode: "parallel", prompts: ["one", "two"] },
+      undefined,
+      undefined,
+      { cwd: ROOT },
+    );
+    assert.equal(result.isError, true);
+    assert.ok(events.some((event) => event.channel === PROGRESS_CHANNEL), "progress must be emitted");
+  } finally {
+    process.argv[1] = argv1;
+    process.env.PATH = pathEnv;
+  }
 });
 
 test("extension registers myflow_subagent and all 6 hooks", () => {

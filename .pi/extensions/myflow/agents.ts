@@ -1,60 +1,48 @@
 /**
- * Agent discovery and configuration for the myflow Pi harness.
+ * Agent definitions from `<project>/.pi/agents/*.md`.
  *
- * Agent definitions are Markdown files with YAML frontmatter:
+ * Frontmatter (YAML subset):
  *
  *     ---
  *     name: myflow-implement
  *     description: Implementation expert.
  *     tools: read, write, edit, bash, find, grep, ls
+ *     model: provider/model        # optional
+ *     thinking: high               # optional
  *     ---
  *     System prompt for the agent goes here.
- *
- * Locations:
- *   - `~/.pi/agent/agents/*.md`  (user level, always available)
- *   - `<project>/.pi/agents/*.md` (project level, used with scope "project"/"both")
  *
  * Runtime imports are limited to Node builtins so the module stays importable
  * under `node --test` without installing the Pi package.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-
-export type AgentScope = "user" | "project" | "both";
 
 export interface AgentConfig {
   name: string;
   description: string;
   tools?: string[];
   model?: string;
+  thinking?: string;
   systemPrompt: string;
-  source: "user" | "project";
   filePath: string;
 }
 
 export interface AgentDiscoveryResult {
   agents: AgentConfig[];
-  projectAgentsDir: string | null;
+  agentsDir: string | null;
 }
 
 /** Pi's project configuration directory name. */
 export const CONFIG_DIR_NAME = ".pi";
 
-/** Resolve the Pi agent directory (honors `PI_CODING_AGENT_DIR`). */
-export function getAgentDir(): string {
-  const override = process.env.PI_CODING_AGENT_DIR?.trim();
-  if (override) return resolve(override);
-  return join(homedir(), CONFIG_DIR_NAME, "agent");
-}
-
 /**
  * Parse frontmatter from a Markdown file.
  *
- * Supports the small YAML subset used by myflow agent files: plain scalars,
- * quoted scalars, comma-separated lists, inline `[a, b]` lists, and `|` block
- * scalars. Unsupported YAML is preserved as text rather than throwing.
+ * Supports the small YAML subset used by agent files: plain and quoted scalars,
+ * comma-separated or inline lists, and `|` block scalars. Unsupported YAML is
+ * preserved as text rather than throwing.
  */
 export function parseFrontmatter(content: string): {
   frontmatter: Record<string, unknown>;
@@ -112,8 +100,7 @@ function parseScalar(raw: string): unknown {
   if (value.startsWith("[") && value.endsWith("]")) {
     return splitList(value.slice(1, -1));
   }
-  const unquoted = unquote(value);
-  return unquoted;
+  return unquote(value);
 }
 
 function stripInlineComment(value: string): string {
@@ -159,7 +146,7 @@ export function parseToolList(value: unknown): string[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
+function loadAgentsFromDir(dir: string): AgentConfig[] {
   const agents: AgentConfig[] = [];
   if (!existsSync(dir)) return agents;
 
@@ -192,8 +179,8 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
       description: frontmatter.description,
       tools: parseToolList(frontmatter.tools),
       model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+      thinking: typeof frontmatter.thinking === "string" ? frontmatter.thinking : undefined,
       systemPrompt: body,
-      source,
       filePath,
     });
   }
@@ -221,24 +208,8 @@ export function findNearestProjectAgentsDir(cwd: string): string | null {
   }
 }
 
-/** Discover agents for the requested scope. */
-export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
-  const userDir = join(getAgentDir(), "agents");
-  const projectAgentsDir = findNearestProjectAgentsDir(cwd);
-
-  const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
-  const projectAgents =
-    scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
-
-  const agentMap = new Map<string, AgentConfig>();
-  if (scope === "both") {
-    for (const agent of userAgents) agentMap.set(agent.name, agent);
-    for (const agent of projectAgents) agentMap.set(agent.name, agent);
-  } else if (scope === "user") {
-    for (const agent of userAgents) agentMap.set(agent.name, agent);
-  } else {
-    for (const agent of projectAgents) agentMap.set(agent.name, agent);
-  }
-
-  return { agents: Array.from(agentMap.values()), projectAgentsDir };
+/** Discover the project's agents. */
+export function discoverAgents(cwd: string): AgentDiscoveryResult {
+  const agentsDir = findNearestProjectAgentsDir(cwd);
+  return { agents: agentsDir ? loadAgentsFromDir(agentsDir) : [], agentsDir };
 }

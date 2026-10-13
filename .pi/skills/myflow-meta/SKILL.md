@@ -14,7 +14,7 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
 ```
 .pi/
   extensions/myflow/index.ts        # extension factory: 6 hooks + /myflow-status
-  extensions/myflow/subagent.ts     # myflow_subagent tool (single/parallel)
+  extensions/myflow/subagent.ts     # myflow_subagent tool (single/parallel/chain)
   extensions/myflow/agents.ts       # agent discovery from .pi/agents
   extensions/myflow/status.ts       # status report builder (used by the command)
   extensions/myflow/*.ts            # pure helpers the extension imports: root lookup,
@@ -63,11 +63,16 @@ directory. Six hooks are always registered:
 Injected blocks are `custom` messages with `display: false`:
 `<session-context>`, `<task-context>`, `<workflow-state>`.
 
-`myflow_subagent` spawns an isolated `pi` process per task. It discovers agents
-from `.pi/agents/` (project) and `~/.pi/agent/agents/` (user), passes the agent
-body via `--append-system-prompt`, sets `MYFLOW_AGENT_TYPE` and
-`MYFLOW_CONTEXT_ID`, and emits `myflow-subagent-progress`. Agents without a
-`model` inherit the caller's model and thinking level.
+`myflow_subagent` spawns an isolated `pi` process per run. A call names one
+agent and one or more prompts: `single` runs one prompt, `parallel` runs up to
+six prompts for that agent at once, and `chain` runs them in sequence with
+`Previous output:` appended. `agent` is normalized to the `myflow-` prefix
+(`implement` → `myflow-implement`) and must have a definition in `.pi/agents/`.
+Per-call `model` and `thinking` override the agent definition, which overrides
+the caller. The child receives the agent body via `--append-system-prompt`, plus
+`MYFLOW_AGENT_TYPE` and `MYFLOW_CONTEXT_ID`, and emits
+`myflow-subagent-progress`. Agents without `model`/`thinking` inherit both from
+the caller.
 
 `/myflow-status` is a real Pi command (no model call): it prints the active
 task, the workflow phase, and git state.

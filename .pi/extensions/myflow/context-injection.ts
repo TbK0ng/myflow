@@ -5,9 +5,9 @@ import { Buffer } from "node:buffer";
 /**
  * A dispatched agent's name, or null when this process is the main session.
  *
- * Any name is accepted: `.pi/agents/*.md` may define custom agents. The three
- * bundled names only select which JSONL manifests are injected; unknown names
- * get both.
+ * Any name is accepted: `.pi/agents/*.md` may define custom agents. Only
+ * `myflow-implement` and `myflow-check` have a curated JSONL manifest; every
+ * other name, including the main session, gets none.
  */
 export type AgentType = string | null;
 
@@ -29,9 +29,7 @@ const MAX_JSONL_BYTES = 1024 * 1024;
 export function taskContextJsonlNames(agentType?: AgentType): string[] {
   if (agentType === "myflow-implement") return ["implement.jsonl"];
   if (agentType === "myflow-check") return ["check.jsonl"];
-  if (agentType === "myflow-research") return [];
-  // Main session and any custom agent: both manifests.
-  return ["implement.jsonl", "check.jsonl"];
+  return [];
 }
 
 /** Collect the input paths for task context. */
