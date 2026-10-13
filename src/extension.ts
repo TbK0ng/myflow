@@ -1,7 +1,7 @@
 import { findProjectRoot } from "./find-project-root.ts";
 import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
 import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
-import { type AgentType } from "./context-injection.ts";
+import { type AgentType, buildTaskContext } from "./context-injection.ts";
 import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -103,14 +103,7 @@ function getTaskContext(
   projectRoot: string,
   agentType?: AgentType,
 ): string {
-  const prdPath = join(taskDir, "prd.md");
-  let prd = "";
-  try {
-    prd = readFileSync(prdPath, "utf-8");
-  } catch {
-    return "";
-  }
-  return `<task-context>\n### prd.md\n\n${prd}\n</task-context>`;
+  return buildTaskContext(projectRoot, taskDir, agentType);
 }
 
 export default function extension(pi: ExtensionAPI): void {
