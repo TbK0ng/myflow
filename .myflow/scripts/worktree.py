@@ -148,6 +148,39 @@ def repo_root() -> Path | None:
     return Path(out.strip()) if code == 0 and out.strip() else None
 
 
+COPIED_INPUT_MARKER = "# myflow copied input for this worktree; never part of this branch"
+
+
+def shield_copied_inputs(target: Path, copied: list[str]) -> None:
+    """Keep `copy:`ed directories out of the worktree's `git status`.
+
+    They are inputs for the session (task artifacts, local config), not part of
+    the branch. Without this, `git add -A` stages them and merging that branch
+    into the main tree aborts with "untracked working tree files would be
+    overwritten", because the same paths exist there untracked.
+
+    The rule lives inside the copied directory, so it applies to this worktree
+    only: the main tree keeps tracking the same paths as deliverables. (An
+    ignore rule in the git directory cannot do this — `info/exclude` is read
+    from the common directory and would hide the main tree's copies too.)
+    """
+    for entry in copied:
+        directory = target / entry
+        if not directory.is_dir():
+            continue
+        ignore_file = directory / ".gitignore"
+        try:
+            existing = ignore_file.read_text(encoding="utf-8") if ignore_file.is_file() else ""
+            if COPIED_INPUT_MARKER in existing:
+                continue
+            block = COPIED_INPUT_MARKER + "\n*\n"
+            if existing and not existing.endswith("\n"):
+                existing += "\n"
+            ignore_file.write_text(existing + block, encoding="utf-8")
+        except OSError:
+            continue
+
+
 def worktree_dir(root: Path, config: dict) -> Path:
     raw = str(config.get("worktree_dir") or DEFAULT_WORKTREE_DIR)
     candidate = Path(raw)
@@ -254,6 +287,8 @@ def cmd_create(args: argparse.Namespace) -> int:
         else:
             shutil.copy2(source, destination)
         copied.append(entry)
+
+    shield_copied_inputs(target, copied)
 
     post_create_failed: str | None = None
     for command in config.get("post_create", []):

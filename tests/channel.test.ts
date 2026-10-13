@@ -294,6 +294,86 @@ test("channel rm --force waits out a log handle that is still open", () => {
   }
 });
 
+async function waitForFile(path: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${path}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+test("channel rm --force stops the worker together with its children", async () => {
+  const sandbox = makeSandbox();
+  channel(sandbox, ["create", "tree"]);
+  const store = projectStore(sandbox);
+  const log = join(store, "tree", "logs", "w1.log");
+  const pidFile = join(store, "tree", "child.pid");
+  mkdirSync(dirname(log), { recursive: true });
+  writeFileSync(log, "x");
+  // A worker that leaves a child holding its log handle open: the case that used
+  // to keep the channel undeletable, because only the worker itself was stopped.
+  // A real worker leaves MCP servers behind in exactly the same way.
+  // A worker that leaves a child holding its log handle open: the case that used
+  // to keep the channel undeletable, because only the worker itself was stopped.
+  // A real worker leaves MCP servers behind in exactly the same way. The holder is
+  // Python on purpose: Python opens files without FILE_SHARE_DELETE, so its handle
+  // really blocks the delete (Node's handles do not).
+  const holder = join(store, "tree", "holder.py");
+  writeFileSync(
+    holder,
+    [
+      'import os',
+      'import subprocess',
+      'import sys',
+      'import time',
+      '',
+      'mode, log, pidfile = sys.argv[1], sys.argv[2], sys.argv[3]',
+      'if mode == "child":',
+      '    handle = open(log, "ab")',
+      '    time.sleep(120)',
+      'else:',
+      '    child = subprocess.Popen(',
+      '        [sys.executable, __file__, "child", log, pidfile],',
+      '        stdin=subprocess.DEVNULL,',
+      '        stdout=subprocess.DEVNULL,',
+      '        stderr=subprocess.DEVNULL,',
+      '    )',
+      '    with open(pidfile, "w", encoding="utf-8") as out:',
+      '        out.write(str(child.pid))',
+      '    handle = open(log, "ab")',
+      '    time.sleep(120)',
+    ].join(String.fromCharCode(10)),
+    "utf-8",
+  );
+  const worker = spawn("python3", [holder, "parent", log, pidFile], { stdio: "ignore" });
+  try {
+    writeFileSync(
+      join(store, "workers.json"),
+      JSON.stringify({ workers: [{ handle: "w1", channel: "tree", scope: "project", agent: "research", pid: worker.pid, started_at: "x", log }] }),
+      "utf-8",
+    );
+    await waitForFile(pidFile);
+    const childPid = Number(readFileSync(pidFile, "utf-8"));
+
+    assert.match(channel(sandbox, ["rm", "tree", "--force"]), /removed: tree/);
+    assert.ok(!existsSync(join(store, "tree")), "the log is deletable, so nothing holds it");
+    let alive = true;
+    try {
+      process.kill(childPid, 0);
+    } catch {
+      alive = false;
+    }
+    assert.equal(alive, false, "the worker process is stopped with its children");
+  } finally {
+    try {
+      process.kill(worker.pid!, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    cleanup(sandbox);
+  }
+});
+
 test("channel store never creates a .myflow directory in the home directory", () => {
   const sandbox = makeSandbox();
   try {

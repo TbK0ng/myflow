@@ -9,16 +9,21 @@ harness itself, so they hold in every project that carries the payload.
 
 - `.pi/extensions/myflow/` (self-contained; no files outside this directory)
 - `.pi/agents/` — `myflow-implement`, `myflow-check`, `myflow-research`
-- `.pi/prompts/` — `myflow-continue`, `myflow-finish-work`
+- `.pi/prompts/` — `myflow-continue`, `myflow-finish-work`, `myflow-parallel`
 - `.pi/skills/` — the workflow skills
 - `.myflow/workflow.md`
 - `.myflow/scripts/`
+- `.myflow/agents/` — the channel runtime's worker definitions
 
 **Project-owned** — never copy between projects:
 
 - `.myflow/spec/` (this project's conventions), `.myflow/config.yaml`,
   `.myflow/worktree.yaml`
-- `.myflow/tasks/`, `.myflow/archive/`, `.myflow/.runtime/`
+- `.myflow/tasks/`, `.myflow/archive/` — deliverables, committed with the code
+- `.myflow/.runtime/` — machine state (sessions, worktree registry, worker
+  logs, channel-adjacent records). Add it to the project's `.gitignore`; a
+  tracked runtime directory pollutes every diff and makes worktree merges
+  collide with untracked copies.
 
 **Harness development** — not needed to run the payload:
 

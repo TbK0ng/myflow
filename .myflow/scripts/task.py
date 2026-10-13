@@ -232,6 +232,15 @@ def cmd_create(args: argparse.Namespace) -> int:
         "created_at": _now(),
     }
     _write_task(task_dir, data)
+    session, _source = _read_session()
+    if not session.get("current_task"):
+        # Planning needs a pointer too. Without one the extension reports
+        # no_task, so the planning block — and the jsonl review gate it
+        # carries — never reaches the model while a task sits in planning.
+        # An existing pointer is left alone: creating a second task (or a
+        # child) must not hijack the session that is already working.
+        session["current_task"] = _relative(task_dir)
+        _write_session(session)
     print(f"created: {_relative(task_dir)}")
     return 0
 

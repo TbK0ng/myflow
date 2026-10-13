@@ -53,6 +53,10 @@ without a model call.
 - `implement.jsonl` / `check.jsonl` — the spec and research files injected into sub-agents.
 - `research/<topic>.md` — persisted research findings.
 
+`tasks/` and `archive/` are deliverables and are committed with the code they
+describe. `.myflow/.runtime/` (sessions, worktree registry, worker logs) is
+machine state: put it in `.gitignore`, never commit it.
+
 ## Dispatch Protocol
 
 - Only the main session may dispatch `myflow_subagent`. Sub-agent definitions

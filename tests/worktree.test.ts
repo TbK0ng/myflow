@@ -270,6 +270,27 @@ async function waitForCapture(capture: string, needle: string, timeoutMs = 15_00
   }
 }
 
+test("worktree create: copied inputs stay out of the worktree git status", () => {
+  const project = makeRepo("worktree_dir: ../worktrees\ncopy:\n  - .myflow/tasks\n");
+  try {
+    mkdirSync(join(project.root, ".myflow", "tasks", "t"), { recursive: true });
+    writeFileSync(join(project.root, ".myflow", "tasks", "t", "note.md"), "work order\n");
+    worktree(project, ["create", "copied"]);
+    const target = join(project.worktrees, "copied");
+    assert.ok(existsSync(join(target, ".myflow", "tasks", "t", "note.md")), "the copy lands in the worktree");
+
+    // Inputs for the session, not part of its branch: without this, git add -A
+    // stages them and merging the branch into the main tree aborts because the
+    // same paths exist there untracked.
+    const status = execFileSync("git", ["status", "--short"], { cwd: target, encoding: "utf-8" }).trim();
+    assert.ok(!status.includes(".myflow/tasks"), `copied inputs must not appear in git status, got: ${status}`);
+    const addDryRun = execFileSync("git", ["add", "-A", "--dry-run"], { cwd: target, encoding: "utf-8" }).trim();
+    assert.ok(!addDryRun.includes(".myflow/tasks"), `git add -A must not stage copied inputs, got: ${addDryRun}`);
+  } finally {
+    cleanup(project);
+  }
+});
+
 test("worktree start: every launch mints a fresh session id", async () => {
   const project = makeRepo("worktree_dir: ../worktrees\n");
   const binDir = join(project.root, "..", "bin");

@@ -43,6 +43,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -311,6 +312,32 @@ def terminate(pid: object) -> bool:
         return False
 
 
+def terminate_tree(pid: object) -> bool:
+    """Stop a worker together with everything it started.
+
+    A worker's own children (MCP servers, for one) inherit its log handle and
+    outlive a kill aimed at the worker alone, which is why a channel could not
+    be removed right after its worker stopped. Workers are started detached /
+    in their own session, so the whole tree can be addressed at once.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        completed = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return completed.returncode == 0
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        return True
+    except (OSError, SystemError, ValueError):
+        return terminate(pid)
+
+
 def wait_for_exit(pids: list[object], timeout: float = 5.0) -> None:
     """Block until the pids are gone, so their file handles are released.
 
@@ -572,7 +599,7 @@ def cmd_kill(args: argparse.Namespace) -> int:
     for worker in workers:
         match = args.all or worker.get("handle") == args.name or worker.get("channel") == args.name
         if match and is_alive(worker.get("pid")):
-            if terminate(worker.get("pid")):
+            if terminate_tree(worker.get("pid")):
                 killed += 1
             continue
         survivors.append(worker)
@@ -598,7 +625,7 @@ def cmd_rm(args: argparse.Namespace) -> int:
         return 1
     if live:
         for worker in live:
-            terminate(worker.get("pid"))
+            terminate_tree(worker.get("pid"))
         stopped = {worker.get("pid") for worker in live}
         write_workers(
             args.scope,
@@ -631,7 +658,7 @@ def cmd_prune(args: argparse.Namespace) -> int:
             continue
         last = last_event_time(str(worker.get("channel")), args.scope, str(worker.get("handle")))
         if last is not None and time.time() - last > guard["idle_timeout"]:
-            if terminate(worker.get("pid")):
+            if terminate_tree(worker.get("pid")):
                 killed_idle += 1
                 continue
         kept.append(worker)

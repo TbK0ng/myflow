@@ -201,3 +201,48 @@ test("get_context.py rejects unsupported modes instead of returning unrelated ou
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("planning is reachable: task.py create points the session at the new task", () => {
+  const root = makeProject();
+  try {
+    runTask(root, ["create", "Planning task", "--slug", "planning-task"], { PI_SESSION_ID: "plan-1" });
+
+    // Before the fix the pointer stayed empty until `start`, so the extension
+    // reported no_task for the whole planning phase and its block (jsonl gate
+    // included) never reached the model.
+    const sessionFile = join(root, ".myflow", ".runtime", "sessions", "pi_plan-1.json");
+    assert.ok(existsSync(sessionFile), "create must materialize the session file");
+    assert.ok(
+      readFileSync(sessionFile, "utf-8").replaceAll("\\", "/").includes("tasks/planning-task"),
+      "the session points at the new task",
+    );
+
+    const status = resolveActiveTaskStatus(root, "pi_plan-1");
+    assert.equal(status.status, "planning");
+    assert.equal(status.taskTitle, "Planning task");
+
+    // Starting it moves the same session on to in_progress.
+    runTask(root, ["start", ".myflow/tasks/planning-task"], { PI_SESSION_ID: "plan-1" });
+    assert.equal(resolveActiveTaskStatus(root, "pi_plan-1").status, "in_progress");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("task.py create never hijacks a session that is already on a task", () => {
+  const root = makeProject();
+  try {
+    runTask(root, ["create", "First", "--slug", "first"], { PI_SESSION_ID: "plan-2" });
+    runTask(root, ["start", ".myflow/tasks/first"], { PI_SESSION_ID: "plan-2" });
+    runTask(root, ["create", "Second", "--slug", "second"], { PI_SESSION_ID: "plan-2" });
+
+    const status = resolveActiveTaskStatus(root, "pi_plan-2");
+    assert.equal(status.status, "in_progress");
+    assert.ok(
+      String(status.taskDir).replaceAll("\\", "/").endsWith("tasks/first"),
+      "the active task stays the one being worked on",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
