@@ -1,5 +1,5 @@
-import { readFileSync, statSync, existsSync, openSync, readSync, fstatSync, closeSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, statSync, existsSync, openSync, readSync, fstatSync, closeSync, realpathSync } from "node:fs";
+import { join, resolve, relative, basename, isAbsolute } from "node:path";
 import { Buffer } from "node:buffer";
 
 export type AgentType = "myflow-implement" | "myflow-check" | "myflow-research" | null;
@@ -115,11 +115,13 @@ export function readContextInjectionLimits(projectRoot: string): ContextInjectio
 
 /** Context budget manager. */
 export class ContextBudget {
+  private readonly maxTotalBytes: number;
   private totalBytesUsed: number;
   private terminalSummaryEmitted = false;
   private stopped = false;
 
-  constructor(private readonly maxTotalBytes: number, initialUsed = 0) {
+  constructor(maxTotalBytes: number, initialUsed = 0) {
+    this.maxTotalBytes = maxTotalBytes;
     this.totalBytesUsed = initialUsed;
   }
 
@@ -264,4 +266,136 @@ export function readJsonlLines(jsonlPath: string, displayPath: string): { lines:
   } catch {
     return { lines: [], omitted: null };
   }
+}
+
+/** Check whether a path is inside a root directory. */
+function isInsideRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/** Resolve a project file path, returning null if it escapes the project root. */
+export function resolveProjectFile(projectRoot: string, file: string): string | null {
+  try {
+    const rootReal = realpathSync(projectRoot);
+    const targetReal = realpathSync(resolve(projectRoot, file));
+    if (isInsideRoot(rootReal, targetReal)) return targetReal;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Display a file path relative to the project root or task dir. */
+export function displayProjectPath(projectRoot: string, filePath: string, taskDir?: string): string {
+  const direct = relative(projectRoot, filePath).split("\\").join("/");
+  if (direct && !direct.startsWith("../") && !isAbsolute(direct)) return direct;
+  if (taskDir) {
+    const taskRelative = relative(projectRoot, taskDir).split("\\").join("/");
+    const taskLabel = taskRelative && !taskRelative.startsWith("../") && !isAbsolute(taskRelative)
+      ? taskRelative
+      : `.myflow/tasks/${basename(taskDir)}`;
+    const withinTask = relative(taskDir, filePath).split("\\").join("/");
+    if (withinTask && !withinTask.startsWith("../") && !isAbsolute(withinTask)) {
+      return `${taskLabel}/${withinTask}`;
+    }
+  }
+  try {
+    return relative(realpathSync(projectRoot), realpathSync(filePath)).split("\\").join("/");
+  } catch {
+    return relative(projectRoot, filePath).split("\\").join("/");
+  }
+}
+
+/** Build the budgeted task context. */
+export function buildTaskContext(projectRoot: string, taskDir: string, agentType?: AgentType): string {
+  const parts: string[] = [];
+  const limits = readContextInjectionLimits(projectRoot);
+  const prefix = "<task-context>\nContext is bounded by .myflow/config.yaml. Files marked [truncated] or [omitted] remain authoritative on disk; use their required_read path before relying on missing detail.\n\n";
+  const suffix = "\n</task-context>";
+  const wrapperBytes = Buffer.byteLength(prefix + suffix, "utf-8");
+  if (limits.max_total_bytes > 0 && limits.max_total_bytes < wrapperBytes) return "";
+  const budget = new ContextBudget(limits.max_total_bytes, wrapperBytes);
+
+  const appendCandidate = (primary: string | null, fallback: string | null = null): void => {
+    const separator = parts.length > 0 ? "\n\n" : "";
+    const output = budget.emitCandidate(
+      primary === null ? null : separator + primary,
+      fallback === null ? null : separator + fallback,
+    );
+    if (output !== null) parts.push(output);
+  };
+
+  // prd.md and info.md — always included
+  const prdPath = join(taskDir, "prd.md");
+  const relativePrdPath = displayProjectPath(projectRoot, prdPath, taskDir);
+  if (existsSync(prdPath)) {
+    const artifact = materialize(prdPath, relativePrdPath, "Requirements document", limits.max_artifact_bytes, "artifact");
+    appendCandidate(artifact.block, artifact.notice);
+  }
+  const infoPath = join(taskDir, "info.md");
+  const relativeInfoPath = displayProjectPath(projectRoot, infoPath, taskDir);
+  if (existsSync(infoPath)) {
+    const artifact = materialize(infoPath, relativeInfoPath, "Task information", limits.max_artifact_bytes, "artifact");
+    appendCandidate(artifact.block, artifact.notice);
+  }
+
+  // Determine which jsonl files to read based on agent type
+  const jsonlNames = taskContextJsonlNames(agentType);
+
+  // A file may be referenced by both manifests. Use the resolved real path so
+  // relative aliases and symlinked paths cannot consume the context budget twice.
+  const includedPaths = new Set<string>();
+
+  for (const jsonlName of jsonlNames) {
+    const jsonlPath = join(taskDir, jsonlName);
+    if (!existsSync(jsonlPath)) continue;
+
+    const relativeJsonlPath = displayProjectPath(projectRoot, jsonlPath, taskDir);
+    const manifest = readJsonlLines(jsonlPath, relativeJsonlPath);
+    if (manifest.omitted) {
+      appendCandidate(`## ${jsonlName}\n\n${manifest.omitted}`);
+      continue;
+    }
+
+    const fileChunks: string[] = [];
+    let sectionHeaderEmitted = false;
+    for (const line of manifest.lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const row = JSON.parse(trimmed) as Record<string, unknown>;
+        const file = typeof row.file === "string" ? row.file.trim() : "";
+        if (!file) continue;
+        const targetPath = resolveProjectFile(projectRoot, file);
+        if (!targetPath) continue;
+        if (includedPaths.has(targetPath)) continue;
+        includedPaths.add(targetPath);
+        const materialized = materialize(targetPath, file, typeof row.reason === "string" ? row.reason : "-", limits.max_file_bytes, "file");
+        const sectionPrefix = sectionHeaderEmitted
+          ? "\n\n---\n\n"
+          : `${parts.length > 0 ? "\n\n" : ""}## ${jsonlName}\n\n`;
+        const output = budget.emitCandidate(
+          materialized.block === null ? null : `${sectionPrefix}${materialized.block}`,
+          `${sectionPrefix}${materialized.notice}`,
+        );
+        if (output !== null) {
+          fileChunks.push(output);
+          sectionHeaderEmitted = true;
+        }
+      } catch {
+        // seed rows and malformed lines are non-fatal
+      }
+    }
+
+    if (fileChunks.length > 0) parts.push(fileChunks.join(""));
+  }
+
+  if (parts.length === 0) return "";
+  const context = `${prefix}${parts.join("")}${suffix}`;
+  if (limits.max_total_bytes <= 0 || Buffer.byteLength(context, "utf-8") <= limits.max_total_bytes) return context;
+  const suffixBytes = Buffer.byteLength(suffix, "utf-8");
+  const bodyLimit = Math.max(0, limits.max_total_bytes - suffixBytes);
+  const body = truncateUtf8(Buffer.from(`${prefix}${parts.join("")}`, "utf-8"), bodyLimit).toString("utf-8");
+  return `${body}${suffix}`;
 }

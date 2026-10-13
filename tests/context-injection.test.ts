@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -12,6 +12,9 @@ import {
   materialize,
   readJsonlLines,
   DEFAULT_CONTEXT_INJECTION_LIMITS,
+  buildTaskContext,
+  resolveProjectFile,
+  displayProjectPath,
 } from "../src/context-injection.ts";
 
 function makeProject(): string {
@@ -194,6 +197,151 @@ test("readJsonlLines: missing file returns empty", () => {
     const { lines, omitted } = readJsonlLines(join(dir, "missing.jsonl"), "missing.jsonl");
     assert.equal(lines.length, 0);
     assert.equal(omitted, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveProjectFile: inside project root", () => {
+  const dir = makeProject();
+  try {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    const filePath = join(dir, "src", "foo.ts");
+    writeFileSync(filePath, "console.log('hi');");
+    const resolved = resolveProjectFile(dir, "src/foo.ts");
+    assert.equal(resolved, realpathSync(filePath));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveProjectFile: escaping project root returns null", () => {
+  const dir = makeProject();
+  try {
+    const resolved = resolveProjectFile(dir, "../outside.ts");
+    assert.equal(resolved, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveProjectFile: missing file returns null", () => {
+  const dir = makeProject();
+  try {
+    const resolved = resolveProjectFile(dir, "missing.ts");
+    assert.equal(resolved, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("displayProjectPath: relative to project root", () => {
+  const dir = makeProject();
+  try {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    const filePath = join(dir, "src", "foo.ts");
+    writeFileSync(filePath, "console.log('hi');");
+    const display = displayProjectPath(dir, filePath);
+    assert.equal(display, "src/foo.ts");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("displayProjectPath: relative to task dir", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    const filePath = join(taskDir, "prd.md");
+    writeFileSync(filePath, "# PRD");
+    const display = displayProjectPath(dir, filePath, taskDir);
+    assert.equal(display, ".myflow/tasks/demo/prd.md");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: prd.md only", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "prd.md"), "# PRD\n\nBuild a widget.");
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    assert.ok(ctx.includes("<task-context>"));
+    assert.ok(ctx.includes("Build a widget."));
+    assert.ok(ctx.includes("prd.md"));
+    assert.ok(ctx.includes("</task-context>"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: prd.md and info.md", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "prd.md"), "# PRD");
+    writeFileSync(join(taskDir, "info.md"), "# Info\n\nSome details.");
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    assert.ok(ctx.includes("Some details."));
+    assert.ok(ctx.includes("info.md"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: jsonl referenced files", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "prd.md"), "# PRD");
+    const srcDir = join(dir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(join(srcDir, "foo.ts"), "export const x = 1;");
+    writeFileSync(
+      join(taskDir, "implement.jsonl"),
+      JSON.stringify({ file: "src/foo.ts", reason: "implementation" }) + "\n",
+    );
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    assert.ok(ctx.includes("export const x = 1;"));
+    assert.ok(ctx.includes("src/foo.ts"));
+    assert.ok(ctx.includes("implement.jsonl"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: empty task dir returns empty string", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "empty");
+    mkdirSync(taskDir, { recursive: true });
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    assert.equal(ctx, "");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: research agent skips jsonl", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "prd.md"), "# PRD");
+    const srcDir = join(dir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(join(srcDir, "foo.ts"), "export const x = 1;");
+    writeFileSync(
+      join(taskDir, "implement.jsonl"),
+      JSON.stringify({ file: "src/foo.ts", reason: "implementation" }) + "\n",
+    );
+    const ctx = buildTaskContext(dir, taskDir, "myflow-research");
+    assert.ok(!ctx.includes("export const x = 1;"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
