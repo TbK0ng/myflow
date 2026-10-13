@@ -6,6 +6,8 @@ import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+export type { ExtensionAPI };
 
 /** Message shape used by the omp event system. */
 export interface Message {
@@ -49,18 +51,6 @@ export interface ContextResult {
   messages: Message[];
 }
 
-/** Extension API surface. */
-export interface ExtensionAPI {
-  on: (
-    event: string,
-    handler: (event: unknown, ctx: HookContext) => void | Promise<void>,
-  ) => void;
-  sendMessage: (msg: {
-    customType: string;
-    content: string;
-    display: boolean;
-  }) => Promise<void>;
-}
 
 const MYFLOW_AGENTS = new Set(["myflow-implement", "myflow-check", "myflow-research"]);
 
