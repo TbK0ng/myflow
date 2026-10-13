@@ -42,7 +42,7 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
 
   prompts/myflow-{continue,finish-work}.md
 
-  skills/myflow-{meta,brainstorm,before-dev,check,update-spec,break-loop}/
+  skills/myflow-{meta,brainstorm,before-dev,check,update-spec,break-loop,spec-bootstrap}/
 
 .myflow/
 
@@ -269,6 +269,8 @@ mode and no registry: files are read directly.
 | Entry prompts | `.pi/prompts/*.md` |
 
 | Conventions the model must follow | `.myflow/spec/*/index.md` |
+
+| Regenerate specs from the codebase | `myflow-spec-bootstrap` skill |
 
 
 

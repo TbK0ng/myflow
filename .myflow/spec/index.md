@@ -32,6 +32,8 @@ grows conventions that do not belong in `harness/`.
 
 ## How To Grow
 
+- Use the `myflow-spec-bootstrap` skill to generate or refresh this tree from
+the real codebase (it prefers the codebase-memory graph, then source reads).
 - One convention per section. Concrete rules with a short example beat prose.
 - Record the *why* (what mistake it prevents), not just the *what*.
 - Point at real files instead of describing them from memory.

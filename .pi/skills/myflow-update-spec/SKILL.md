@@ -102,5 +102,7 @@ directory), one-off debugging notes, or anything already written down.
 
 ## Related
 
+- `myflow-spec-bootstrap` — the bulk counterpart: generate or refresh the whole
+  `.myflow/spec/` tree from the codebase.
 - `myflow-break-loop` — deep analysis of a bug that often produces spec updates.
 - `myflow-check` — the verify pass that runs before committing.
