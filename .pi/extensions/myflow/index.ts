@@ -1,16 +1,27 @@
-import { findProjectRoot } from "./find-project-root.ts";
-import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
-import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
-import { type AgentType, buildTaskContext } from "./context-injection.ts";
-import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { findProjectRoot } from "../../../src/find-project-root.ts";
+import { TurnContextCache, resolveActiveTaskStatus } from "../../../src/turn-cache.ts";
+import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "../../../src/escape-hatch.ts";
+import { type AgentType, buildTaskContext } from "../../../src/context-injection.ts";
+import {
+  MYFLOW_AGENT_ENV,
+  registerMyflowSubagent,
+  type SubagentPi,
+} from "./subagent.ts";
+import { buildStatusReport, formatStatusReport } from "./status.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export type { ExtensionAPI };
 
-/** Message shape used by the omp event system. */
+/**
+ * Platform name used when building myflow context keys. Every session file in
+ * `.myflow/.runtime/sessions/` on this harness is named `<platform>_*.json`.
+ */
+export const PLATFORM_NAME = "pi";
+
+/** Message shape used by the Pi event system. */
 export interface Message {
   role: string;
   customType?: string;
@@ -19,14 +30,16 @@ export interface Message {
   timestamp?: number;
 }
 
-/** Context passed to event hooks. */
+/** Context passed to event hooks (subset of Pi's `ExtensionContext`). */
 export interface HookContext {
   cwd: string;
   sessionManager?: {
     getSessionId?: () => string | undefined;
     getSessionFile?: () => string | undefined;
   };
-  ui?: { notify: (msg: string, level: string) => void };
+  model?: { provider: string; id: string };
+  thinkingLevel?: string;
+  ui?: { notify: (msg: string, level?: string) => void };
 }
 
 /** Event payload for the `input` hook. */
@@ -42,26 +55,22 @@ export interface ContextEvent {
 /** Event payload for the `tool_call` hook. */
 export interface ToolCallEvent {
   toolName: string;
-  input: { env?: Record<string, string> };
+  input?: Record<string, unknown>;
 }
-
-/** Return value for the `before_agent_start` hook. */
-export interface BeforeAgentStartResult {
-  message: { customType: string; content: string; display: boolean };
-}
-
-/** Return value for the `context` hook. */
-export interface ContextResult {
-  messages: Message[];
-}
-
 
 const MYFLOW_AGENTS = new Set(["myflow-implement", "myflow-check", "myflow-research"]);
+const SUBAGENT_TOOL_NAME = "myflow_subagent";
 
-function detectAgentType(): AgentType {
-  const blocked = process.env.PI_BLOCKED_AGENT;
-  if (blocked && MYFLOW_AGENTS.has(blocked)) {
-    return blocked as AgentType;
+/**
+ * Detect whether the current process is a myflow sub-agent.
+ *
+ * The native `myflow_subagent` tool sets `MYFLOW_AGENT_TYPE` when it spawns a
+ * child `pi` process, which is how a sub-agent knows its role.
+ */
+export function detectAgentType(env: NodeJS.ProcessEnv = process.env): AgentType {
+  const declared = env[MYFLOW_AGENT_ENV];
+  if (declared && MYFLOW_AGENTS.has(declared)) {
+    return declared as AgentType;
   }
   return null;
 }
@@ -84,23 +93,23 @@ export function buildContextKey(platformName: string, kind: string, value: strin
 }
 
 export function deriveContextKey(ctx: HookContext): string | null {
+  // An explicit override wins so a dispatched sub-agent resolves the parent
+  // session's active task instead of its own isolated session file.
+  const override = process.env.MYFLOW_CONTEXT_ID?.trim();
+  if (override) return sanitizeKey(override) || hashValue(override);
+
   const sessionId = ctx.sessionManager?.getSessionId?.();
   if (sessionId) {
-    return buildContextKey("omp", "session", sessionId);
+    return buildContextKey(PLATFORM_NAME, "session", sessionId);
   }
   const sessionFile = ctx.sessionManager?.getSessionFile?.();
   if (sessionFile) {
-    return buildContextKey("omp", "transcript", sessionFile);
+    return buildContextKey(PLATFORM_NAME, "transcript", sessionFile);
   }
-  const override = process.env.MYFLOW_CONTEXT_ID?.trim();
-  return override ? sanitizeKey(override) || hashValue(override) : null;
+  return null;
 }
 
-
-function buildSessionContext(
-  projectRoot: string,
-  contextKey: string | null,
-): string {
+function buildSessionContext(projectRoot: string, contextKey: string | null): string {
   const scriptPath = join(projectRoot, ".myflow", "scripts", "get_context.py");
   if (!existsSync(scriptPath)) return "";
   const env: Record<string, string> = { ...process.env } as Record<string, string>;
@@ -121,11 +130,7 @@ function buildSessionContext(
   }
 }
 
-function getTaskContext(
-  taskDir: string,
-  projectRoot: string,
-  agentType?: AgentType,
-): string {
+function getTaskContext(taskDir: string, projectRoot: string, agentType?: AgentType): string {
   return buildTaskContext(projectRoot, taskDir, agentType);
 }
 
@@ -137,6 +142,33 @@ export default function extension(pi: ExtensionAPI): void {
   let lastCompactionTs = 0;
   let lastInjectionTs = 0;
 
+  // Native Pi sub-agent dispatch (single / parallel / chain). Registered in
+  // both main sessions and sub-agents; the recursion guard below prevents a
+  // sub-agent from dispatching more sub-agents.
+  registerMyflowSubagent(pi as unknown as SubagentPi, {
+    deriveContextKey: (ctx) => deriveContextKey((ctx ?? {}) as HookContext),
+  });
+
+  // `/myflow-status` answers "where am I?" without a model call.
+  pi.registerCommand("myflow-status", {
+    description: "Show the active myflow task, workflow phase, and git state",
+    handler: async (_args: string, ctx: HookContext & { mode?: string; hasUI?: boolean }) => {
+      const root = projectRoot ?? findProjectRoot(ctx.cwd) ?? ctx.cwd;
+      const contextKey = deriveContextKey(ctx);
+      const text = formatStatusReport(buildStatusReport(root, contextKey));
+      if (ctx.mode === "print") {
+        // Pi routes extension console output to stderr in print mode and keeps
+        // stdout for the model's answer, so this stays visible without
+        // corrupting a piped answer. Never use console in json mode, where
+        // stdout is a JSONL event stream.
+        console.log(text);
+      } else {
+        pi.sendMessage({ customType: "myflow-status", content: text, display: true });
+      }
+      if (ctx.hasUI) ctx.ui?.notify(text.split("\n")[0] ?? "myflow status", "info");
+    },
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     projectRoot = findProjectRoot(ctx.cwd);
     const contextKey = deriveContextKey(ctx);
@@ -146,20 +178,20 @@ export default function extension(pi: ExtensionAPI): void {
       const { taskDir } = resolveActiveTaskStatus(projectRoot, contextKey);
       if (taskDir) {
         const taskCtx = getTaskContext(taskDir, projectRoot, agentType);
-        if (taskCtx) await pi.sendMessage({ customType: "task-context", content: taskCtx, display: false });
+        if (taskCtx) pi.sendMessage({ customType: "task-context", content: taskCtx, display: false });
       }
       return;
     }
 
     const sessionCtx = buildSessionContext(projectRoot, contextKey);
     if (sessionCtx) {
-      await pi.sendMessage({ customType: "session-context", content: sessionCtx, display: false });
+      pi.sendMessage({ customType: "session-context", content: sessionCtx, display: false });
     }
 
     const { taskDir } = resolveActiveTaskStatus(projectRoot, contextKey);
     if (taskDir) {
       const taskCtx = getTaskContext(taskDir, projectRoot, agentType);
-      if (taskCtx) await pi.sendMessage({ customType: "task-context", content: taskCtx, display: false });
+      if (taskCtx) pi.sendMessage({ customType: "task-context", content: taskCtx, display: false });
     }
 
     ctx.ui?.notify("myflow workflow system available", "info");
@@ -255,7 +287,7 @@ export default function extension(pi: ExtensionAPI): void {
       return { messages: withoutBreadcrumb };
     }
 
-    for (let i = projectedMessages.length - 1; i >= 0; i--) {
+    for (let i = projectedMessages.length - 1; i >= 0; i -= 1) {
       if (
         projectedMessages[i].role === "custom" &&
         projectedMessages[i].customType === "workflow-state"
@@ -280,15 +312,16 @@ export default function extension(pi: ExtensionAPI): void {
     };
   });
 
-  pi.on("tool_call", async (event, ctx) => {
+  pi.on("tool_call", async (event, _ctx) => {
     const toolEvent = event as ToolCallEvent;
-    if (toolEvent.toolName !== "bash") return;
-    const contextKey = deriveContextKey(ctx);
-    if (!contextKey) return;
-    const input = toolEvent.input as { env?: Record<string, string> };
-    input.env = {
-      MYFLOW_CONTEXT_ID: contextKey,
-      ...input.env,
+    if (toolEvent.toolName !== SUBAGENT_TOOL_NAME) return;
+    if (!isSubAgent) return;
+    // Recursion guard: only the main session may dispatch myflow sub-agents.
+    return {
+      block: true,
+      reason:
+        `Recursion guard: ${agentType} is a myflow sub-agent and must not dispatch ` +
+        `${SUBAGENT_TOOL_NAME}. Report the recommended next step to the main session instead.`,
     };
   });
 

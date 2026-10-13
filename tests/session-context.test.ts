@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { TurnContextCache, resolveActiveTaskStatus, SESSION_OVERVIEW_TEXT } from "../src/turn-cache.ts";
-import { sanitizeKey, hashValue, buildContextKey, deriveContextKey } from "../src/extension.ts";
+import { sanitizeKey, hashValue, buildContextKey, deriveContextKey } from "../.pi/extensions/myflow/index.ts";
 
 function makeProject(withTask: boolean): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-session-"));
@@ -26,7 +26,7 @@ function makeProject(withTask: boolean): string {
       status: "implementing",
     }));
     writeFileSync(
-      join(root, ".myflow", ".runtime", "sessions", "omp_session_test.json"),
+      join(root, ".myflow", ".runtime", "sessions", "pi_session_test.json"),
       JSON.stringify({ current_task: "tasks/demo" }),
     );
   }
@@ -50,22 +50,22 @@ test("hashValue: returns 24-char hex prefix", () => {
 });
 
 test("buildContextKey: session kind", () => {
-  assert.equal(buildContextKey("omp", "session", "abc123"), "omp_abc123");
+  assert.equal(buildContextKey("pi", "session", "abc123"), "pi_abc123");
 });
 
 test("buildContextKey: transcript kind uses hash", () => {
-  const result = buildContextKey("omp", "transcript", "/path/to/file");
-  assert.match(result, /^omp_transcript_[0-9a-f]{24}$/);
+  const result = buildContextKey("pi", "transcript", "/path/to/file");
+  assert.match(result, /^pi_transcript_[0-9a-f]{24}$/);
 });
 
 test("deriveContextKey: with session ID", () => {
   const ctx = { cwd: "/", sessionManager: { getSessionId: () => "abc123" } };
-  assert.equal(deriveContextKey(ctx), "omp_abc123");
+  assert.equal(deriveContextKey(ctx), "pi_abc123");
 });
 
 test("deriveContextKey: with session file", () => {
   const ctx = { cwd: "/", sessionManager: { getSessionFile: () => "/path/to/file" } };
-  assert.match(deriveContextKey(ctx)!, /^omp_transcript_[0-9a-f]{24}$/);
+  assert.match(deriveContextKey(ctx)!, /^pi_transcript_[0-9a-f]{24}$/);
 });
 
 test("deriveContextKey: with MYFLOW_CONTEXT_ID override", () => {
@@ -93,7 +93,7 @@ test("deriveContextKey: no session, no file, no override returns null", () => {
 
 test("resolveActiveTaskStatus: no sessions dir", () => {
   const root = mkdtempSync(join(tmpdir(), "myflow-nosess-"));
-  const result = resolveActiveTaskStatus(root, "omp_session_test");
+  const result = resolveActiveTaskStatus(root, "pi_session_test");
   assert.equal(result.status, "no_task");
   assert.equal(result.taskDir, null);
   rmSync(root, { recursive: true, force: true });
@@ -101,7 +101,7 @@ test("resolveActiveTaskStatus: no sessions dir", () => {
 
 test("resolveActiveTaskStatus: with task", () => {
   const root = makeProject(true);
-  const result = resolveActiveTaskStatus(root, "omp_session_test");
+  const result = resolveActiveTaskStatus(root, "pi_session_test");
   assert.equal(result.status, "implementing");
   assert.ok(result.taskDir);
   assert.equal(result.taskTitle, "Demo task");
@@ -119,7 +119,7 @@ test("TurnContextCache: returns workflow state", () => {
   const root = makeProject(true);
   const cache = new TurnContextCache();
   cache.beginTurn(false);
-  const result = cache.get(root, "omp_session_test");
+  const result = cache.get(root, "pi_session_test");
   assert.ok(result.workflowMsg.includes("[workflow-state:implementing]"));
   assert.ok(result.workflowMsg.includes("Write the code."));
   assert.ok(result.workflowMsg.includes(SESSION_OVERVIEW_TEXT));
@@ -130,7 +130,7 @@ test("TurnContextCache: skip turn returns empty", () => {
   const root = makeProject(true);
   const cache = new TurnContextCache();
   cache.beginTurn(true);
-  const result = cache.get(root, "omp_session_test");
+  const result = cache.get(root, "pi_session_test");
   assert.equal(result.workflowMsg, "");
   rmSync(root, { recursive: true, force: true });
 });
@@ -139,7 +139,7 @@ test("TurnContextCache: no task returns fallback", () => {
   const root = makeProject(false);
   const cache = new TurnContextCache();
   cache.beginTurn(false);
-  const result = cache.get(root, "omp_session_test");
+  const result = cache.get(root, "pi_session_test");
   assert.ok(result.workflowMsg.includes("Refer to workflow.md"));
   rmSync(root, { recursive: true, force: true });
 });
@@ -148,8 +148,8 @@ test("TurnContextCache: caching works", () => {
   const root = makeProject(true);
   const cache = new TurnContextCache();
   cache.beginTurn(false);
-  const r1 = cache.get(root, "omp_session_test");
-  const r2 = cache.get(root, "omp_session_test");
+  const r1 = cache.get(root, "pi_session_test");
+  const r2 = cache.get(root, "pi_session_test");
   assert.equal(r1.workflowMsg, r2.workflowMsg);
   rmSync(root, { recursive: true, force: true });
 });

@@ -1,40 +1,61 @@
 /**
- * Local type declaration for the `@oh-my-pi/pi-coding-agent` package.
+ * Local type declaration for the `@earendil-works/pi-coding-agent` package.
  *
- * The real package ships the omp extension API surface. This declaration
- * mirrors it so `import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent"`
- * resolves without the package installed, keeping myflow 1:1 with Myflow.
+ * Pi loads extensions with `jiti` and aliases `@earendil-works/pi-coding-agent`
+ * to its own runtime entry point, so extensions import types from here. This
+ * declaration mirrors the subset of the extension API surface that the myflow
+ * adapter uses, keeping the adapter dependency-free. At runtime the
+ * imports are `import type`, so Node's type stripping erases them entirely.
  */
-declare module "@oh-my-pi/pi-coding-agent" {
-  /** Message shape used by the omp event system. */
-  export interface Message {
-    role: string;
-    customType?: string;
-    content?: string;
-    display?: boolean;
-    timestamp?: number;
+declare module "@earendil-works/pi-coding-agent" {
+  /** Context passed to extension event handlers. */
+  export interface ExtensionContext {
+    cwd: string;
+    mode: "tui" | "rpc" | "json" | "print";
+    hasUI: boolean;
+    sessionManager: {
+      getSessionId(): string;
+      getSessionFile(): string | undefined;
+      getCwd(): string;
+      getSessionName(): string | undefined;
+    };
+    model?: { provider: string; id: string };
+    thinkingLevel?: string;
+    ui: {
+      notify(message: string, type?: "info" | "warning" | "error"): void;
+      confirm(title: string, message: string): Promise<boolean>;
+      select(title: string, options: string[]): Promise<string | undefined>;
+    };
+    isProjectTrusted(): boolean;
+    isIdle(): boolean;
   }
 
-  /** Context passed to event hooks. */
-  export interface HookContext {
-    cwd: string;
-    sessionManager?: {
-      getSessionId?: () => string | undefined;
-      getSessionFile?: () => string | undefined;
-    };
-    ui?: { notify: (msg: string, level: string) => void };
+  export type ExtensionHandler = (
+    event: any,
+    ctx: ExtensionContext,
+  ) => unknown | Promise<unknown>;
+
+  /** Result shape accepted by `pi.sendMessage`. */
+  export interface CustomMessageInput {
+    customType: string;
+    content: string;
+    display: boolean;
+    details?: unknown;
   }
 
   /** Extension API surface. */
   export interface ExtensionAPI {
-    on: (
-      event: string,
-      handler: (event: unknown, ctx: HookContext) => void | Promise<void>,
-    ) => void;
-    sendMessage: (msg: {
-      customType: string;
-      content: string;
-      display: boolean;
-    }) => Promise<void>;
+    on(event: string, handler: ExtensionHandler): () => void;
+    registerTool(tool: any): void;
+    registerCommand(name: string, options: any): void;
+    sendMessage(message: CustomMessageInput, options?: { triggerTurn?: boolean }): void;
+    sendUserMessage(content: string, options?: { deliverAs?: "steer" | "followUp" }): void;
+    appendEntry(customType: string, data?: unknown): void;
+    getActiveTools(): string[];
+    setActiveTools(toolNames: string[]): void;
+    events: {
+      emit(channel: string, data: unknown): void;
+      on(channel: string, handler: (data: unknown) => void): () => void;
+    };
   }
 }

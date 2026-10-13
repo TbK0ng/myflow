@@ -4,8 +4,8 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import extension from "../src/extension.ts";
-import type { ExtensionAPI, HookContext, Message } from "../src/extension.ts";
+import extension from "../.pi/extensions/myflow/index.ts";
+import type { ExtensionAPI, HookContext, Message } from "../.pi/extensions/myflow/index.ts";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-ext-"));
@@ -28,32 +28,50 @@ function makeProject(): string {
     status: "implementing",
   }));
   writeFileSync(
-    join(root, ".myflow", ".runtime", "sessions", "omp_session_test.json"),
+    join(root, ".myflow", ".runtime", "sessions", "pi_session_test.json"),
     JSON.stringify({ current_task: "tasks/demo" }),
   );
   return root;
 }
 
-function makeMockAPI(root: string): { api: ExtensionAPI; sent: Message[] } {
+function makeMockAPI(root: string): {
+  api: ExtensionAPI;
+  sent: Message[];
+  tools: Array<Record<string, unknown>>;
+  commands: Record<string, { handler: (args: string, ctx: HookContext) => Promise<void> }>;
+} {
   const sent: Message[] = [];
+  const tools: Array<Record<string, unknown>> = [];
+  const commands: Record<string, { handler: (args: string, ctx: HookContext) => Promise<void> }> = {};
   const handlers: Record<string, (event: unknown, ctx: HookContext) => Promise<void>> = {};
   const api: ExtensionAPI = {
     on: (name: string, handler: (event: unknown, ctx: HookContext) => Promise<void>) => {
       handlers[name] = handler;
     },
-    sendMessage: async (msg: Message) => {
+    registerTool: (tool: Record<string, unknown>) => {
+      tools.push(tool);
+    },
+    registerCommand: (name: string, options: { handler: (args: string, ctx: HookContext) => Promise<void> }) => {
+      commands[name] = options;
+    },
+    sendUserMessage: () => {},
+    appendEntry: () => {},
+    getActiveTools: () => [],
+    setActiveTools: () => {},
+    events: { emit: () => {}, on: () => () => {} },
+    sendMessage: (msg: Message) => {
       sent.push(msg);
     },
   };
   const ctx: HookContext = {
     cwd: root,
-    session: { id: "test", contextKey: "omp_session_test" },
+    session: { id: "test", contextKey: "pi_session_test" },
     ui: { notify: () => {} },
-  };
+  } as unknown as HookContext;
   // Store handlers for the test to invoke
   (api as unknown as Record<string, unknown>).__handlers = handlers;
   (api as unknown as Record<string, unknown>).__ctx = ctx;
-  return { api, sent };
+  return { api, sent, tools, commands };
 }
 
 function getHandlers(api: ExtensionAPI): Record<string, (event: unknown, ctx: HookContext) => Promise<void>> {
@@ -144,6 +162,22 @@ test("all 6 hooks registered", () => {
   assert.ok(handlers.context);
   assert.ok(handlers.tool_call);
   assert.ok(handlers.session_before_compact);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("myflow-status command is registered and reports task, phase, and git", async () => {
+  const root = makeProject();
+  const { api, sent, commands } = makeMockAPI(root);
+  extension(api);
+  assert.ok(commands["myflow-status"], "myflow-status must be registered");
+
+  // Invoke without session_start to exercise the cwd fallback.
+  await commands["myflow-status"].handler("", getCtx(api));
+  const message = sent.find((m) => m.customType === "myflow-status");
+  assert.ok(message, "command must send a myflow-status message");
+  assert.match(message!.content!, /myflow: implementing/);
+  assert.match(message!.content!, /Task:   tasks\/demo \(implementing\)/);
+  assert.match(message!.content!, /Git:/);
   rmSync(root, { recursive: true, force: true });
 });
 

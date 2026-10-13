@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-
 /**
  * Parse workflow-state blocks from a `workflow.md` file.
  *
@@ -17,19 +15,4 @@ export function parseWorkflowStateBlocks(workflowText: string): Map<string, stri
     blocks.set(match[1], match[2].trim());
   }
   return blocks;
-}
-
-/**
- * Read and parse `workflow.md` from the project root.
- * Returns an empty map if the file does not exist.
- */
-export function loadWorkflowStates(projectRoot: string): Map<string, string> {
-  const path = `${projectRoot}/.myflow/workflow.md`;
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
-    return new Map();
-  }
-  return parseWorkflowStateBlocks(text);
 }
