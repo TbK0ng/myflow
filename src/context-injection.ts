@@ -1,4 +1,4 @@
-import { readFileSync, statSync, existsSync, openSync, readSync, fstatSync, closeSync, realpathSync } from "node:fs";
+import { readFileSync, statSync, existsSync, openSync, readSync, fstatSync, closeSync, realpathSync, lstatSync } from "node:fs";
 import { join, resolve, relative, basename, isAbsolute } from "node:path";
 import { Buffer } from "node:buffer";
 
@@ -274,12 +274,113 @@ function isInsideRoot(root: string, target: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-/** Resolve a project file path, returning null if it escapes the project root. */
-export function resolveProjectFile(projectRoot: string, file: string): string | null {
+// ---------------------------------------------------------------------------
+// Trusted context roots (mirrors Myflow's channel/context-trust.ts).
+// ---------------------------------------------------------------------------
+
+const AUTO_TRUST_ENTRIES = ["tasks", "workspace"];
+
+function stripTrustValue(s: string): string {
+  return s.trim().replace(/\s*#.*$/, "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+function parseChannelTrustSection(content: string): { trustedDirs: string[]; autoTrustSymlinks?: boolean } {
+  const lines = content.split("\n");
+  const trustedDirs: string[] = [];
+  let autoTrustSymlinks: boolean | undefined;
+  let inChannel = false;
+  let inList = false;
+
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, "");
+    const trimmed = line.trimEnd();
+    if (trimmed.trim().startsWith("#")) continue;
+
+    if (/^channel:\s*$/.test(trimmed)) {
+      inChannel = true;
+      inList = false;
+      continue;
+    }
+    if (!inChannel) continue;
+
+    if (trimmed.trim() !== "" && /^\S/.test(line)) {
+      inChannel = false;
+      inList = false;
+      continue;
+    }
+    if (trimmed.trim() === "") continue;
+
+    if (inList) {
+      const item = trimmed.match(/^ {4}-\s*(.+)$/);
+      if (item) {
+        const val = stripTrustValue(item[1]!);
+        if (val) trustedDirs.push(val);
+        continue;
+      }
+      inList = false;
+    }
+
+    if (/^ {2}trusted_context_dirs:\s*$/.test(trimmed)) {
+      inList = true;
+      continue;
+    }
+
+    const boolMatch = trimmed.match(/^ {2}auto_trust_myflow_symlinks:\s*(.+)$/);
+    if (boolMatch) {
+      const val = stripTrustValue(boolMatch[1]!).toLowerCase();
+      if (val === "false") autoTrustSymlinks = false;
+      else if (val === "true") autoTrustSymlinks = true;
+      else process.stderr.write(`[channel] channel.auto_trust_myflow_symlinks: invalid value '${val}', ignoring\n`);
+      continue;
+    }
+  }
+
+  return { trustedDirs, autoTrustSymlinks };
+}
+
+export function resolveTrustedRoots(projectRoot: string): string[] {
+  const configPath = join(projectRoot, ".myflow", "config.yaml");
+  let config: { trustedDirs: string[]; autoTrustSymlinks?: boolean } = { trustedDirs: [] };
+  if (existsSync(configPath)) {
+    try {
+      config = parseChannelTrustSection(readFileSync(configPath, "utf-8"));
+    } catch {
+      // ignore
+    }
+  }
+
+  const roots: string[] = [];
+  for (const entry of config.trustedDirs) {
+    try {
+      roots.push(realpathSync(resolve(projectRoot, entry)));
+    } catch {
+      // entry not found or invalid — skip
+    }
+  }
+
+  if (config.autoTrustSymlinks !== false) {
+    for (const entryName of AUTO_TRUST_ENTRIES) {
+      const entryPath = join(projectRoot, ".myflow", entryName);
+      try {
+        if (lstatSync(entryPath).isSymbolicLink()) {
+          roots.push(realpathSync(entryPath));
+        }
+      } catch {
+        // missing / broken symlink — nothing to trust
+      }
+    }
+  }
+
+  return [...new Set(roots)];
+}
+
+/** Resolve a project file path, returning null if it escapes the project root and trusted roots. */
+export function resolveProjectFile(projectRoot: string, file: string, trustedRoots: string[] = []): string | null {
   try {
     const rootReal = realpathSync(projectRoot);
     const targetReal = realpathSync(resolve(projectRoot, file));
     if (isInsideRoot(rootReal, targetReal)) return targetReal;
+    if (trustedRoots.some((root) => isInsideRoot(root, targetReal))) return targetReal;
     return null;
   } catch {
     return null;
@@ -309,6 +410,7 @@ export function displayProjectPath(projectRoot: string, filePath: string, taskDi
 
 /** Build the budgeted task context. */
 export function buildTaskContext(projectRoot: string, taskDir: string, agentType?: AgentType): string {
+  const trustedRoots = resolveTrustedRoots(projectRoot);
   const parts: string[] = [];
   const limits = readContextInjectionLimits(projectRoot);
   const prefix = "<task-context>\nContext is bounded by .myflow/config.yaml. Files marked [truncated] or [omitted] remain authoritative on disk; use their required_read path before relying on missing detail.\n\n";
@@ -367,7 +469,7 @@ export function buildTaskContext(projectRoot: string, taskDir: string, agentType
         const row = JSON.parse(trimmed) as Record<string, unknown>;
         const file = typeof row.file === "string" ? row.file.trim() : "";
         if (!file) continue;
-        const targetPath = resolveProjectFile(projectRoot, file);
+        const targetPath = resolveProjectFile(projectRoot, file, trustedRoots);
         if (!targetPath) continue;
         if (includedPaths.has(targetPath)) continue;
         includedPaths.add(targetPath);

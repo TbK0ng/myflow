@@ -4,8 +4,8 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import extension from "../src/extension.ts";
-import type { ExtensionAPI, HookContext, Message } from "../src/extension.ts";
+import extension from "../.omp/extensions/myflow/index.ts";
+import type { ExtensionAPI, HookContext, Message } from "../.omp/extensions/myflow/index.ts";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-ext-"));

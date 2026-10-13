@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { TurnContextCache, resolveActiveTaskStatus, SESSION_OVERVIEW_TEXT } from "../src/turn-cache.ts";
-import { sanitizeKey, hashValue, buildContextKey, deriveContextKey } from "../src/extension.ts";
+import { sanitizeKey, hashValue, buildContextKey, deriveContextKey } from "../.omp/extensions/myflow/index.ts";
 
 function makeProject(withTask: boolean): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-session-"));

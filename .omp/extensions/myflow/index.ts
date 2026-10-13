@@ -1,8 +1,8 @@
-import { findProjectRoot } from "./find-project-root.ts";
-import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
-import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
-import { type AgentType, buildTaskContext } from "./context-injection.ts";
-import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
+import { findProjectRoot } from "../../../src/find-project-root.ts";
+import { TurnContextCache, resolveActiveTaskStatus } from "../../../src/turn-cache.ts";
+import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "../../../src/escape-hatch.ts";
+import { type AgentType, buildTaskContext } from "../../../src/context-injection.ts";
+import { parseWorkflowStateBlocks } from "../../../src/parse-workflow-state.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
