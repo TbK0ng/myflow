@@ -1,130 +1,90 @@
 ---
 name: myflow-break-loop
-description: "Deep bug analysis to break the fix-forget-repeat cycle. Analyzes root cause category, why fixes failed, prevention mechanisms, and captures knowledge into specs. Use after fixing a bug to prevent the same class of bugs."
+description: "Deep bug analysis to break the fix-forget-repeat cycle. Classifies the root cause, why fixes failed, the prevention mechanism, and captures the lesson into .myflow/spec/. Use after fixing a bug so the same class of bug cannot silently return."
 ---
 
 # Break the Loop - Deep Bug Analysis
 
-When debug is complete, use this for deep analysis to break the "fix bug -> forget -> repeat" cycle.
-
----
+After a bug is fixed, analyze it so the *class* of bug does not recur.
 
 ## Analysis Framework
 
-Analyze the bug you just fixed from these 5 dimensions:
-
 ### 1. Root Cause Category
 
-Which category does this bug belong to?
-
 | Category | Characteristics | Example |
-|----------|-----------------|---------|
-| **A. Missing Spec** | No documentation on how to do it | New feature without checklist |
-| **B. Cross-Layer Contract** | Interface between layers unclear | API returns different format than expected |
-| **C. Change Propagation Failure** | Changed one place, missed others | Changed function signature, missed call sites |
-| **D. Test Coverage Gap** | Unit test passes, integration fails | Works alone, breaks when combined |
-| **E. Implicit Assumption** | Code relies on undocumented assumption | Timestamp seconds vs milliseconds |
+| --- | --- | --- |
+| **A. Missing Spec** | Nothing documented how to do it | New feature with no checklist |
+| **B. Contract Drift** | One side changed, the other did not | Context key format differ between extension and script |
+| **C. Change Propagation** | Changed one place, missed another | New status added, `workflow.md` block missing |
+| **D. Test Coverage Gap** | Unit passes, integration fails | Works alone, breaks combined |
+| **E. Implicit Assumption** | Relies on undocumented behavior | Assuming `PI_SESSION_ID` exists outside shell tools |
 
-### 2. Why Fixes Failed (if applicable)
+### 2. Why Fixes Failed (if there were several attempts)
 
-If you tried multiple fixes before succeeding, analyze each failure:
+- **Surface fix**: treated the symptom, not the cause.
+- **Incomplete scope**: found the cause, missed other occurrences.
+- **Tool blind spot**: grep/typecheck could not see it.
+- **Mental model**: kept looking in the wrong layer.
 
-- **Surface Fix**: Fixed symptom, not root cause
-- **Incomplete Scope**: Found root cause, didn't cover all cases
-- **Tool Limitation**: grep missed it, type check wasn't strict
-- **Mental Model**: Kept looking in same layer, didn't think cross-layer
+### 3. Prevention Mechanism
 
-### 3. Prevention Mechanisms
+| Type | Example |
+| --- | --- |
+| Documentation | Add the contract to `.myflow/spec/` |
+| Architecture | Make the bad state unrepresentable |
+| Compile/lint | Strict types, no escape hatch |
+| Runtime | Validate and fail loudly |
+| Test | Regression test that fails on the original bug |
+| Checklist | Add a line to a Pre-Development / Quality Check list |
 
-What mechanisms would prevent this from happening again?
-
-| Type | Description | Example |
-|------|-------------|---------|
-| **Documentation** | Write it down so people know | Update thinking guide |
-| **Architecture** | Make the error impossible structurally | Type-safe wrappers |
-| **Compile-time** | Strict type checking, no escape hatches | Signature change causes compile error |
-| **Runtime** | Monitoring, alerts, scans | Detect orphan entities |
-| **Test Coverage** | E2E tests, integration tests | Verify full flow |
-| **Code Review** | Checklist, PR template | "Did you check X?" |
+Prefer the strongest mechanism that is cheap. A test beats a note.
 
 ### 4. Systematic Expansion
 
-What broader problems does this bug reveal?
-
-- **Similar Issues**: Where else might this problem exist?
-- **Design Flaw**: Is there a fundamental architecture issue?
-- **Process Flaw**: Is there a development process improvement?
-- **Knowledge Gap**: Is the team missing some understanding?
+- Where else can this same failure occur?
+- Is there a missing contract (B) or a missing workflow block (C)?
+- Does an instruction file now describe something untrue?
 
 ### 5. Knowledge Capture
 
-Solidify insights into the system:
-
-- [ ] Update `.myflow/spec/guides/` thinking guides
-- [ ] Update relevant `.myflow/spec/` docs
-- [ ] Create issue record (if applicable)
-- [ ] Create feature ticket for root fix
-- [ ] Update check guidelines if needed
-
----
+- [ ] Update `.myflow/spec/*/index.md` with the contract or gotcha.
+- [ ] Add the question to `.myflow/spec/guides/index.md` if it is a thinking gap.
+- [ ] Add or strengthen the regression test.
+- [ ] Update the instruction file that let it happen (`workflow.md`, skill, prompt).
 
 ## Output Format
 
-Please output analysis in this format:
-
 ```markdown
-## Bug Analysis: [Short Description]
+## Bug Analysis: <short description>
 
 ### 1. Root Cause Category
-- **Category**: [A/B/C/D/E] - [Category Name]
-- **Specific Cause**: [Detailed description]
+- Category: <A-E> — <name>
+- Specific cause: ...
 
 ### 2. Why Fixes Failed (if applicable)
-1. [First attempt]: [Why it failed]
-2. [Second attempt]: [Why it failed]
-...
+1. <attempt>: <why it failed>
 
 ### 3. Prevention Mechanisms
-| Priority | Mechanism | Specific Action | Status |
-|----------|-----------|-----------------|--------|
+| Priority | Mechanism | Action | Status |
+| --- | --- | --- | --- |
 | P0 | ... | ... | TODO/DONE |
 
 ### 4. Systematic Expansion
-- **Similar Issues**: [List places with similar problems]
-- **Design Improvement**: [Architecture-level suggestions]
-- **Process Improvement**: [Development process suggestions]
+- Similar issues: ...
+- Design/process improvement: ...
 
 ### 5. Knowledge Capture
-- [ ] [Documents to update / tickets to create]
+- [ ] Files updated / tests added
 ```
 
----
+## After Analysis: Act
 
-## Core Philosophy
+Do not stop at the table. Immediately:
 
-> **The value of debugging is not in fixing the bug, but in making this class of bugs never happen again.**
+1. Update the spec files you listed.
+2. Add the regression test.
+3. Run `node --test tests/` and confirm it passes.
+4. Commit the code fix and the spec/test update together.
 
-Three levels of insight:
-1. **Tactical**: How to fix THIS bug
-2. **Strategic**: How to prevent THIS CLASS of bugs
-3. **Philosophical**: How to expand thinking patterns
-
-30 minutes of analysis saves 30 hours of future debugging.
-
----
-
-## After Analysis: Immediate Actions
-
-**IMPORTANT**: After completing the analysis above, you MUST immediately:
-
-1. **Update spec/guides** - Don't just list TODOs, actually update the relevant files:
-   - If it's a cross-platform issue → update `cross-platform-thinking-guide.md`
-   - If it's a cross-layer issue → update `cross-layer-thinking-guide.md`
-   - If it's a code reuse issue → update `code-reuse-thinking-guide.md`
-   - If it's domain-specific → update `backend/*.md` or `frontend/*.md`
-
-2. **Sync templates** - After updating `.myflow/spec/`, sync to `src/templates/markdown/spec/`
-
-3. **Commit the spec updates** - This is the primary output, not just the analysis text
-
-> **The analysis is worthless if it stays in chat. The value is in the updated specs.**
+> The analysis is worthless if it stays in chat. The value is in the spec
+> entry and the test that now guards it.

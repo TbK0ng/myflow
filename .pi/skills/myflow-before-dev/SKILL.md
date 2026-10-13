@@ -1,34 +1,44 @@
 ---
 name: myflow-before-dev
-description: "Discovers and injects project-specific coding guidelines from .myflow/spec/ before implementation begins. Reads spec indexes, pre-development checklists, and shared thinking guides for the target package. Use when starting a new coding task, before writing any code, switching to a different package, or needing to refresh project conventions and standards."
+description: "Load this project's coding guidelines from .myflow/spec/ before writing code. Reads the spec index, the harness Pre-Development Checklist, and shared thinking guides. Use when starting implementation, switching areas of the codebase, or refreshing project conventions before the first edit."
 ---
 
-Read the relevant development guidelines before starting your task.
+# Before Development
 
-Execute these steps:
+Read the project's coding guidelines **before the first edit**.
 
-1. **Discover packages and their spec layers**:
+## Steps
+
+1. **Read the spec entry point**:
+
    ```bash
-   python3 ./.myflow/scripts/get_context.py --mode packages
-   ```
-
-2. **Identify which specs apply** to your task based on:
-   - Which package you're modifying (e.g., `cli/`, `docs-site/`)
-   - What type of work (backend, frontend, unit-test, docs, etc.)
-
-3. **Read the spec index** for each relevant module:
-   ```bash
-   cat .myflow/spec/<package>/<layer>/index.md
-   ```
-   Follow the **"Pre-Development Checklist"** section in the index.
-
-4. **Read the specific guideline files** listed in the Pre-Development Checklist that are relevant to your task. The index is NOT the goal — it points you to the actual guideline files (e.g., `error-handling.md`, `conventions.md`, `mock-strategies.md`). Read those files to understand the coding standards and patterns.
-
-5. **Always read shared guides**:
-   ```bash
+   cat .myflow/spec/index.md
    cat .myflow/spec/guides/index.md
    ```
 
-6. Understand the coding standards and patterns you need to follow, then proceed with your development plan.
+2. **Pick the area you are touching.** Read its index:
 
-This step is **mandatory** before writing any code.
+   ```bash
+   cat .myflow/spec/harness/index.md        # this repository
+   cat .myflow/spec/<area>/index.md         # if another area exists
+   ```
+
+   If several areas apply, read each. If none fits, use `harness/`.
+
+3. **Work the Pre-Development Checklist** in that index. It names the
+   load-bearing contracts (context key, statuses, hook set, config keys) that
+   must stay consistent across files.
+
+4. **Read the guideline files the checklist points to.** The index is a
+   pointer, not the goal — the actual rules are in the files it names.
+
+5. **Only then start implementing.**
+
+## Rules
+
+- This step is mandatory even for small changes: "looks small" is how contract
+  drift starts.
+- Specs are authoritative over memory. If the spec disagrees with the code,
+  fix whichever is wrong before continuing, and say which one you changed.
+- If the spec is silent on something you had to decide, capture the decision
+  with `myflow-update-spec` when you finish.

@@ -34,9 +34,15 @@ function makeProject(): string {
   return root;
 }
 
-function makeMockAPI(root: string): { api: ExtensionAPI; sent: Message[]; tools: Array<Record<string, unknown>> } {
+function makeMockAPI(root: string): {
+  api: ExtensionAPI;
+  sent: Message[];
+  tools: Array<Record<string, unknown>>;
+  commands: Record<string, { handler: (args: string, ctx: HookContext) => Promise<void> }>;
+} {
   const sent: Message[] = [];
   const tools: Array<Record<string, unknown>> = [];
+  const commands: Record<string, { handler: (args: string, ctx: HookContext) => Promise<void> }> = {};
   const handlers: Record<string, (event: unknown, ctx: HookContext) => Promise<void>> = {};
   const api: ExtensionAPI = {
     on: (name: string, handler: (event: unknown, ctx: HookContext) => Promise<void>) => {
@@ -45,7 +51,9 @@ function makeMockAPI(root: string): { api: ExtensionAPI; sent: Message[]; tools:
     registerTool: (tool: Record<string, unknown>) => {
       tools.push(tool);
     },
-    registerCommand: () => {},
+    registerCommand: (name: string, options: { handler: (args: string, ctx: HookContext) => Promise<void> }) => {
+      commands[name] = options;
+    },
     sendUserMessage: () => {},
     appendEntry: () => {},
     getActiveTools: () => [],
@@ -63,7 +71,7 @@ function makeMockAPI(root: string): { api: ExtensionAPI; sent: Message[]; tools:
   // Store handlers for the test to invoke
   (api as unknown as Record<string, unknown>).__handlers = handlers;
   (api as unknown as Record<string, unknown>).__ctx = ctx;
-  return { api, sent, tools };
+  return { api, sent, tools, commands };
 }
 
 function getHandlers(api: ExtensionAPI): Record<string, (event: unknown, ctx: HookContext) => Promise<void>> {
@@ -154,6 +162,22 @@ test("all 6 hooks registered", () => {
   assert.ok(handlers.context);
   assert.ok(handlers.tool_call);
   assert.ok(handlers.session_before_compact);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("myflow-status command is registered and reports task, phase, and git", async () => {
+  const root = makeProject();
+  const { api, sent, commands } = makeMockAPI(root);
+  extension(api);
+  assert.ok(commands["myflow-status"], "myflow-status must be registered");
+
+  // Invoke without session_start to exercise the cwd fallback.
+  await commands["myflow-status"].handler("", getCtx(api));
+  const message = sent.find((m) => m.customType === "myflow-status");
+  assert.ok(message, "command must send a myflow-status message");
+  assert.match(message!.content!, /myflow: implementing/);
+  assert.match(message!.content!, /Task:   tasks\/demo \(implementing\)/);
+  assert.match(message!.content!, /Git:/);
   rmSync(root, { recursive: true, force: true });
 });
 

@@ -1,92 +1,95 @@
 ---
 name: myflow-check
-description: "Comprehensive quality verification: spec compliance, lint, type-check, tests, cross-layer data flow, code reuse, and consistency checks. Use when code is written and needs quality verification, before committing changes, or to catch context drift during long sessions."
+description: "Comprehensive quality verification: project checks, spec compliance, cross-file contract consistency, test coverage, and reuse. Use when code is written and needs verification, before committing, or to catch context drift during long sessions."
 ---
 
 # Code Quality Check
 
-Comprehensive quality verification for recently written code. Combines spec compliance, cross-layer safety, and pre-commit checks.
-
----
+Verify recently written code before it is committed.
 
 ## Step 1: Identify What Changed
 
 ```bash
-git diff --name-only HEAD
 git status
+git diff --stat
+git diff
 ```
 
-## Step 2: Read Applicable Specs
+List each changed file and what it is responsible for.
+
+## Step 2: Read The Applicable Specs
 
 ```bash
-python3 ./.myflow/scripts/get_context.py --mode packages
+cat .myflow/spec/index.md
+cat .myflow/spec/harness/index.md
 ```
 
-For each changed package/layer, read the spec index and follow its **Quality Check** section:
-
-```bash
-cat .myflow/spec/<package>/<layer>/index.md
-```
-
-Read the specific guideline files referenced — the index is a pointer, not the goal.
+Follow the **Quality Check** section of the area index for the code you
+touched. If the change touches a load-bearing contract (context key, task
+statuses, hook set, `workflow.md` blocks, config keys), verify every file that
+mirrors it — not just the one you edited.
 
 ## Step 3: Run Project Checks
 
-Run the project's lint, type-check, and test commands. Fix any failures before proceeding.
+```bash
+node --test tests/
+```
 
-## Step 4: Review Against Checklist
+Fix every failure before continuing. Also re-run any command the change
+affects, for example:
 
-### Code Quality
+```bash
+python3 .myflow/scripts/get_context.py
+python3 .myflow/scripts/task.py current --source
+```
 
-- [ ] Linter passes?
-- [ ] Type checker passes (if applicable)?
-- [ ] Tests pass?
-- [ ] No debug logging left in?
-- [ ] No suppressed warnings or type-safety bypasses?
+## Step 4: Review Against The Checklist
 
-### Test Coverage
+### Correctness
 
-- [ ] New function → unit test added?
-- [ ] Bug fix → regression test added?
-- [ ] Changed behavior → existing tests updated?
+- [ ] Behavior matches the PRD / task requirements.
+- [ ] No regression in the six extension hooks or `myflow_subagent`.
+- [ ] Error paths fail loudly instead of returning misleading output.
 
-### Spec Sync
+### Contracts
 
-- [ ] Does `.myflow/spec/` need updates? (new patterns, conventions, lessons learned)
+- [ ] Context-key derivation matches between extension, `get_context.py`, and `task.py`.
+- [ ] `workflow.md` state blocks still parse (matching open/close STATUS).
+- [ ] `.myflow/spec/` and `workflow.md` describe only things that exist.
 
-> "If I fixed a bug or discovered something non-obvious, should I document it so future me won't hit the same issue?" → If YES, update the relevant spec doc.
+### Tests
 
-## Step 5: Cross-Layer Dimensions (if applicable)
+- [ ] New behavior has a test that fails when reverted.
+- [ ] Bug fix has a regression test.
+- [ ] Changed behavior updated the existing tests that pinned the old behavior.
+- [ ] Tests need no network, model, or installed dependencies.
 
-Skip this step if your change is confined to a single layer.
+### Hygiene
 
-### A. Data Flow (changes touch 3+ layers)
+- [ ] No debug output left in.
+- [ ] No suppressed errors or cast-through-`any` escapes without a comment.
+- [ ] No duplicated constant that should be shared.
 
-- [ ] Read flow traces correctly: Storage → Service → API → UI
-- [ ] Write flow traces correctly: UI → API → Service → Storage
-- [ ] Types/schemas correctly passed between layers?
-- [ ] Errors properly propagated to caller?
+## Step 5: Cross-File Dimensions
 
-### B. Code Reuse (modifying constants, creating utilities)
+Skip what does not apply.
 
-- [ ] Searched for existing similar code before creating new?
-  ```bash
-  grep -r "pattern" src/
-  ```
-- [ ] If 2+ places define same value → extracted to shared constant?
-- [ ] After batch modification, all occurrences updated?
+### Data Flow (change touches 3+ files)
 
-### C. Import/Dependency (creating new files)
+- [ ] Producer and every consumer updated together.
+- [ ] Types/shapes passed across the boundary unchanged.
+- [ ] Errors propagate instead of being swallowed.
 
-- [ ] Correct import paths (relative vs absolute)?
-- [ ] No circular dependencies?
+### Reuse
 
-### D. Same-Layer Consistency
+- [ ] Searched for an existing helper before adding one (`src/`, extension).
+- [ ] Two definitions of the same value collapsed into one place.
 
-- [ ] Other places using the same concept are consistent?
+### Instruction Files
 
----
+- [ ] Skills/prompts/`workflow.md` that describe the changed behavior updated.
 
-## Step 6: Report and Fix
+## Step 6: Report And Fix
 
-Report violations found and fix them directly. Re-run project checks after fixes.
+Report what you found and fix it directly. Re-run the project checks after the
+fixes. If no issues remain, say so explicitly.

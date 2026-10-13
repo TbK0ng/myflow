@@ -210,7 +210,7 @@ Why:
 - It returns only `{file path, one-line summary}` to the main agent
 - Independent topics can be **parallelized** — spawn multiple sub-agents in one tool call
 
-> **Codex exception**: on Codex CLI, do NOT dispatch `myflow-research` for research-first mode — do the research inline (WebFetch / WebSearch in the main session) and write findings to `{TASK_DIR}/research/<topic>.md` yourself. Reason: Codex `spawn_agent` runs sub-agents with `fork_turns="none"` (isolated context, no parent session inheritance), so the research sub-agent cannot resolve the active task path via `task.py current` and silently aborts without producing files. Inline research on Codex avoids this failure mode. The 3+ inline research calls limit (B rule in `workflow.md`) is relaxed for Codex specifically.
+> **Fallback**: if `myflow_subagent` dispatch is unavailable in the current session, do the research inline and write the same files to `{TASK_DIR}/research/<topic>.md` yourself. Keep the contract (persisted file + one-line summary) either way.
 
 Agent type: `myflow-research`
 Task description template: "Research <specific question>; persist findings to `{TASK_DIR}/research/<topic-slug>.md`."
@@ -225,12 +225,11 @@ Main agent: WebFetch(url-A) → WebFetch(url-B) → Bash(gh api ...)
 
 ✅ Good:
 ```
-Main agent: Task(subagent_type="myflow-research",
-                 prompt="Research topic A; persist to research/topic-a.md")
-          + Task(subagent_type="myflow-research",
-                 prompt="Research topic B; persist to research/topic-b.md")
-          + Task(subagent_type="myflow-research",
-                 prompt="Research topic C; persist to research/topic-c.md")
+Main agent: myflow_subagent({ tasks: [
+               { agent: "myflow-research", task: "Research topic A; persist to research/topic-a.md" },
+               { agent: "myflow-research", task: "Research topic B; persist to research/topic-b.md" },
+               { agent: "myflow-research", task: "Research topic C; persist to research/topic-c.md" },
+             ] })
 → Reads research/topic-{a,b,c}.md after they finish.
 ```
 

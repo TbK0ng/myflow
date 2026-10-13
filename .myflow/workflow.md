@@ -1,7 +1,69 @@
-# myflow workflow states
+# myflow Workflow
 
-These workflow-state blocks are the single source of truth for what each phase does.
-The extension parses them and injects the block matching the current task state.
+Single source of truth for how work moves forward. The per-turn
+`[workflow-state:STATUS]` blocks at the bottom are injected verbatim by the
+extension; everything above is orientation for the model and the human.
+
+## Phase Index
+
+```
+Phase 1: Plan    → clarify before code: prd.md, optional research, curated jsonl
+Phase 2: Execute → implement only when status is in_progress, then check
+Phase 3: Finish  → verify, capture spec, commit, archive
+```
+
+| Step | Name | Rule |
+| --- | --- | --- |
+| 1.1 | Requirement exploration | `[required · once]` `myflow-brainstorm` → `prd.md` (complex work also `design.md` + `implement.md`) |
+| 1.2 | Research | `[optional · repeatable]` `myflow_subagent` with `myflow-research` → `research/<topic>.md` |
+| 1.3 | Configure context | `[required · once]` curate `implement.jsonl` / `check.jsonl` (sub-agent platforms) |
+| 1.4 | Activate | `[required · once]` review gate, then `task.py start` → status `in_progress` |
+| 2.1 | Implement | `[required · repeatable]` `myflow_subagent` with `myflow-implement` |
+| 2.2 | Check | `[required · repeatable]` `myflow-check`; fix findings |
+| 2.3 | Rollback | `[on demand]` revert and re-plan |
+| 3.1 | Spec update | `[required]` capture new contracts with `myflow-update-spec` |
+| 3.2 | Commit | `[required · once]` working tree clean after this |
+| 3.3 | Finish | `[required · once]` `/myflow-finish-work` → `task.py archive` |
+
+Rules: run steps in order; a `[once]` step is already done if its output exists
+(`prd.md`, curated `implement.jsonl`); going back a phase is allowed when new
+information requires it. `/myflow-status` shows task, phase, and git state
+without a model call.
+
+## Routing
+
+| Intent | Use |
+| --- | --- |
+| Requirements unclear / new feature | `myflow-brainstorm` skill |
+| Before writing code | `myflow-before-dev` skill |
+| Implementation | `myflow_subagent` → `myflow-implement` |
+| Verification after code changes | `myflow_subagent` → `myflow-check` (or `myflow-check` skill) |
+| Preserve a lesson or contract | `myflow-update-spec` skill |
+| After fixing a bug | `myflow-break-loop` skill |
+| Resume a task | `/myflow-continue` |
+| Wrap up a task | `/myflow-finish-work` |
+
+## Task Artifacts
+
+- `prd.md` — requirements, constraints, acceptance criteria.
+- `design.md` / `implement.md` — technical design and ordered execution plan for complex work.
+- `implement.jsonl` / `check.jsonl` — the spec and research files injected into sub-agents.
+- `research/<topic>.md` — persisted research findings.
+
+## Dispatch Protocol
+
+- Only the main session may dispatch `myflow_subagent`; a sub-agent is blocked
+  by the recursion guard and must report its recommendation instead.
+- Every dispatch prompt starts with `Active task: <path from task.py current>`.
+- Read order inside a sub-agent: `implement.jsonl` / `check.jsonl` referenced
+  files → `prd.md` → `design.md` if present → `implement.md` if present.
+
+## Escape Hatch
+
+Include the skip keyword (default `no-myflow`, configurable in
+`.myflow/config.yaml` under `prompt_injection.skip_keyword`) to suppress the
+per-turn breadcrumb for that turn. `session-context` and `task-context` are
+still injected.
 
 [workflow-state:no_task]
 No active task. First classify the current turn and ask for task-creation consent before creating any myflow task.
@@ -17,12 +79,12 @@ Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research mani
 [/workflow-state:planning]
 
 [workflow-state:in_progress]
-Tools: `myflow-implement` / `myflow-research` are sub-agent types only (`myflow_subagent` tool, NOT Skill; there is no skill by these names). `myflow-update-spec` is a skill. `myflow-check` exists as both; prefer the Agent form when verifying after code changes.
-Flow: `myflow-implement` -> `myflow-check` -> `myflow-update-spec` -> commit (Phase 3.4) -> `/myflow-finish-work`.
-Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `myflow-implement`, do NOT spawn another `myflow-implement` or `myflow-check`; if already running as `myflow-check`, do NOT spawn another `myflow-check` or `myflow-implement`. Dispatch is main session only.
+Tools: `myflow-implement` / `myflow-check` / `myflow-research` are sub-agent types dispatched with `myflow_subagent` (not skills). `myflow-before-dev`, `myflow-check`, `myflow-update-spec`, and `myflow-break-loop` are skills.
+Flow: `myflow-implement` -> `myflow-check` -> `myflow-update-spec` -> commit (3.2) -> `/myflow-finish-work`.
+Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `myflow-implement`, do NOT dispatch another `myflow-implement` or `myflow-check`; if already running as `myflow-check`, do NOT dispatch another `myflow-check` or `myflow-implement`. Dispatch is main session only.
 Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
 [/workflow-state:in_progress]
 
 [workflow-state:completed]
-Code committed. Run `/myflow-finish-work`; if dirty, return to Phase 3.4 first.
+Code committed. Run `/myflow-finish-work` to verify, capture spec, and archive; if dirty, return to step 3.2 first.
 [/workflow-state:completed]

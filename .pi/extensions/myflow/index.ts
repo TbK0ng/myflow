@@ -11,6 +11,7 @@ import {
   registerMyflowSubagent,
   type SubagentPi,
 } from "./subagent.ts";
+import { buildStatusReport, formatStatusReport } from "./status.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export type { ExtensionAPI };
 
@@ -156,6 +157,26 @@ export default function extension(pi: ExtensionAPI): void {
   // sub-agent from dispatching more sub-agents.
   registerMyflowSubagent(pi as unknown as SubagentPi, {
     deriveContextKey: (ctx) => deriveContextKey((ctx ?? {}) as HookContext),
+  });
+
+  // `/myflow-status` answers "where am I?" without a model call.
+  pi.registerCommand("myflow-status", {
+    description: "Show the active myflow task, workflow phase, and git state",
+    handler: async (_args: string, ctx: HookContext & { mode?: string; hasUI?: boolean }) => {
+      const root = projectRoot ?? findProjectRoot(ctx.cwd) ?? ctx.cwd;
+      const contextKey = deriveContextKey(ctx);
+      const text = formatStatusReport(buildStatusReport(root, contextKey));
+      if (ctx.mode === "print") {
+        // Pi routes extension console output to stderr in print mode and keeps
+        // stdout for the model's answer, so this stays visible without
+        // corrupting a piped answer. Never use console in json mode, where
+        // stdout is a JSONL event stream.
+        console.log(text);
+      } else {
+        pi.sendMessage({ customType: "myflow-status", content: text, display: true });
+      }
+      if (ctx.hasUI) ctx.ui?.notify(text.split("\n")[0] ?? "myflow status", "info");
+    },
   });
 
   pi.on("session_start", async (_event, ctx) => {
