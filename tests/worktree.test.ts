@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 
@@ -46,7 +46,9 @@ function worktree(project: Project, args: string[], expectFailure = false): stri
 }
 
 function cleanup(project: Project): void {
-  rmSync(join(project.root, ".."), { recursive: true, force: true });
+  // A detached launch can still hold the worktree directory as its cwd for a
+  // moment on Windows, so retry instead of failing the test in teardown.
+  rmSync(join(project.root, ".."), { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 test("worktree config: defaults and file values", () => {
@@ -218,12 +220,98 @@ test("worktree start --dry-run: plans a delegated session without touching git",
         "--dry-run",
       ]),
     );
-    assert.equal(planned.session_id, "myflow-zeta");
+    assert.match(planned.session_id, /^myflow-zeta-\d{4}-\d{6}-\d{3}$/, "each plan carries a fresh session id");
     assert.equal(planned.env.MYFLOW_SKIP_BREADCRUMB, "1");
     assert.ok(planned.command.includes("--session-id"));
     assert.match(planned.command[planned.command.length - 1], /^Active task: \.myflow\/tasks\/demo\n\ndo the work$/);
     assert.ok(!existsSync(join(project.worktrees, "zeta")), "dry-run must not create the worktree");
     assert.ok(!existsSync(join(project.root, ".myflow", ".runtime", "worktrees.json")), "dry-run must not register a session");
+  } finally {
+    cleanup(project);
+  }
+});
+
+function fakePi(binDir: string): string {
+  // A stand-in for the pi binary: it records its own command line, so the
+  // launch path can be tested without a model call.
+  const capture = join(binDir, "args.txt");
+  writeFileSync(join(binDir, "pi"), '#!/bin/sh\nprintf "%s\\n" "$*" > "$FAKE_PI_ARGS"\n', { mode: 0o755 });
+  writeFileSync(join(binDir, "pi.cmd"), '@echo off\r\necho %* > "%FAKE_PI_ARGS%"\r\n');
+  return capture;
+}
+
+function startWithFakePi(project: Project, args: string[], binDir: string, capture: string): string {
+  return execFileSync("python3", [join(project.root, ".myflow", "scripts", "worktree.py"), ...args], {
+    cwd: project.root,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      PI_SESSION_ID: "",
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+      FAKE_PI_ARGS: capture,
+    },
+    timeout: 60_000,
+  }).trim();
+}
+
+async function waitForCapture(capture: string, needle: string, timeoutMs = 15_000): Promise<string> {
+  // The launch is detached, so the stand-in pi writes its command line on its
+  // own schedule.
+  const deadline = Date.now() + timeoutMs;
+  let seen = "";
+  for (;;) {
+    try {
+      seen = readFileSync(capture, "utf-8");
+    } catch {
+      seen = "";
+    }
+    if (seen.includes(needle) || Date.now() > deadline) return seen;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+test("worktree start: every launch mints a fresh session id", async () => {
+  const project = makeRepo("worktree_dir: ../worktrees\n");
+  const binDir = join(project.root, "..", "bin");
+  mkdirSync(binDir, { recursive: true });
+  const capture = fakePi(binDir);
+  try {
+    const first = startWithFakePi(project, ["start", "real", "--prompt", "do the work"], binDir, capture);
+    const firstId = first.match(/session (\S+)\)/)?.[1] ?? "";
+    assert.match(firstId, /^myflow-real-\d{4}-\d{6}-\d{3}$/);
+    assert.ok(first.includes(`resume:   pi --resume ${firstId}`), "the resume command is printed");
+    assert.equal(
+      JSON.parse(worktree(project, ["list", "--json"])).sessions[0].session_id,
+      firstId,
+      "the session id is recorded in the registry",
+    );
+    assert.ok(
+      (await waitForCapture(capture, firstId)).includes(`--session-id ${firstId}`),
+      "pi is launched with that id",
+    );
+
+    // Same name in a new worktree: the path that used to resume the old
+    // conversation instead of starting a new one.
+    worktree(project, ["remove", "real", "--force"]);
+    const second = startWithFakePi(
+      project,
+      ["start", "real", "--branch", "myflow/real-2", "--prompt", "do the work"],
+      binDir,
+      capture,
+    );
+    const secondId = second.match(/session (\S+)\)/)?.[1] ?? "";
+    assert.notEqual(secondId, firstId, "a second launch must not resume the first session");
+    assert.ok((await waitForCapture(capture, secondId)).includes(`--session-id ${secondId}`));
+
+    // Continuing one on purpose is still explicit.
+    worktree(project, ["remove", "real", "--force"]);
+    const third = startWithFakePi(
+      project,
+      ["start", "real", "--branch", "myflow/real-3", "--prompt", "again", "--session-id", firstId],
+      binDir,
+      capture,
+    );
+    assert.equal(third.match(/session (\S+)\)/)?.[1], firstId, "--session-id is honoured verbatim");
   } finally {
     cleanup(project);
   }

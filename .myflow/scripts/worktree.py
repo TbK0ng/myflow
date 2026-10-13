@@ -343,12 +343,33 @@ def _pi_command() -> list[str]:
     return [executable] if executable else ["pi"]
 
 
+def new_session_id(name: str) -> str:
+    """A fresh session id for every launch: `myflow-<name>-<MMDD-HHMMSS>-<ms>`.
+
+    pi resumes a session when handed a session id it already knows, so a fixed
+    id per worktree name would make a later launch continue a finished
+    conversation inside a brand-new worktree. The milliseconds matter: removing
+    a worktree and starting the same name again can happen within one second,
+    and the registry entry for the first launch is gone by then. Continuity is
+    an explicit act: pass `--session-id`, or resume the id printed at startup.
+    """
+    now = datetime.now(timezone.utc)
+    base = f"myflow-{name}-{now.strftime('%m%d-%H%M%S')}-{now.microsecond // 1000:03d}"
+    taken = {str(entry.get("session_id")) for entry in read_registry()}
+    candidate = base
+    suffix = 2
+    while candidate in taken:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     root = repo_root()
     if root is None:
         print("error: not inside a git repository", file=sys.stderr)
         return 1
-    session_id = args.session_id or f"myflow-{args.name}"
+    session_id = args.session_id or new_session_id(args.name)
     log_path = LOG_DIR / f"{args.name}.log"
     # The initial run is a delegated work order, so it carries the task line and
     # suppresses the per-turn workflow breadcrumb: the session would otherwise
@@ -410,6 +431,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         print(f"started: {args.name} (pid {process.pid}, session {session_id})")
         print(f"worktree: {target}")
         print(f"log:      {log_path}")
+        print(f"resume:   pi --resume {session_id}")
     return 0
 
 
@@ -489,7 +511,7 @@ def main() -> int:
     p_start.add_argument("--task", default=None, help="task path; becomes the session's Active task line")
     p_start.add_argument("--branch", default=None)
     p_start.add_argument("--base", default=None)
-    p_start.add_argument("--session-id", default=None)
+    p_start.add_argument("--session-id", default=None, help="continue this session id instead of minting a fresh one")
     p_start.add_argument("--dry-run", action="store_true")
     p_start.set_defaults(func=cmd_start)
 

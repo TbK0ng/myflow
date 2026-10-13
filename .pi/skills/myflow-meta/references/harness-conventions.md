@@ -52,6 +52,11 @@ Keep these consistent across files; change them together or not at all:
 - **Delegated runs**: `MYFLOW_SKIP_BREADCRUMB=1` suppresses the per-turn
   breadcrumb for a process that receives a work order rather than a user turn
   (channel workers set it).
+- **Worktree sessions**: `worktree.py start` mints a fresh session id per
+  launch (`myflow-<name>-<MMDD-HHMMSS>-<ms>`, recorded in `worktrees.json`) and
+  prints the resume command. pi resumes a session it is handed by id, so
+  reusing an id would silently continue a finished conversation in a new
+  worktree; continuity is explicit via `--session-id` or `pi --resume`.
 - **Project marker**: a project root is a directory whose `.myflow/` holds
   `workflow.md`. `find-project-root.ts` and every script (`task.py`,
   `get_context.py`, `channel.py`, `worktree.py`) resolve it the same way by
