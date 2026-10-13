@@ -39,6 +39,10 @@ test("taskContextJsonlNames: null agent", () => {
   assert.deepEqual(taskContextJsonlNames(null), ["implement.jsonl", "check.jsonl"]);
 });
 
+test("taskContextJsonlNames: custom agent gets both manifests", () => {
+  assert.deepEqual(taskContextJsonlNames("my-custom-agent"), ["implement.jsonl", "check.jsonl"]);
+});
+
 test("taskContextInputPaths: includes config, prd, info", () => {
   const dir = makeProject();
   const taskDir = join(dir, ".myflow", "tasks", "test");

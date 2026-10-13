@@ -18,6 +18,7 @@ import {
   getPiInvocation,
   isFailedResult,
   registerMyflowSubagent,
+  resolveTaskCwd,
 } from "../.pi/extensions/myflow/subagent.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -122,6 +123,14 @@ test("registerMyflowSubagent: registers the myflow_subagent tool", () => {
   assert.ok(tool, "myflow_subagent must be registered");
   assert.equal(tool!.label, "Myflow Subagent");
   assert.ok(tool!.parameters.properties.tasks);
+  assert.ok(tool!.parameters.properties.tasks.items.properties.cwd, "parallel tasks must accept cwd");
+  assert.ok(tool!.parameters.properties.cwd, "single mode must accept cwd");
+});
+
+test("resolveTaskCwd: a task-specific cwd wins over the caller's", () => {
+  assert.equal(resolveTaskCwd("/default"), "/default");
+  assert.equal(resolveTaskCwd("/default", "/worktree"), "/worktree");
+  assert.equal(resolveTaskCwd("/default", "   "), "/default");
 });
 
 test("myflow_subagent: invalid parameters reports available agents", async () => {
@@ -185,16 +194,20 @@ test("tool_call: main session does not block myflow_subagent", async () => {
 
 test("tool_call: sub-agent blocks myflow_subagent (recursion guard)", async () => {
   const previous = process.env[MYFLOW_AGENT_ENV];
-  process.env[MYFLOW_AGENT_ENV] = "myflow-implement";
   try {
-    const { api, handlers } = makeMockAPI();
-    extension(api);
-    const result = (await handlers.tool_call(
-      { toolName: "myflow_subagent" },
-      { cwd: ROOT },
-    )) as { block?: boolean; reason?: string } | undefined;
-    assert.equal(result?.block, true);
-    assert.ok(result?.reason?.includes("Recursion guard"));
+    // Any dispatched agent name counts, including custom ones.
+    for (const agentName of ["myflow-implement", "my-custom-agent"]) {
+      process.env[MYFLOW_AGENT_ENV] = agentName;
+      const { api, handlers } = makeMockAPI();
+      extension(api);
+      const result = (await handlers.tool_call(
+        { toolName: "myflow_subagent" },
+        { cwd: ROOT },
+      )) as { block?: boolean; reason?: string } | undefined;
+      assert.equal(result?.block, true, `${agentName} must be blocked`);
+      assert.ok(result?.reason?.includes("Recursion guard"), `${agentName}: ${result?.reason}`);
+      assert.ok(result?.reason?.includes(agentName), "the reason names the agent");
+    }
   } finally {
     if (previous === undefined) delete process.env[MYFLOW_AGENT_ENV];
     else process.env[MYFLOW_AGENT_ENV] = previous;

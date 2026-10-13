@@ -2,7 +2,14 @@ import { readFileSync, statSync, existsSync, openSync, readSync, fstatSync, clos
 import { join, resolve, relative, basename, isAbsolute } from "node:path";
 import { Buffer } from "node:buffer";
 
-export type AgentType = "myflow-implement" | "myflow-check" | "myflow-research" | null;
+/**
+ * A dispatched agent's name, or null when this process is the main session.
+ *
+ * Any name is accepted: `.pi/agents/*.md` may define custom agents. The three
+ * bundled names only select which JSONL manifests are injected; unknown names
+ * get both.
+ */
+export type AgentType = string | null;
 
 export interface ContextInjectionLimits {
   max_file_bytes: number;
@@ -23,6 +30,7 @@ export function taskContextJsonlNames(agentType?: AgentType): string[] {
   if (agentType === "myflow-implement") return ["implement.jsonl"];
   if (agentType === "myflow-check") return ["check.jsonl"];
   if (agentType === "myflow-research") return [];
+  // Main session and any custom agent: both manifests.
   return ["implement.jsonl", "check.jsonl"];
 }
 

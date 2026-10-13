@@ -45,8 +45,9 @@ Keep these consistent across files; change them together or not at all:
   `no_task` (no session) and `completed` (archived).
 - **Workflow-state blocks**: `[workflow-state:STATUS] … [/workflow-state:STATUS]`
   in `.myflow/workflow.md`. The extension is parser-only.
-- **Subagent detection**: `MYFLOW_AGENT_TYPE` is set by `myflow_subagent` and
-  read by `detectAgentType()`.
+- **Subagent detection**: `myflow_subagent` sets `MYFLOW_AGENT_TYPE` to the
+  dispatched agent's name, and `detectAgentType()` treats any non-empty name as
+  a sub-agent (custom agent definitions included).
 
 ## Extension Rules
 
@@ -64,6 +65,11 @@ Keep these consistent across files; change them together or not at all:
 
 ## Gotchas
 
+- **Parallel sub-agents share the working tree.** `myflow_subagent` never
+  creates git worktrees; every child spawns in the caller's directory unless
+  its task passes `cwd`. Use parallel dispatch for read-only work
+  (`myflow-research`), and give a writing task its own checkout via `cwd` when
+  you need isolation.
 - **Windows stdout encoding**: a Python process writing to a pipe defaults to
   the ANSI codepage, so non-ASCII text (em dashes, CJK task titles) becomes
   mojibake for the UTF-8 reader. `get_context.py` and `task.py` both call
