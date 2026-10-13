@@ -60,6 +60,8 @@ export interface ToolCallEvent {
 
 const SUBAGENT_TOOL_NAME = "myflow_subagent";
 const MAX_VERIFY_ATTEMPTS = 2;
+/** Set for delegated processes (channel workers) that must not see the breadcrumb. */
+export const SKIP_BREADCRUMB_ENV = "MYFLOW_SKIP_BREADCRUMB";
 
 /**
  * Detect whether the current process is a sub-agent.
@@ -223,7 +225,10 @@ export default function extension(pi: ExtensionAPI): void {
 
     const contextKey = deriveContextKey(ctx);
     const skipKeyword = readPromptInjectionSkipKeyword(projectRoot);
-    const skipThisTurn = shouldSkipWorkflowState(inputEvent.text ?? "", skipKeyword);
+    // Delegated processes (channel workers) run with this set: their input is a
+    // work order, not a user turn, so the per-turn breadcrumb would derail them.
+    const skipThisTurn =
+      process.env[SKIP_BREADCRUMB_ENV] === "1" || shouldSkipWorkflowState(inputEvent.text ?? "", skipKeyword);
     turnCache.beginTurn(skipThisTurn);
     turnCache.get(projectRoot, contextKey);
   });

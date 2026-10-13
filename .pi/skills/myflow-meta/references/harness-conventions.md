@@ -49,6 +49,9 @@ Keep these consistent across files; change them together or not at all:
 - **Subagent detection**: `myflow_subagent` sets `MYFLOW_AGENT_TYPE` to the
   dispatched agent's name, and `detectAgentType()` treats any non-empty name as
   a sub-agent (custom agent definitions included).
+- **Delegated runs**: `MYFLOW_SKIP_BREADCRUMB=1` suppresses the per-turn
+  breadcrumb for a process that receives a work order rather than a user turn
+  (channel workers set it).
 
 ## Extension Rules
 

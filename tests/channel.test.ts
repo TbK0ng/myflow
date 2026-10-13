@@ -1,0 +1,231 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, cpSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync, spawnSync } from "node:child_process";
+
+const ROOT = join(import.meta.dirname, "..");
+const CHANNEL_PY = join(ROOT, ".myflow", "scripts", "channel.py");
+
+interface Sandbox {
+  project: string;
+  home: string;
+}
+
+function makeSandbox(config?: string): Sandbox {
+  const base = mkdtempSync(join(tmpdir(), "myflow-channel-"));
+  const project = join(base, "project");
+  const home = join(base, "home");
+  mkdirSync(join(project, ".myflow", "scripts"), { recursive: true });
+  mkdirSync(join(project, ".myflow", "agents"), { recursive: true });
+  mkdirSync(home, { recursive: true });
+  cpSync(CHANNEL_PY, join(project, ".myflow", "scripts", "channel.py"));
+  cpSync(join(ROOT, ".myflow", "agents"), join(project, ".myflow", "agents"), { recursive: true });
+  if (config) writeFileSync(join(project, ".myflow", "config.yaml"), config, "utf-8");
+  return { project, home };
+}
+
+function channel(sandbox: Sandbox, args: string[], expectFailure = false): string {
+  try {
+    return execFileSync("python3", [join(sandbox.project, ".myflow", "scripts", "channel.py"), ...args], {
+      cwd: sandbox.project,
+      encoding: "utf-8",
+      env: { ...process.env, USERPROFILE: sandbox.home, HOME: sandbox.home },
+      timeout: 60_000,
+    }).trim();
+  } catch (error) {
+    if (!expectFailure) throw error;
+    const failure = error as { stdout?: string; stderr?: string };
+    return `${failure.stdout ?? ""}${failure.stderr ?? ""}`.trim();
+  }
+}
+
+function projectStore(sandbox: Sandbox): string {
+  const root = join(sandbox.home, ".myflow", "channels");
+  const bucket = readdirSync(root).find((entry) => entry !== "__global__");
+  assert.ok(bucket, "project bucket must exist");
+  return join(root, bucket);
+}
+
+function cleanup(sandbox: Sandbox): void {
+  rmSync(join(sandbox.project, ".."), { recursive: true, force: true });
+}
+
+test("channel create and list keep project and global buckets apart", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "alpha"]);
+    assert.match(channel(sandbox, ["create", "alpha"], true), /already exists/);
+    channel(sandbox, ["create", "shared", "--scope", "global", "--type", "forum"]);
+
+    const projectList = channel(sandbox, ["list"]);
+    assert.match(projectList, /^alpha\tchat\tproject\t0 event\(s\)$/m);
+    assert.ok(!projectList.includes("shared"), "global channels stay out of project listings");
+
+    const all = channel(sandbox, ["list", "--all"]);
+    assert.match(all, /^shared\tforum\tglobal\t0 event\(s\)$/m);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel send and messages: ordering, since, json, and empty rejection", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "chat"]);
+    assert.match(channel(sandbox, ["send", "chat", "--as", "me", "hello"]), /^#1 message me$/);
+    channel(sandbox, ["send", "chat", "--as", "me", "--to", "worker", "--tag", "question", "second"]);
+
+    const text = channel(sandbox, ["messages", "chat"]);
+    assert.match(text, /#1 .* me -> all: hello/);
+    assert.match(text, /#2 .* \[question\] me -> worker: second/);
+
+    const since = channel(sandbox, ["messages", "chat", "--since", "1"]);
+    assert.ok(!since.includes("hello"), "--since skips older events");
+    assert.match(since, /second/);
+
+    const json = JSON.parse(channel(sandbox, ["messages", "chat", "--json"]));
+    assert.equal(json.events.length, 2);
+    assert.equal(json.events[1].to, "worker");
+
+    assert.match(channel(sandbox, ["send", "chat", "--as", "me"], true), /empty message/);
+    assert.match(channel(sandbox, ["messages", "missing"], true), /unknown channel/);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel send: idempotency key appends once", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "chat"]);
+    const first = channel(sandbox, ["send", "chat", "--as", "me", "--idempotency-key", "k1", "once"]);
+    const second = channel(sandbox, ["send", "chat", "--as", "me", "--idempotency-key", "k1", "once"]);
+    assert.equal(first, second, "the same key returns the recorded event");
+    const json = JSON.parse(channel(sandbox, ["messages", "chat", "--json"]));
+    assert.equal(json.events.length, 1);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel wait: returns a matching completion and times out otherwise", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "chat"]);
+    channel(sandbox, ["send", "chat", "--as", "worker", "--kind", "done", "all green"]);
+    const waited = channel(sandbox, ["wait", "chat", "--from", "worker", "--kind", "done", "--timeout", "5"]);
+    assert.match(waited, /done worker -> all: all green/);
+
+    assert.match(
+      channel(sandbox, ["wait", "chat", "--from", "nobody", "--timeout", "0.2", "--poll", "0.05"], true),
+      /timeout waiting/,
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel spawn --dry-run: builds a worker command from the runtime agent", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "review"]);
+    const planned = JSON.parse(
+      channel(sandbox, [
+        "spawn",
+        "review",
+        "--agent",
+        "check",
+        "--task",
+        ".myflow/tasks/demo",
+        "--handle",
+        "checker",
+        "--dry-run",
+      ]),
+    );
+    assert.equal(planned.handle, "checker");
+    assert.ok(planned.command.includes("--append-system-prompt"));
+    assert.ok(
+      planned.command.some((part: string) => part.endsWith(join(".myflow", "agents", "check.md"))),
+      "the runtime agent definition is attached",
+    );
+    const prompt = planned.command[planned.command.length - 1];
+    assert.match(prompt, /Active task: \.myflow\/tasks\/demo/);
+    assert.match(prompt, /--as checker/);
+
+    assert.match(channel(sandbox, ["spawn", "review", "--agent", "nope", "--dry-run"], true), /no runtime agent definition/);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel worker guard: refuses to exceed max_live_workers", () => {
+  const sandbox = makeSandbox("channel:\n  worker_guard:\n    max_live_workers: 1\n");
+  try {
+    channel(sandbox, ["create", "review"]);
+    const store = projectStore(sandbox);
+    writeFileSync(
+      join(store, "workers.json"),
+      JSON.stringify({
+        workers: [
+          {
+            handle: "busy",
+            channel: "review",
+            scope: "project",
+            agent: "check",
+            pid: process.pid,
+            started_at: "2026-01-01T00:00:00Z",
+            log: "x.log",
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const workers = JSON.parse(channel(sandbox, ["workers", "--json"]));
+    assert.equal(workers.workers[0].alive, true);
+    assert.equal(workers.guard.max_live_workers, 1);
+
+    assert.match(
+      channel(sandbox, ["spawn", "review", "--agent", "check", "--prompt", "go"], true),
+      /worker guard: 1 live worker\(s\) >= max_live_workers=1/,
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel rm and prune: remove a channel and drop dead worker records", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "chat"]);
+    assert.match(channel(sandbox, ["rm", "chat"]), /removed: chat/);
+    assert.match(channel(sandbox, ["rm", "chat"], true), /unknown channel/);
+
+    channel(sandbox, ["create", "chat"]);
+    const store = projectStore(sandbox);
+    writeFileSync(
+      join(store, "workers.json"),
+      JSON.stringify({
+        workers: [{ handle: "dead", channel: "chat", scope: "project", agent: "check", pid: 999999999, started_at: "x", log: "x" }],
+      }),
+      "utf-8",
+    );
+    assert.match(channel(sandbox, ["prune"]), /pruned: 1 worker record/);
+    assert.equal(JSON.parse(readFileSync(join(store, "workers.json"), "utf-8")).workers.length, 0);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel store stays under the user channel root", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "chat"]);
+    assert.ok(existsSync(join(projectStore(sandbox), "chat", "events.jsonl")));
+    assert.ok(!existsSync(join(sandbox.project, ".myflow", "channels")), "channels never live inside the project");
+  } finally {
+    cleanup(sandbox);
+  }
+});

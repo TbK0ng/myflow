@@ -172,7 +172,9 @@ def is_alive(pid: object) -> bool:
         return False
     try:
         os.kill(pid, 0)
-    except (OSError, ValueError):
+    except (OSError, SystemError, ValueError):
+        # Windows reports an unopenable pid as OSError or, from some CPython
+        # builds, SystemError with the OSError attached.
         return False
     return True
 

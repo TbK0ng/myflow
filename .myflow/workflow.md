@@ -39,6 +39,7 @@ without a model call.
 | Implementation | `myflow_subagent` → `myflow-implement` |
 | Verification after code changes | `myflow_subagent` → `myflow-check` (or `myflow-check` skill) |
 | Preserve a lesson or contract | `myflow-update-spec` skill |
+| Discuss with a peer agent / spawn a worker | `myflow-channel` skill (`channel.py`) |
 | Bootstrap or refresh specs from the codebase | `myflow-spec-bootstrap` skill |
 | After fixing a bug | `myflow-break-loop` skill |
 | Resume a task | `/myflow-continue` |

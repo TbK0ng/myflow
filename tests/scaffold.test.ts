@@ -23,9 +23,9 @@ const ROOT = join(import.meta.dirname, "..");
  * nothing that belongs to the project itself (spec, tasks, runtime, config).
  */
 const PAYLOAD_DIRS = [".pi"];
-const PAYLOAD_TREES = [".myflow/scripts"];
+const PAYLOAD_TREES = [".myflow/scripts", ".myflow/agents"];
 const PAYLOAD_FILES = [".myflow/workflow.md"];
-const PAYLOAD_ROOTS = [join(ROOT, ".pi"), join(ROOT, ".myflow", "scripts")];
+const PAYLOAD_ROOTS = [join(ROOT, ".pi"), join(ROOT, ".myflow", "scripts"), join(ROOT, ".myflow", "agents")];
 
 const SKILLS = [
   "myflow-meta",
@@ -35,9 +35,11 @@ const SKILLS = [
   "myflow-update-spec",
   "myflow-break-loop",
   "myflow-spec-bootstrap",
+  "myflow-channel",
 ];
 const AGENTS = ["myflow-implement", "myflow-check", "myflow-research"];
-const PROMPTS = ["myflow-continue", "myflow-finish-work"];
+const RUNTIME_AGENTS = ["architect", "plan", "research", "implement", "check"];
+const PROMPTS = ["myflow-continue", "myflow-finish-work", "myflow-parallel"];
 
 function copyPayload(destination: string): void {
   for (const dir of PAYLOAD_DIRS) {
@@ -102,7 +104,16 @@ test("payload carries agents, prompts, skills, and scripts", () => {
   }
   assert.ok(existsSync(join(ROOT, ".myflow", "scripts", "get_context.py")));
   assert.ok(existsSync(join(ROOT, ".myflow", "scripts", "task.py")));
+  assert.ok(existsSync(join(ROOT, ".myflow", "scripts", "worktree.py")));
+  assert.ok(existsSync(join(ROOT, ".myflow", "scripts", "channel.py")));
   assert.ok(existsSync(join(ROOT, ".myflow", "workflow.md")));
+  for (const name of RUNTIME_AGENTS) {
+    const file = join(ROOT, ".myflow", "agents", `${name}.md`);
+    assert.ok(existsSync(file), `missing runtime agent ${name}`);
+    const { frontmatter } = parseFrontmatter(readFileSync(file, "utf-8"));
+    assert.equal(frontmatter.name, name);
+    assert.equal(typeof frontmatter.description, "string");
+  }
 });
 
 test("copied payload extension registers hooks, tool, and command", async () => {

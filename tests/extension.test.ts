@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import extension from "../.pi/extensions/myflow/index.ts";
+import extension, { SKIP_BREADCRUMB_ENV } from "../.pi/extensions/myflow/index.ts";
 import type { ExtensionAPI, HookContext, Message } from "../.pi/extensions/myflow/index.ts";
 import { MYFLOW_AGENT_ENV } from "../.pi/extensions/myflow/subagent.ts";
 
@@ -259,6 +259,26 @@ function writeVerifyScript(root: string, failing: boolean): void {
     failing ? "import sys\nprint('FAIL: node --test', file=sys.stderr)\nsys.exit(1)\n" : "import sys\nprint('verify passed')\nsys.exit(0)\n",
   );
 }
+
+test("input: MYFLOW_SKIP_BREADCRUMB suppresses the breadcrumb for delegated runs", async () => {
+  const root = makeProject();
+  const previous = process.env[SKIP_BREADCRUMB_ENV];
+  process.env[SKIP_BREADCRUMB_ENV] = "1";
+  try {
+    const { api } = makeMockAPI(root);
+    extension(api);
+    const handlers = getHandlers(api);
+    const ctx = getCtx(api);
+    await handlers.session_start({}, ctx);
+    await handlers.input({ text: "work order" }, ctx);
+    const result = await handlers.before_agent_start({}, ctx);
+    assert.equal(result, undefined, "a delegated process receives no workflow-state message");
+  } finally {
+    if (previous === undefined) delete process.env[SKIP_BREADCRUMB_ENV];
+    else process.env[SKIP_BREADCRUMB_ENV] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("verify gate: a check sub-agent is held until verify passes", async () => {
   const root = makeProject();

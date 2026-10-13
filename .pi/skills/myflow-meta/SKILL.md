@@ -22,13 +22,15 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
   extensions/myflow/pi-coding-agent.d.ts  # the only Pi type surface used
   agents/myflow-{implement,check,research}.md
   prompts/myflow-{continue,finish-work,parallel}.md
-  skills/myflow-{meta,brainstorm,before-dev,check,update-spec,break-loop,spec-bootstrap}/
+  skills/myflow-{meta,brainstorm,before-dev,check,update-spec,break-loop,spec-bootstrap,channel}/
 .myflow/
+  agents/{architect,plan,research,implement,check}.md  # channel runtime workers
   workflow.md                       # phases, routing, per-turn state blocks
   worktree.yaml                     # parallel-session config + verify commands (project-owned)
   scripts/get_context.py            # session context (workflow + task + git)
   scripts/task.py                   # task lifecycle + session pointer
   scripts/worktree.py               # isolated parallel sessions (git worktrees)
+  scripts/channel.py                # channel runtime (workers, messages, wait)
   spec/                             # this project's conventions (project-owned)
   tasks/<slug>/                     # task.json, prd.md, info.md, *.jsonl, research/
   archive/<YYYY-MM>/<slug>/         # archived tasks
@@ -41,6 +43,7 @@ tests/                              # harness development only (node --test)
 To install the harness in another project, copy:
 
 - `.pi/` — extension, agents, prompts, skills
+- `.myflow/agents/` — channel runtime agent definitions
 - `.myflow/workflow.md` and `.myflow/scripts/`
 
 Do **not** copy `.myflow/spec/`, `.myflow/tasks/`, `.myflow/archive/`,
@@ -157,6 +160,8 @@ with this skill in `references/harness-conventions.md`.
 | Workflow phases, routing, breadcrumbs | `.myflow/workflow.md` |
 | Task lifecycle | `.myflow/scripts/task.py` |
 | Parallel sessions (worktrees) | `.myflow/scripts/worktree.py`, `.myflow/worktree.yaml` |
+| Channel runtime | `.myflow/scripts/channel.py`, skill `myflow-channel` |
+| Channel runtime agents | `.myflow/agents/*.md` |
 | Verify gate commands | `.myflow/worktree.yaml` (`verify:`) |
 | Session context sections | `.myflow/scripts/get_context.py` |
 | Entry prompts | `.pi/prompts/*.md` |
@@ -171,6 +176,7 @@ node --test tests/
 python3 .myflow/scripts/get_context.py
 python3 .myflow/scripts/task.py current --source
 python3 .myflow/scripts/worktree.py config
+python3 .myflow/scripts/channel.py list --all
 ```
 
 The extension must stay loadable by Pi from a payload-only copy: run
