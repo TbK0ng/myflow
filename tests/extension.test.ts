@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import extension from "../.pi/extensions/myflow/index.ts";
 import type { ExtensionAPI, HookContext, Message } from "../.pi/extensions/myflow/index.ts";
+import { MYFLOW_AGENT_ENV } from "../.pi/extensions/myflow/subagent.ts";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-ext-"));
@@ -151,7 +152,7 @@ test("session_before_compact: records timestamp", async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("all 6 hooks registered", () => {
+test("all hooks registered", () => {
   const root = makeProject();
   const { api } = makeMockAPI(root);
   extension(api);
@@ -162,6 +163,7 @@ test("all 6 hooks registered", () => {
   assert.ok(handlers.context);
   assert.ok(handlers.tool_call);
   assert.ok(handlers.session_before_compact);
+  assert.ok(handlers.agent_before_settle, "the verify gate needs agent_before_settle");
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -248,4 +250,87 @@ test("context: re-injects the breadcrumb after compaction", async () => {
     "context must re-inject the breadcrumb after compaction",
   );
   rmSync(root, { recursive: true, force: true });
+});
+
+function writeVerifyScript(root: string, failing: boolean): void {
+  mkdirSync(join(root, ".myflow", "scripts"), { recursive: true });
+  writeFileSync(
+    join(root, ".myflow", "scripts", "worktree.py"),
+    failing ? "import sys\nprint('FAIL: node --test', file=sys.stderr)\nsys.exit(1)\n" : "import sys\nprint('verify passed')\nsys.exit(0)\n",
+  );
+}
+
+test("verify gate: a check sub-agent is held until verify passes", async () => {
+  const root = makeProject();
+  const previous = process.env[MYFLOW_AGENT_ENV];
+  process.env[MYFLOW_AGENT_ENV] = "myflow-check";
+  try {
+    writeVerifyScript(root, true);
+    const { api } = makeMockAPI(root);
+    extension(api);
+    const handlers = getHandlers(api);
+    const ctx = getCtx(api);
+    await handlers.session_start({}, ctx);
+
+    const blocked = (await (handlers.agent_before_settle as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+      { outcome: "completed" },
+      ctx,
+    )) as { continue?: boolean; entries?: Array<{ customType: string; content: string }> } | undefined;
+    assert.equal(blocked?.continue, true, "a failing verify must hold the agent");
+    assert.equal(blocked?.entries?.[0]?.customType, "verify-gate");
+    assert.match(blocked!.entries![0].content, /FAIL: node --test/);
+
+    writeVerifyScript(root, false);
+    const allowed = await (handlers.agent_before_settle as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+      { outcome: "completed" },
+      ctx,
+    );
+    assert.equal(allowed, undefined, "a passing verify lets the agent settle");
+  } finally {
+    if (previous === undefined) delete process.env[MYFLOW_AGENT_ENV];
+    else process.env[MYFLOW_AGENT_ENV] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("verify gate: bounded and only applies to the check agent", async () => {
+  const root = makeProject();
+  writeVerifyScript(root, true);
+  const previous = process.env[MYFLOW_AGENT_ENV];
+  try {
+    delete process.env[MYFLOW_AGENT_ENV];
+    const main = makeMockAPI(root);
+    extension(main.api);
+    const mainHandlers = getHandlers(main.api);
+    const mainCtx = getCtx(main.api);
+    await mainHandlers.session_start({}, mainCtx);
+    const mainResult = await (mainHandlers.agent_before_settle as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+      { outcome: "completed" },
+      mainCtx,
+    );
+    assert.equal(mainResult, undefined, "the main session is never gated");
+
+    process.env[MYFLOW_AGENT_ENV] = "myflow-check";
+    const check = makeMockAPI(root);
+    extension(check.api);
+    const checkHandlers = getHandlers(check.api);
+    const checkCtx = getCtx(check.api);
+    await checkHandlers.session_start({}, checkCtx);
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const blocked = (await (checkHandlers.agent_before_settle as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+        { outcome: "completed" },
+        checkCtx,
+      )) as { continue?: boolean } | undefined;
+      assert.equal(blocked?.continue, true, `attempt ${attempt} must be held`);
+    }
+    const exhausted = await (checkHandlers.agent_before_settle as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+      { outcome: "completed" },
+      checkCtx,
+    );
+    assert.equal(exhausted, undefined, "the gate stops after the retry cap");
+  } finally {
+    if (previous === undefined) delete process.env[MYFLOW_AGENT_ENV];
+    else process.env[MYFLOW_AGENT_ENV] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -135,6 +135,7 @@ test("copied payload extension registers hooks, tool, and command", async () => 
     module.default(api);
 
     assert.deepEqual(Object.keys(handlers).sort(), [
+      "agent_before_settle",
       "before_agent_start",
       "context",
       "input",

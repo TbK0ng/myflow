@@ -13,7 +13,7 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
 
 ```
 .pi/
-  extensions/myflow/index.ts        # extension factory: 6 hooks + /myflow-status
+  extensions/myflow/index.ts        # extension factory: hooks + /myflow-status
   extensions/myflow/subagent.ts     # myflow_subagent tool (single/parallel/chain)
   extensions/myflow/agents.ts       # agent discovery from .pi/agents
   extensions/myflow/status.ts       # status report builder (used by the command)
@@ -21,12 +21,14 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
                                     # state parsing, turn cache, escape hatch, injection
   extensions/myflow/pi-coding-agent.d.ts  # the only Pi type surface used
   agents/myflow-{implement,check,research}.md
-  prompts/myflow-{continue,finish-work}.md
+  prompts/myflow-{continue,finish-work,parallel}.md
   skills/myflow-{meta,brainstorm,before-dev,check,update-spec,break-loop,spec-bootstrap}/
 .myflow/
   workflow.md                       # phases, routing, per-turn state blocks
+  worktree.yaml                     # parallel-session config + verify commands (project-owned)
   scripts/get_context.py            # session context (workflow + task + git)
   scripts/task.py                   # task lifecycle + session pointer
+  scripts/worktree.py               # isolated parallel sessions (git worktrees)
   spec/                             # this project's conventions (project-owned)
   tasks/<slug>/                     # task.json, prd.md, info.md, *.jsonl, research/
   archive/<YYYY-MM>/<slug>/         # archived tasks
@@ -42,7 +44,8 @@ To install the harness in another project, copy:
 - `.myflow/workflow.md` and `.myflow/scripts/`
 
 Do **not** copy `.myflow/spec/`, `.myflow/tasks/`, `.myflow/archive/`,
-`.myflow/.runtime/`, or `.myflow/config.yaml` — those belong to the project.
+`.myflow/.runtime/`, `.myflow/config.yaml`, or `.myflow/worktree.yaml` — those
+belong to the project.
 `tests/scaffold.test.ts` fails if the payload ever depends on a file outside it.
 
 ## Runtime: the extension
@@ -59,6 +62,7 @@ directory. Six hooks are always registered:
 | `context` | Replaces a stale `task-context`, re-adds or strips the breadcrumb. |
 | `tool_call` | Blocks `myflow_subagent` inside a sub-agent (recursion guard). |
 | `session_before_compact` | Records the compaction timestamp so the breadcrumb is re-injected. |
+| `agent_before_settle` | Holds a `myflow-check` sub-agent until the configured verify commands pass (bounded retries). |
 
 Injected blocks are `custom` messages with `display: false`:
 `<session-context>`, `<task-context>`, `<workflow-state>`.
@@ -152,6 +156,8 @@ with this skill in `references/harness-conventions.md`.
 | Skip keyword behavior | `.myflow/config.yaml`, `.pi/extensions/myflow/escape-hatch.ts` |
 | Workflow phases, routing, breadcrumbs | `.myflow/workflow.md` |
 | Task lifecycle | `.myflow/scripts/task.py` |
+| Parallel sessions (worktrees) | `.myflow/scripts/worktree.py`, `.myflow/worktree.yaml` |
+| Verify gate commands | `.myflow/worktree.yaml` (`verify:`) |
 | Session context sections | `.myflow/scripts/get_context.py` |
 | Entry prompts | `.pi/prompts/*.md` |
 | Conventions the model must follow | `.myflow/spec/*/index.md` (project-owned; create on demand) |
@@ -164,6 +170,7 @@ with this skill in `references/harness-conventions.md`.
 node --test tests/
 python3 .myflow/scripts/get_context.py
 python3 .myflow/scripts/task.py current --source
+python3 .myflow/scripts/worktree.py config
 ```
 
 The extension must stay loadable by Pi from a payload-only copy: run

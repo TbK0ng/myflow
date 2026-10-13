@@ -59,6 +59,7 @@ export interface ToolCallEvent {
 }
 
 const SUBAGENT_TOOL_NAME = "myflow_subagent";
+const MAX_VERIFY_ATTEMPTS = 2;
 
 /**
  * Detect whether the current process is a sub-agent.
@@ -131,6 +132,23 @@ function getTaskContext(taskDir: string, projectRoot: string, agentType?: AgentT
   return buildTaskContext(projectRoot, taskDir, agentType);
 }
 
+function runVerifyCommands(projectRoot: string): string | null {
+  const script = join(projectRoot, ".myflow", "scripts", "worktree.py");
+  if (!existsSync(script)) return null;
+  try {
+    execFileSync("python3", [script, "verify"], {
+      cwd: projectRoot,
+      encoding: "utf-8",
+      timeout: 300_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return null;
+  } catch (error) {
+    const failure = error as { stdout?: string; stderr?: string };
+    return `${failure.stdout ?? ""}${failure.stderr ?? ""}`.trim() || "verify failed";
+  }
+}
+
 export default function extension(pi: ExtensionAPI): void {
   let projectRoot: string | null = null;
   const turnCache = new TurnContextCache();
@@ -138,6 +156,7 @@ export default function extension(pi: ExtensionAPI): void {
   const isSubAgent = agentType !== null;
   let lastCompactionTs = 0;
   let lastInjectionTs = 0;
+  let verifyAttempts = 0;
 
   // Native Pi sub-agent dispatch (single / parallel / chain). Registered in
   // both main sessions and sub-agents; the recursion guard below prevents a
@@ -168,6 +187,7 @@ export default function extension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     projectRoot = findProjectRoot(ctx.cwd);
+    verifyAttempts = 0;
     const contextKey = deriveContextKey(ctx);
     if (!projectRoot) return;
 
@@ -324,5 +344,39 @@ export default function extension(pi: ExtensionAPI): void {
 
   pi.on("session_before_compact", async (_event, _ctx) => {
     lastCompactionTs = Date.now();
+  });
+
+  // Verify gate: a check sub-agent does not settle while the configured verify
+  // commands fail. Mirrors the "block the checker until verification passes"
+  // loop, bounded so a broken command cannot loop forever.
+  pi.on("agent_before_settle", async (event, ctx) => {
+    if (!projectRoot) {
+      projectRoot = findProjectRoot(ctx.cwd);
+    }
+    if (!projectRoot) return;
+    if (agentType !== "myflow-check") return;
+
+    const settle = event as { outcome?: string };
+    if (settle.outcome && settle.outcome !== "completed") return;
+    if (verifyAttempts >= MAX_VERIFY_ATTEMPTS) return;
+
+    const failure = runVerifyCommands(projectRoot);
+    if (!failure) return;
+
+    verifyAttempts += 1;
+    return {
+      continue: true,
+      entries: [
+        {
+          type: "custom_message",
+          customType: "verify-gate",
+          content:
+            `<verify-gate attempt="${verifyAttempts}/${MAX_VERIFY_ATTEMPTS}">\n` +
+            "The configured verify commands did not pass. Fix the failures before finishing.\n\n" +
+            `${failure}\n</verify-gate>`,
+          display: false,
+        },
+      ],
+    };
   });
 }

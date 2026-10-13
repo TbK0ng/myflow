@@ -16,7 +16,8 @@ harness itself, so they hold in every project that carries the payload.
 
 **Project-owned** — never copy between projects:
 
-- `.myflow/spec/` (this project's conventions), `.myflow/config.yaml`
+- `.myflow/spec/` (this project's conventions), `.myflow/config.yaml`,
+  `.myflow/worktree.yaml`
 - `.myflow/tasks/`, `.myflow/archive/`, `.myflow/.runtime/`
 
 **Harness development** — not needed to run the payload:
@@ -60,6 +61,9 @@ Keep these consistent across files; change them together or not at all:
   line of defense (for agents without an allowlist); keep both.
 - New tools use a plain JSON-schema `parameters` object (no TypeBox import). Pi
   validates it at runtime.
+- `agent_before_settle` holds a `myflow-check` sub-agent until
+  `.myflow/worktree.yaml` `verify:` passes; the retry cap is mandatory so a
+  broken command cannot loop.
 - Keep runtime logic importable by `node --test` regardless of whether Pi is
   present.
 
@@ -68,7 +72,9 @@ Keep these consistent across files; change them together or not at all:
 - **Sub-agents share one working tree.** `myflow_subagent` always spawns
   children in the caller's directory and never creates git worktrees. Use
   parallel dispatch for read-only work (`myflow-research`); run writing agents
-  one at a time.
+  one at a time. For genuinely parallel *sessions*, use
+  `worktree.py` (`/myflow-parallel`), which gives each session its own
+  checkout and branch.
 - **Windows stdout encoding**: a Python process writing to a pipe defaults to
   the ANSI codepage, so non-ASCII text (em dashes, CJK task titles) becomes
   mojibake for the UTF-8 reader. `get_context.py` and `task.py` both call
@@ -110,6 +116,8 @@ Keep these consistent across files; change them together or not at all:
 - [ ] New behavior has a test that fails when the behavior is reverted.
 - [ ] `python3 .myflow/scripts/get_context.py` and `task.py current --source`
   still run from the project root.
+- [ ] `node --test tests/` covers `worktree.py` (create/list/verify/remove/prune)
+  and the verify gate.
 - [ ] No instruction file (skill, prompt, `workflow.md`) now describes
   something that does not exist.
 - [ ] `git status` is clean apart from intended changes.
