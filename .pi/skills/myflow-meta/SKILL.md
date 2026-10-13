@@ -73,7 +73,9 @@ Injected blocks are `custom` messages with `display: false`:
 `myflow_subagent` spawns an isolated `pi` process per run. A call names one
 agent and one or more prompts: `single` runs one prompt, `parallel` runs up to
 six prompts for that agent at once, and `chain` runs them in sequence with
-`Previous output:` appended. `agent` is normalized to the `myflow-` prefix
+`Previous output:` appended. `parallel` is refused for write-capable agents
+(implement, check): sub-agents share one tree, so one writer runs at a time.
+`agent` is normalized to the `myflow-` prefix
 (`implement` → `myflow-implement`) and must have a definition in `.pi/agents/`.
 Per-call `model` and `thinking` override the agent definition, which overrides
 the caller. The child receives the agent body via `--append-system-prompt`, plus

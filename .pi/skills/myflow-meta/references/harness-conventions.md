@@ -57,6 +57,11 @@ Keep these consistent across files; change them together or not at all:
 - **Delegated runs**: `MYFLOW_SKIP_BREADCRUMB=1` suppresses the per-turn
   breadcrumb for a process that receives a work order rather than a user turn
   (channel workers set it).
+- **One writer per working tree**: `myflow_subagent` rejects `mode: parallel`
+  for write-capable agents (tools include `write`/`edit`, or no allowlist).
+  `myflow-implement` and `myflow-check` both write, so they run one at a time in
+  the shared tree; research is the parallel agent. True concurrency uses
+  worktrees, one session each.
 - **Verify gate scope**: the gate holds a dispatched `myflow-check` sub-agent
   (agent type) or any process with `MYFLOW_VERIFY_GATE=1`, which is how
   `channel.py spawn --agent reviewer` covers a peer review that carries no

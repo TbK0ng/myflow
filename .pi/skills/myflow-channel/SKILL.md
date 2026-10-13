@@ -72,6 +72,8 @@ python3 ./.myflow/scripts/channel.py rm <channel> --force   # stop its live work
 
 ## Rules
 
+- One reviewer per tree: `reviewer` fixes files, so `spawn` refuses a second live
+  reviewer. `architect` (read-mostly outreach) has no such limit.
 - A channel carries messages; task artifacts under `.myflow/tasks/<slug>/` carry
   the durable record. Do not re-invent a tracker on top of the event log.
 - Completion signal is `--kind done`, a system event the runtime understands. A

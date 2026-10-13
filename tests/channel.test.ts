@@ -385,6 +385,53 @@ test("channel rm --force stops the worker together with its children", async () 
   }
 });
 
+test("channel spawn: one reviewer per tree, other peers unaffected", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "review"]);
+    // A live reviewer is the writer slot in this tree; the guard counts peers
+    // with the same job, not every worker.
+    const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: true, stdio: "ignore" });
+    sleeper.unref();
+    const store = projectStore(sandbox);
+    writeFileSync(
+      join(store, "workers.json"),
+      JSON.stringify({
+        workers: [{ handle: "rev", channel: "review", scope: "project", agent: "reviewer", pid: sleeper.pid, started_at: "x", log: "x" }],
+      }),
+      "utf-8",
+    );
+    try {
+      const refused = channel(sandbox, ["spawn", "review", "--agent", "reviewer", "--handle", "rev2", "--dry-run"], true);
+      assert.match(refused, /one reviewer per tree/);
+      assert.match(refused, /rev is already live/);
+
+      // A design peer is read-mostly outreach, not a second writer.
+      const peer = JSON.parse(channel(sandbox, ["spawn", "review", "--agent", "architect", "--handle", "arch2", "--dry-run"]));
+      assert.equal(peer.handle, "arch2");
+
+      // A dead reviewer frees the slot.
+      writeFileSync(
+        join(store, "workers.json"),
+        JSON.stringify({
+          workers: [{ handle: "old", channel: "review", scope: "project", agent: "reviewer", pid: 999999999, started_at: "x", log: "x" }],
+        }),
+        "utf-8",
+      );
+      const allowed = JSON.parse(channel(sandbox, ["spawn", "review", "--agent", "reviewer", "--handle", "rev3", "--dry-run"]));
+      assert.equal(allowed.handle, "rev3");
+    } finally {
+      try {
+        process.kill(sleeper.pid!, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
 test("channel store never creates a .myflow directory in the home directory", () => {
   const sandbox = makeSandbox();
   try {

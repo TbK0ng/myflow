@@ -500,14 +500,28 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     scope = args.scope
     guard = read_worker_guard()
     workers = [worker for worker in read_workers(scope) if is_alive(worker.get("pid"))]
-    if not args.dry_run:
-        live = [worker for worker in workers if worker.get("channel") == args.name]
-        if len(live) >= guard["max_live_workers"]:
+    # The guards run for --dry-run too: a plan that could not be launched is
+    # worth refusing up front rather than reporting as ready.
+    live = [worker for worker in workers if worker.get("channel") == args.name]
+    if len(live) >= guard["max_live_workers"]:
+        print(
+            f"error: worker guard: {len(live)} live worker(s) >= max_live_workers={guard['max_live_workers']}",
+            file=sys.stderr,
+        )
+        return 1
+    if args.agent == "reviewer":
+        # One writer per tree: a reviewer fixes files, so two of them in the
+        # same project would edit the working tree at once.
+        reviewers = [worker for worker in workers if worker.get("agent") == "reviewer"]
+        if reviewers:
+            handles = ", ".join(str(worker.get("handle")) for worker in reviewers)
             print(
-                f"error: worker guard: {len(live)} live worker(s) >= max_live_workers={guard['max_live_workers']}",
+                f"error: one reviewer per tree: {handles} is already live; "
+                "wait for it (or stop it) before starting another",
                 file=sys.stderr,
             )
             return 1
+    if not args.dry_run:
         write_workers(scope, workers)
 
     handle = args.handle or f"{args.agent}-{int(time.time())}"
