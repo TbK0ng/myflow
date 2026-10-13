@@ -57,6 +57,10 @@ Keep these consistent across files; change them together or not at all:
 - **Delegated runs**: `MYFLOW_SKIP_BREADCRUMB=1` suppresses the per-turn
   breadcrumb for a process that receives a work order rather than a user turn
   (channel workers set it).
+- **Verify gate scope**: the gate holds a dispatched `myflow-check` sub-agent
+  (agent type) or any process with `MYFLOW_VERIFY_GATE=1`, which is how
+  `channel.py spawn --agent reviewer` covers a peer review that carries no
+  agent type.
 - **Worktree sessions**: `worktree.py start` mints a fresh session id per
   launch (`myflow-<name>-<MMDD-HHMMSS>-<ms>`, recorded in `worktrees.json`) and
   prints the resume command. pi resumes a session it is handed by id, so

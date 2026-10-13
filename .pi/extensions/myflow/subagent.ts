@@ -29,6 +29,13 @@ import { basename, join } from "node:path";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
 
 export const MYFLOW_AGENT_ENV = "MYFLOW_AGENT_TYPE";
+
+/**
+ * Marks a process as a review worker for the verify gate. Dispatched
+ * sub-agents carry an agent type instead; a channel worker is an ordinary pi
+ * process, so its launcher flags it explicitly.
+ */
+export const MYFLOW_VERIFY_GATE_ENV = "MYFLOW_VERIFY_GATE";
 export const MYFLOW_CONTEXT_ENV = "MYFLOW_CONTEXT_ID";
 export const PROGRESS_CHANNEL = "myflow-subagent-progress";
 

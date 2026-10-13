@@ -67,7 +67,9 @@ machine state: put it in `.gitignore`, never commit it.
   (`myflow-research`); run writing agents one at a time. Independent *tasks*
   run in isolated worktrees through `/myflow-parallel`.
 - A `myflow-check` sub-agent is held until `verify:` commands in
-  `.myflow/worktree.yaml` pass, so a checked change is a verified change.
+  `.myflow/worktree.yaml` pass, so a checked change is a verified change. A
+  channel `reviewer` worker is held the same way (its launcher sets
+  `MYFLOW_VERIFY_GATE`), so a peer review cannot skip the gate.
 - Every dispatch prompt starts with `Active task: <path from task.py current>`.
 - Read order inside a sub-agent: `implement.jsonl` / `check.jsonl` referenced
   files → `prd.md` → `design.md` if present → `implement.md` if present.

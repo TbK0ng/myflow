@@ -71,15 +71,16 @@ test("shell/session bridge: MYFLOW_CONTEXT_ID overrides PI_SESSION_ID", () => {
   }
 });
 
-test("task.py finish clears the active task", () => {
+test("task.py archive clears the active task pointer", () => {
   const root = makeProject();
   try {
-    runTask(root, ["create", "Finish task", "--slug", "finish"], { PI_SESSION_ID: "fin" });
-    runTask(root, ["start", ".myflow/tasks/finish"], { PI_SESSION_ID: "fin" });
-    const finished = runTask(root, ["finish"], { PI_SESSION_ID: "fin" });
-    assert.equal(finished, "finished");
-    const result = resolveActiveTaskStatus(root, "pi_fin");
-    assert.equal(result.status, "no_task");
+    runTask(root, ["create", "Archived task", "--slug", "archived"], { PI_SESSION_ID: "arc" });
+    runTask(root, ["start", ".myflow/tasks/archived"], { PI_SESSION_ID: "arc" });
+    assert.equal(resolveActiveTaskStatus(root, "pi_arc").status, "in_progress");
+
+    const archived = runTask(root, ["archive", ".myflow/tasks/archived"], { PI_SESSION_ID: "arc" });
+    assert.match(archived, /^archived: .*archived/);
+    assert.equal(resolveActiveTaskStatus(root, "pi_arc").status, "no_task");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -179,24 +180,24 @@ test("get_context.py reports session runtime context and the active task", () =>
   }
 });
 
-test("get_context.py rejects unsupported modes instead of returning unrelated output", () => {
+test("get_context.py rejects unknown arguments instead of printing default output", () => {
   const root = makeProject();
   try {
     const rejected = spawnSync("python3", [GET_CONTEXT_PY, "--mode", "phase"], {
       cwd: root,
       encoding: "utf-8",
-      env: { ...process.env },
+      env: { ...process.env, PI_SESSION_ID: "ctx-1" },
     });
     assert.equal(rejected.status, 2);
-    assert.match(rejected.stderr, /unsupported --mode 'phase'/);
-    assert.equal(rejected.stdout.trim(), "");
+    assert.match(rejected.stderr, /unrecognized argument/);
 
-    const accepted = spawnSync("python3", [GET_CONTEXT_PY, "--mode", "default"], {
+    const accepted = spawnSync("python3", [GET_CONTEXT_PY, "--json"], {
       cwd: root,
       encoding: "utf-8",
-      env: { ...process.env },
+      env: { ...process.env, PI_SESSION_ID: "ctx-1" },
     });
     assert.equal(accepted.status, 0);
+    assert.ok(JSON.parse(accepted.stdout).blocks);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

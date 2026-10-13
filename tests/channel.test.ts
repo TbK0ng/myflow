@@ -140,7 +140,7 @@ test("channel spawn --dry-run: builds a worker command from the runtime agent", 
         "spawn",
         "review",
         "--agent",
-        "check",
+        "reviewer",
         "--task",
         ".myflow/tasks/demo",
         "--handle",
@@ -151,12 +151,23 @@ test("channel spawn --dry-run: builds a worker command from the runtime agent", 
     assert.equal(planned.handle, "checker");
     assert.ok(planned.command.includes("--append-system-prompt"));
     assert.ok(
-      planned.command.some((part: string) => part.endsWith(join(".myflow", "agents", "check.md"))),
+      planned.command.some((part: string) => part.endsWith(join(".myflow", "agents", "reviewer.md"))),
       "the runtime agent definition is attached",
     );
     const prompt = planned.command[planned.command.length - 1];
     assert.match(prompt, /Active task: \.myflow\/tasks\/demo/);
     assert.match(prompt, /--as checker/);
+
+    assert.equal(planned.env.MYFLOW_VERIFY_GATE, "1", "a review worker carries the verify-gate flag");
+    assert.equal(planned.env.MYFLOW_SKIP_BREADCRUMB, "1");
+
+    // The flag is the launcher standing in for an agent type: without it a peer
+    // check would settle without the verify gate ever running.
+    channel(sandbox, ["create", "peer"]);
+    const peer = JSON.parse(
+      channel(sandbox, ["spawn", "peer", "--agent", "architect", "--dry-run"]),
+    );
+    assert.ok(!("MYFLOW_VERIFY_GATE" in peer.env), "a non-review worker stays ungated");
 
     assert.match(channel(sandbox, ["spawn", "review", "--agent", "nope", "--dry-run"], true), /no runtime agent definition/);
   } finally {
@@ -192,7 +203,7 @@ test("channel worker guard: refuses to exceed max_live_workers", () => {
     assert.equal(workers.guard.max_live_workers, 1);
 
     assert.match(
-      channel(sandbox, ["spawn", "review", "--agent", "check", "--prompt", "go"], true),
+      channel(sandbox, ["spawn", "review", "--agent", "reviewer", "--prompt", "go"], true),
       /worker guard: 1 live worker\(s\) >= max_live_workers=1/,
     );
   } finally {

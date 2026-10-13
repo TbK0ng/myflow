@@ -8,6 +8,7 @@ import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escap
 import { type AgentType, buildTaskContext } from "./context-injection.ts";
 import {
   MYFLOW_AGENT_ENV,
+  MYFLOW_VERIFY_GATE_ENV,
   registerMyflowSubagent,
   type SubagentPi,
 } from "./subagent.ts";
@@ -353,13 +354,16 @@ export default function extension(pi: ExtensionAPI): void {
 
   // Verify gate: a check sub-agent does not settle while the configured verify
   // commands fail. Mirrors the "block the checker until verification passes"
-  // loop, bounded so a broken command cannot loop forever.
+  // loop, bounded so a broken command cannot loop forever. Channel review
+  // workers carry no agent type, so their launcher flags them with
+  // MYFLOW_VERIFY_GATE instead — otherwise a peer check would skip the gate.
   pi.on("agent_before_settle", async (event, ctx) => {
     if (!projectRoot) {
       projectRoot = findProjectRoot(ctx.cwd);
     }
     if (!projectRoot) return;
-    if (agentType !== "myflow-check") return;
+    const flagged = process.env[MYFLOW_VERIFY_GATE_ENV] === "1";
+    if (agentType !== "myflow-check" && !flagged) return;
 
     const settle = event as { outcome?: string };
     if (settle.outcome && settle.outcome !== "completed") return;

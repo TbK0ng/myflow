@@ -542,14 +542,27 @@ def cmd_spawn(args: argparse.Namespace) -> int:
         command += ["--model", args.model]
     command.append(worker_prompt)
 
+    # A worker receives a work order, not a user turn: suppress the per-turn
+    # workflow breadcrumb so it does not stop to ask about task creation.
+    worker_env = {**os.environ, "MYFLOW_SKIP_BREADCRUMB": "1"}
+    if args.agent == "reviewer":
+        # A channel worker is an ordinary pi process, not a dispatched
+        # sub-agent, so it carries no agent type. Flag review workers so the
+        # verify gate holds them to the same standard as a myflow-check
+        # sub-agent.
+        worker_env["MYFLOW_VERIFY_GATE"] = "1"
+
     if args.dry_run:
-        print(json.dumps({"handle": handle, "command": command, "log": str(log_path), "since": since}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"handle": handle, "command": command, "env": worker_env, "log": str(log_path), "since": since},
+                ensure_ascii=False,
+            )
+        )
         return 0
 
     kwargs: dict = {"cwd": str(PROJECT_ROOT), "stdin": subprocess.DEVNULL, "stdout": open(log_path, "wb"), "stderr": subprocess.STDOUT}
-    # A worker receives a work order, not a user turn: suppress the per-turn
-    # workflow breadcrumb so it does not stop to ask about task creation.
-    kwargs["env"] = {**os.environ, "MYFLOW_SKIP_BREADCRUMB": "1"}
+    kwargs["env"] = worker_env
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     else:

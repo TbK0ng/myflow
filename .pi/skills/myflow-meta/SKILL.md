@@ -24,7 +24,7 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
   prompts/myflow-{continue,finish-work,parallel}.md
   skills/myflow-{meta,brainstorm,before-dev,check,update-spec,break-loop,spec-bootstrap,channel}/
 .myflow/
-  agents/{architect,plan,research,implement,check}.md  # channel runtime workers
+  agents/{architect,reviewer}.md      # channel runtime peers (design review, code review)
   workflow.md                       # phases, routing, per-turn state blocks
   worktree.yaml                     # parallel-session config + verify commands (project-owned)
   scripts/get_context.py            # session context (workflow + task + git)
@@ -113,7 +113,6 @@ for that turn. `session-context` and `task-context` are not suppressed.
 python3 .myflow/scripts/task.py create "<title>" [--slug <name>] [--parent <dir>]
 python3 .myflow/scripts/task.py start .myflow/tasks/<slug>   # activates, planning -> in_progress
 python3 .myflow/scripts/task.py current [--source] [--json]
-python3 .myflow/scripts/task.py finish                       # done + clears the pointer
 python3 .myflow/scripts/task.py archive .myflow/tasks/<slug> # completed + moves to archive/<YYYY-MM>/
 python3 .myflow/scripts/task.py add-subtask <parent> <child>
 python3 .myflow/scripts/task.py list [--status <s>] [--json]
