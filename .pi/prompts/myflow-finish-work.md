@@ -31,9 +31,10 @@ Fix failures before continuing. Do not commit on a red test run.
 ## Step 3: Update Spec
 
 If the work changed a contract, convention, or non-obvious behavior, capture it
-with the `myflow-update-spec` skill (`.myflow/spec/`). If a file in
-`.myflow/spec/` or `.myflow/workflow.md` now describes something untrue, fix it
-now.
+with the `myflow-update-spec` skill — it creates `.myflow/spec/` if the project
+has none yet. If a file in `.myflow/spec/` or `.myflow/workflow.md` now
+describes something untrue, fix it now. If nothing contractual changed, say so
+and move on.
 
 ## Step 4: Commit
 

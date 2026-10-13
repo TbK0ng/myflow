@@ -1,6 +1,6 @@
 ---
 name: myflow-spec-bootstrap
-description: "Bootstrap or refresh project-specific coding specs in .myflow/spec/ from the real codebase. Use when creating or refreshing .myflow/spec guidelines, analyzing a repository with codebase-memory (or GitNexus/ABCoder/source inspection), decomposing package/layer spec work, and writing concrete, source-backed spec docs without placeholder text."
+description: "Bootstrap or refresh project-specific coding specs in .myflow/spec/ from the real codebase. Use when creating or refreshing .myflow/spec guidelines, analyzing a repository with the codebase-memory graph or direct source inspection, decomposing package/layer spec work, and writing concrete, source-backed spec docs without placeholder text."
 ---
 
 # myflow Spec Bootstrap
@@ -12,7 +12,7 @@ the spec boundaries, write the docs, and verify the result.
 ## Workflow
 
 1. Confirm myflow is initialized and inspect the current `.myflow/spec/` tree
-   (`index.md`, `harness/index.md`, `guides/index.md`, and any `<area>/`).
+   if it exists (it may be absent or empty; that is a normal starting point).
 2. Analyze the repository architecture with the best available tools, in this
    preference order:
    - **codebase-memory** — the code graph MCP already configured for this
@@ -33,7 +33,7 @@ the spec boundaries, write the docs, and verify the result.
 | Repository architecture analysis | [references/repository-analysis.md](references/repository-analysis.md) |
 | Spec work decomposition and task planning | [references/spec-task-planning.md](references/spec-task-planning.md) |
 | Writing high-signal myflow spec files | [references/spec-writing.md](references/spec-writing.md) |
-| codebase-memory, GitNexus, and ABCoder setup | [references/mcp-setup.md](references/mcp-setup.md) |
+| codebase-memory setup | [references/mcp-setup.md](references/mcp-setup.md) |
 
 ## Operating Rules
 

@@ -58,16 +58,6 @@ export interface ToolCallEvent {
   input?: Record<string, unknown>;
 }
 
-/** Return value for the `before_agent_start` hook. */
-export interface BeforeAgentStartResult {
-  message: { customType: string; content: string; display: boolean };
-}
-
-/** Return value for the `context` hook. */
-export interface ContextResult {
-  messages: Message[];
-}
-
 const MYFLOW_AGENTS = new Set(["myflow-implement", "myflow-check", "myflow-research"]);
 const SUBAGENT_TOOL_NAME = "myflow_subagent";
 

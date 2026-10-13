@@ -60,13 +60,6 @@ Evidence discipline:
 - `detect_changes` is useful for a refresh pass to see which spec areas the
   latest diff touched.
 
-## Other Backends
-
-GitNexus and ABCoder are optional alternatives when codebase-memory is not
-available; their setup and tool lists are in `references/mcp-setup.md`. With
-ABCoder, use it for exact AST shapes (constructor patterns, function
-signatures, type contracts, reference chains).
-
 ## Analysis Notes
 
 Keep short notes while analyzing. The notes should include:

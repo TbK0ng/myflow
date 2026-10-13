@@ -47,7 +47,8 @@ Prefer the strongest mechanism that is cheap. A test beats a note.
 
 ### 5. Knowledge Capture
 
-- [ ] Update `.myflow/spec/*/index.md` with the contract or gotcha.
+- [ ] Update `.myflow/spec/*/index.md` with the contract or gotcha (create the
+  tree with `myflow-update-spec` if the project has none yet).
 - [ ] Add the question to `.myflow/spec/guides/index.md` if it is a thinking gap.
 - [ ] Add or strengthen the regression test.
 - [ ] Update the instruction file that let it happen (`workflow.md`, skill, prompt).

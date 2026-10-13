@@ -275,10 +275,10 @@ function isInsideRoot(root: string, target: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Trusted context roots (mirrors Myflow's channel/context-trust.ts).
+// Trusted context roots: project-external files that JSONL context may reference.
 // ---------------------------------------------------------------------------
 
-const AUTO_TRUST_ENTRIES = ["tasks", "workspace"];
+const AUTO_TRUST_ENTRIES = ["tasks"];
 
 function stripTrustValue(s: string): string {
   return s.trim().replace(/\s*#.*$/, "").trim().replace(/^['"]|['"]$/g, "");

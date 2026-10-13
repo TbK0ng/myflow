@@ -55,7 +55,7 @@ command. Verify commands from Node/RPC or use the TUI.
 | `context_injection.max_artifact_bytes` | 65536 | Per-artifact (prd/info) budget |
 | `context_injection.max_total_bytes` | 131072 | Total task-context budget |
 | `channel.trusted_context_dirs` | `[]` | Extra roots JSONL-referenced files may live in |
-| `channel.auto_trust_myflow_symlinks` | `true` | Auto-trust `.myflow/tasks` and `.myflow/workspace` symlinks |
+| `channel.auto_trust_myflow_symlinks` | `true` | Auto-trust a symlinked `.myflow/tasks` directory |
 
 ## Pre-Development Checklist
 

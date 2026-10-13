@@ -39,9 +39,10 @@ directory), one-off debugging notes, or anything already written down.
 
 1. **Identify the lesson.** What exactly did you learn, and what mistake does
    recording it prevent?
-2. **Pick the file.** Read `.myflow/spec/index.md`; usually
-   `.myflow/spec/harness/index.md`. Create `<area>/index.md` only when a real
-   second area exists.
+2. **Pick the file.** Read `.myflow/spec/index.md` if it exists. If the tree is
+   missing, create `index.md` plus the appropriate `<area>/index.md` (or run
+   `myflow-spec-bootstrap` for a full pass). Otherwise use the area you touched;
+   in this repository that is usually `harness/`.
 3. **Read it first.** Find the right section; do not duplicate an existing
    entry. If an entry is now wrong, fix it instead of adding a contradiction.
 4. **Write it.** One concept per section. Include a short concrete example or

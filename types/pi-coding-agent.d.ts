@@ -4,7 +4,7 @@
  * Pi loads extensions with `jiti` and aliases `@earendil-works/pi-coding-agent`
  * to its own runtime entry point, so extensions import types from here. This
  * declaration mirrors the subset of the extension API surface that the myflow
- * adapter uses, keeping the reproduction dependency-free. At runtime the
+ * adapter uses, keeping the adapter dependency-free. At runtime the
  * imports are `import type`, so Node's type stripping erases them entirely.
  */
 declare module "@earendil-works/pi-coding-agent" {

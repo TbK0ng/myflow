@@ -1,44 +1,55 @@
 ---
 name: myflow-before-dev
-description: "Load this project's coding guidelines from .myflow/spec/ before writing code. Reads the spec index, the harness Pre-Development Checklist, and shared thinking guides. Use when starting implementation, switching areas of the codebase, or refreshing project conventions before the first edit."
+description: "Load this project's coding guidelines from .myflow/spec/ before writing code. Reads the spec index, the touched area's Pre-Development Checklist, and shared thinking guides when the tree exists. Use when starting implementation, switching areas of the codebase, or refreshing project conventions before the first edit."
 ---
 
 # Before Development
 
-Read the project's coding guidelines **before the first edit**.
+Load the project's coding guidelines **before the first edit** — when the
+project has recorded any.
 
-## Steps
+## Step 1: Is There A Spec Tree?
 
-1. **Read the spec entry point**:
+```bash
+cat .myflow/spec/index.md 2>/dev/null || echo "NO_SPEC"
+```
 
-   ```bash
-   cat .myflow/spec/index.md
-   cat .myflow/spec/guides/index.md
-   ```
+- **`NO_SPEC`**: this project has not recorded conventions yet. Say so in one
+  line, mention that `myflow-spec-bootstrap` (whole tree) or
+  `myflow-update-spec` (first entry) can create it, then continue with the task.
+  A missing spec tree is not a reason to stop, and never a reason to invent
+  conventions.
+- **Content printed**: continue to step 2.
 
-2. **Pick the area you are touching.** Read its index:
+## Step 2: Read The Relevant Spec
 
-   ```bash
-   cat .myflow/spec/harness/index.md        # this repository
-   cat .myflow/spec/<area>/index.md         # if another area exists
-   ```
+```bash
+cat .myflow/spec/index.md
+cat .myflow/spec/guides/index.md
+cat .myflow/spec/<area>/index.md    # the area you are touching (e.g. harness/)
+```
 
-   If several areas apply, read each. If none fits, use `harness/`.
+If several areas apply, read each. If none fits, use the closest area the spec
+tree lists.
 
-3. **Work the Pre-Development Checklist** in that index. It names the
-   load-bearing contracts (context key, statuses, hook set, config keys) that
-   must stay consistent across files.
+## Step 3: Work The Checklist
 
-4. **Read the guideline files the checklist points to.** The index is a
-   pointer, not the goal — the actual rules are in the files it names.
+Work the **Pre-Development Checklist** in the area index. It names the
+load-bearing contracts (context key, statuses, hook set, config keys) that must
+stay consistent across files.
 
-5. **Only then start implementing.**
+## Step 4: Read The Referenced Files
 
-## Rules
+Read the guideline files the checklist points to. The index is a pointer, not
+the goal — the actual rules are in the files it names.
 
-- This step is mandatory even for small changes: "looks small" is how contract
-  drift starts.
-- Specs are authoritative over memory. If the spec disagrees with the code,
-  fix whichever is wrong before continuing, and say which one you changed.
-- If the spec is silent on something you had to decide, capture the decision
-  with `myflow-update-spec` when you finish.
+## Step 5: Implement
+
+Rules:
+
+- Mandatory whenever a spec tree exists, even for small changes. "Looks small"
+  is how contract drift starts.
+- Specs are authoritative over memory. If the spec disagrees with the code, fix
+  whichever is wrong before continuing, and say which one you changed.
+- If the spec is silent on a decision you had to make, capture it with
+  `myflow-update-spec` when you finish.

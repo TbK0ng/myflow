@@ -17,17 +17,19 @@ git diff
 
 List each changed file and what it is responsible for.
 
-## Step 2: Read The Applicable Specs
+## Step 2: Check Against The Spec (When One Exists)
 
 ```bash
-cat .myflow/spec/index.md
-cat .myflow/spec/harness/index.md
+cat .myflow/spec/index.md 2>/dev/null || echo "NO_SPEC"
 ```
 
-Follow the **Quality Check** section of the area index for the code you
-touched. If the change touches a load-bearing contract (context key, task
-statuses, hook set, `workflow.md` blocks, config keys), verify every file that
-mirrors it — not just the one you edited.
+- **Spec tree present**: read the `index.md` for the area you touched and
+  follow its **Quality Check** section. If the change touches a load-bearing
+  contract (context key, task statuses, hook set, `workflow.md` blocks, config
+  keys), verify every file that mirrors it — not just the one you edited.
+- **`NO_SPEC`**: say "no spec tree" and continue to Step 3. Do not invent
+  conventions; if the change established one, note that `myflow-update-spec`
+  can record it.
 
 ## Step 3: Run Project Checks
 
