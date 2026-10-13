@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { TurnContextCache, resolveActiveTaskStatus, SESSION_OVERVIEW_TEXT } from "../src/turn-cache.ts";
+import { TurnContextCache, resolveActiveTaskStatus, SESSION_OVERVIEW_TEXT } from "../.pi/extensions/myflow/turn-cache.ts";
 import { sanitizeKey, hashValue, buildContextKey, deriveContextKey } from "../.pi/extensions/myflow/index.ts";
 
 function makeProject(withTask: boolean): string {

@@ -15,7 +15,7 @@ import {
   buildTaskContext,
   resolveProjectFile,
   displayProjectPath,
-} from "../src/context-injection.ts";
+} from "../.pi/extensions/myflow/context-injection.ts";
 
 function makeProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "myflow-"));

@@ -3,12 +3,11 @@
  *
  * Pi has no built-in sub-agents, so the myflow Pi adapter provides one. The
  * tool spawns an isolated `pi` process per delegated task, discovers agent
- * definitions from `.pi/agents/` (and `~/.pi/agent/agents/`), and supports the
- * three myflow dispatch modes:
+ * definitions from `.pi/agents/` (and `~/.pi/agent/agents/`), in two dispatch
+ * modes:
  *
  *   - single:   { agent, task }
  *   - parallel: { tasks: [{ agent, task }, ...] }   (max 8, 4 concurrent)
- *   - chain:    { chain: [{ agent, task }, ...] }   (`{previous}` placeholder)
  *
  * Live progress is reported through the tool's `onUpdate` callback and through
  * the `myflow-subagent-progress` event bus channel.
@@ -29,7 +28,6 @@ export const PROGRESS_CHANNEL = "myflow-subagent-progress";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
-const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
 /** Minimal `pi` surface used by the subagent tool. */
@@ -75,11 +73,10 @@ export interface SingleResult {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
-  step?: number;
 }
 
 export interface SubagentDetails {
-  mode: "single" | "parallel" | "chain";
+  mode: "single" | "parallel";
   agentScope: AgentScope;
   projectAgentsDir: string | null;
   results: SingleResult[];
@@ -104,15 +101,6 @@ const SUBAGENT_PARAMETERS = {
     tasks: {
       type: "array",
       description: "Parallel dispatch: one { agent, task } per subagent",
-      items: {
-        type: "object",
-        properties: { agent: { type: "string" }, task: { type: "string" } },
-        required: ["agent", "task"],
-      },
-    },
-    chain: {
-      type: "array",
-      description: "Sequential dispatch; task may contain {previous}",
       items: {
         type: "object",
         properties: { agent: { type: "string" }, task: { type: "string" } },
@@ -211,7 +199,6 @@ interface RunOptions {
   task: string;
   signal?: AbortSignal;
   contextKey: string | null;
-  step?: number;
   onUpdate?: (partial: { content: Array<{ type: "text"; text: string }>; details: SubagentDetails }) => void;
   makeDetails: (results: SingleResult[]) => SubagentDetails;
 }
@@ -226,7 +213,7 @@ function applyUsage(usage: UsageStats, raw: NonNullable<SubagentMessage["usage"]
 }
 
 async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
-  const { agents, agentName, task, defaultCwd, dispatchDefaults, contextKey, signal, step } = options;
+  const { agents, agentName, task, defaultCwd, dispatchDefaults, contextKey, signal } = options;
   const agent = agents.find((candidate) => candidate.name === agentName);
 
   if (!agent) {
@@ -239,7 +226,6 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
       messages: [],
       stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
       usage: EMPTY_USAGE(),
-      step,
     };
   }
 
@@ -265,7 +251,6 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
     stderr: "",
     usage: EMPTY_USAGE(),
     model,
-    step,
   };
 
   const emitUpdate = () => {
@@ -388,7 +373,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
     label: "Myflow Subagent",
     description: [
       "Delegate myflow work to a specialized sub-agent in an isolated context.",
-      "Modes: single (agent + task), parallel (tasks array, max 8), chain (sequential; task may use {previous}).",
+      "Modes: single (agent + task) or parallel (tasks array, max 8).",
       "Agents are read from .pi/agents/ (project) and ~/.pi/agent/agents/ (user).",
       "myflow agents: myflow-implement, myflow-check, myflow-research.",
     ].join(" "),
@@ -401,7 +386,6 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         agent?: string;
         task?: string;
         tasks?: Array<{ agent: string; task: string }>;
-        chain?: Array<{ agent: string; task: string }>;
         agentScope?: AgentScope;
       },
       signal: AbortSignal | undefined,
@@ -417,13 +401,12 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         thinkingLevel: ctx.thinkingLevel,
       };
 
-      const hasChain = (params.chain?.length ?? 0) > 0;
       const hasTasks = (params.tasks?.length ?? 0) > 0;
       const hasSingle = Boolean(params.agent && params.task);
-      const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+      const modeCount = Number(hasTasks) + Number(hasSingle);
 
       const makeDetails =
-        (mode: "single" | "parallel" | "chain") =>
+        (mode: "single" | "parallel") =>
         (results: SingleResult[]): SubagentDetails => ({
           mode,
           agentScope,
@@ -443,7 +426,6 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       const runOptions = (
         agentName: string,
         task: string,
-        step: number | undefined,
         update: RunOptions["onUpdate"],
       ): RunOptions => ({
         defaultCwd: ctx.cwd,
@@ -453,34 +435,9 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         task,
         signal,
         contextKey,
-        step,
         onUpdate: update,
-        makeDetails: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single"),
+        makeDetails: makeDetails(hasTasks ? "parallel" : "single"),
       });
-
-      if (params.chain && params.chain.length > 0) {
-        const results: SingleResult[] = [];
-        let previousOutput = "";
-        for (let i = 0; i < params.chain.length; i += 1) {
-          const step = params.chain[i];
-          const task = step.task.replace(/\{previous\}/g, previousOutput);
-          emitProgress({ mode: "chain", agent: step.agent, step: i + 1, total: params.chain.length });
-          const result = await runSingleAgent(runOptions(step.agent, task, i + 1, onUpdate as RunOptions["onUpdate"]));
-          results.push(result);
-          if (isFailedResult(result)) {
-            return {
-              content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(result)}` }],
-              details: makeDetails("chain")(results),
-              isError: true,
-            };
-          }
-          previousOutput = getFinalOutput(result.messages);
-        }
-        return {
-          content: [{ type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" }],
-          details: makeDetails("chain")(results),
-        };
-      }
 
       if (params.tasks && params.tasks.length > 0) {
         if (params.tasks.length > MAX_PARALLEL_TASKS) {
@@ -512,7 +469,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
 
         const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (task, index) => {
           const result = await runSingleAgent(
-            runOptions(task.agent, task.task, undefined, (partial) => {
+            runOptions(task.agent, task.task, (partial) => {
               const current = partial.details.results[0];
               if (current) allResults[index] = current;
               emitParallel();
@@ -544,7 +501,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       if (params.agent && params.task) {
         emitProgress({ mode: "single", agent: params.agent });
         const result = await runSingleAgent(
-          runOptions(params.agent, params.task, undefined, onUpdate as RunOptions["onUpdate"]),
+          runOptions(params.agent, params.task, onUpdate as RunOptions["onUpdate"]),
         );
         if (isFailedResult(result)) {
           return {
@@ -566,5 +523,3 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
     },
   });
 }
-
-export { COLLAPSED_ITEM_COUNT };

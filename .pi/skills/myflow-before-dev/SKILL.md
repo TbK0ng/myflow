@@ -16,9 +16,9 @@ cat .myflow/spec/index.md 2>/dev/null || echo "NO_SPEC"
 
 - **`NO_SPEC`**: this project has not recorded conventions yet. Say so in one
   line, mention that `myflow-spec-bootstrap` (whole tree) or
-  `myflow-update-spec` (first entry) can create it, then continue with the task.
-  A missing spec tree is not a reason to stop, and never a reason to invent
-  conventions.
+  `myflow-update-spec` (first entry) can create it, then continue with the
+  generic checklist in Step 3. A missing spec tree is not a reason to stop, and
+  never a reason to invent conventions.
 - **Content printed**: continue to step 2.
 
 ## Step 2: Read The Relevant Spec
@@ -37,6 +37,15 @@ tree lists.
 Work the **Pre-Development Checklist** in the area index. It names the
 load-bearing contracts (context key, statuses, hook set, config keys) that must
 stay consistent across files.
+
+When there is no spec tree, use this generic checklist instead:
+
+- [ ] Which contract or public behavior does this change touch, and which files
+  mirror it?
+- [ ] Can the change be tested without network, model, or installed
+  dependencies?
+- [ ] Which instruction file (skill, prompt, `workflow.md`) must change with it?
+- [ ] Is there an existing helper for this instead of new code?
 
 ## Step 4: Read The Referenced Files
 

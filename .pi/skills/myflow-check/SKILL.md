@@ -29,7 +29,8 @@ cat .myflow/spec/index.md 2>/dev/null || echo "NO_SPEC"
   keys), verify every file that mirrors it — not just the one you edited.
 - **`NO_SPEC`**: say "no spec tree" and continue to Step 3. Do not invent
   conventions; if the change established one, note that `myflow-update-spec`
-  can record it.
+  can record it. When the change is to the myflow harness itself, apply the
+  checklist in `myflow-meta/references/harness-conventions.md`.
 
 ## Step 3: Run Project Checks
 
@@ -84,7 +85,7 @@ Skip what does not apply.
 
 ### Reuse
 
-- [ ] Searched for an existing helper before adding one (`src/`, extension).
+- [ ] Searched for an existing helper before adding one (`.pi/extensions/myflow/`).
 - [ ] Two definitions of the same value collapsed into one place.
 
 ### Instruction Files

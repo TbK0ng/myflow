@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { TurnContextCache, SESSION_OVERVIEW_TEXT, resolveActiveTaskStatus } from "../src/turn-cache.ts";
+import { TurnContextCache, SESSION_OVERVIEW_TEXT, resolveActiveTaskStatus } from "../.pi/extensions/myflow/turn-cache.ts";
 
 function makeProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "myflow-"));

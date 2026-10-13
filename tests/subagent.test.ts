@@ -122,7 +122,6 @@ test("registerMyflowSubagent: registers the myflow_subagent tool", () => {
   assert.ok(tool, "myflow_subagent must be registered");
   assert.equal(tool!.label, "Myflow Subagent");
   assert.ok(tool!.parameters.properties.tasks);
-  assert.ok(tool!.parameters.properties.chain);
 });
 
 test("myflow_subagent: invalid parameters reports available agents", async () => {
@@ -153,11 +152,11 @@ test("myflow_subagent: emits myflow-subagent-progress on dispatch", async () => 
   const { api, tools, events } = makeMockAPI();
   registerMyflowSubagent(api as any);
   const tool = tools.find((candidate) => candidate.name === "myflow_subagent")!;
-  // Chain progress is emitted before any child process spawns; an unknown agent
-  // then fails fast, so this never invokes a real model.
+  // Parallel progress is emitted even when every dispatched agent is unknown,
+  // so this never invokes a real model.
   await tool.execute(
     "id",
-    { chain: [{ agent: "does-not-exist", task: "review" }] },
+    { tasks: [{ agent: "does-not-exist", task: "review" }] },
     undefined,
     undefined,
     { cwd: ROOT },

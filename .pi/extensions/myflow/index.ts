@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { findProjectRoot } from "../../../src/find-project-root.ts";
-import { TurnContextCache, resolveActiveTaskStatus } from "../../../src/turn-cache.ts";
-import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "../../../src/escape-hatch.ts";
-import { type AgentType, buildTaskContext } from "../../../src/context-injection.ts";
+import { findProjectRoot } from "./find-project-root.ts";
+import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
+import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
+import { type AgentType, buildTaskContext } from "./context-injection.ts";
 import {
   MYFLOW_AGENT_ENV,
   registerMyflowSubagent,

@@ -8,8 +8,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { parseWorkflowStateBlocks } from "../../../src/parse-workflow-state.ts";
-import { resolveActiveTaskStatus } from "../../../src/turn-cache.ts";
+import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
+import { resolveActiveTaskStatus } from "./turn-cache.ts";
 
 export interface StatusTask {
   path: string;
