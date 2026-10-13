@@ -59,6 +59,22 @@ MAX_COMMITS_REPORTED = 5
 # ---------------------------------------------------------------------------
 
 
+def _find_project_root(start: Path | None = None) -> Path:
+    """The nearest ancestor whose `.myflow/` holds `workflow.md`.
+
+    Walking up means a read from a subdirectory still resolves the project.
+    The `workflow.md` part matters: `.myflow` alone is a marker a stray
+    directory can carry, and treating one above the project (a home directory,
+    say) as the root would report the wrong task and workflow state. With no
+    project above, the start directory is used as-is.
+    """
+    directory = (start or Path.cwd()).resolve()
+    for candidate in [directory, *directory.parents]:
+        if (candidate / ".myflow" / "workflow.md").is_file():
+            return candidate
+    return directory
+
+
 def _workflow_blocks(workflow_md: str) -> list[tuple[str, str]]:
     """Parse [workflow-state:STATUS] ... [/workflow-state:STATUS] blocks."""
     blocks: list[tuple[str, str]] = []
@@ -260,7 +276,7 @@ def main() -> int:
         )
         return 2
 
-    project_root = Path.cwd()
+    project_root = _find_project_root()
     workflow_path = project_root / ".myflow" / "workflow.md"
     blocks: list[tuple[str, str]] = []
     if workflow_path.is_file():

@@ -49,7 +49,23 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECT_ROOT = Path.cwd()
+def _find_project_root(start: Path | None = None) -> Path:
+    """The nearest ancestor whose `.myflow/` holds `workflow.md`.
+
+    Walking up means the scripts behave the same from a subdirectory. The
+    `workflow.md` part matters: `.myflow` alone is a marker a stray directory
+    can carry, and treating one above the project (a home directory, say) as
+    the root would quietly redirect every task, session, and archive there.
+    With no project above, the start directory is used as-is.
+    """
+    directory = (start or Path.cwd()).resolve()
+    for candidate in [directory, *directory.parents]:
+        if (candidate / ".myflow" / "workflow.md").is_file():
+            return candidate
+    return directory
+
+
+PROJECT_ROOT = _find_project_root()
 # Deliberately NOT `~/.myflow`: `.myflow/` is the project-root marker, so a
 # user-level store of that name would make every project under the home
 # directory resolve its root to the home directory.
