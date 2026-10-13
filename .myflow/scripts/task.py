@@ -9,9 +9,8 @@ Usage:
     task.py archive <task_dir>
     task.py add-subtask <parent_dir> <child_dir>
     task.py list [--status <status>] [--json]
-    task.py list-archive
 
-Data model (matches src/turn-cache.ts resolveActiveTaskStatus):
+Data model (matches .pi/extensions/myflow/turn-cache.ts resolveActiveTaskStatus):
     .myflow/.runtime/sessions/<contextKey>.json  -> {"current_task": ".myflow/tasks/<dir>"}
     .myflow/tasks/<dir>/task.json                -> {"title", "status", "description", "slug", "parent"}
     .myflow/archive/<YYYY-MM>/<dir>/task.json    -> archived task
@@ -377,23 +376,6 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_list_archive(_args: argparse.Namespace) -> int:
-    if not ARCHIVE_DIR.is_dir():
-        print("no archived tasks")
-        return 0
-    rows: list[str] = []
-    for stamp_dir in sorted(ARCHIVE_DIR.iterdir()):
-        if not stamp_dir.is_dir():
-            continue
-        for task_dir in sorted(stamp_dir.iterdir()):
-            task = _read_task(task_dir)
-            if task is None:
-                continue
-            rows.append(f"{_relative(task_dir)}\t{task.get('status', 'unknown')}\t{task.get('title', '')}")
-    print("\n".join(rows) if rows else "no archived tasks")
-    return 0
-
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -435,9 +417,6 @@ def main() -> int:
     p_list.add_argument("--status", default=None, help="filter by status")
     p_list.add_argument("--json", action="store_true", help="machine-readable output")
     p_list.set_defaults(func=cmd_list)
-
-    p_list_archive = sub.add_parser("list-archive", help="list archived tasks")
-    p_list_archive.set_defaults(func=cmd_list_archive)
 
     args = parser.parse_args()
     return args.func(args)

@@ -15,7 +15,7 @@ import {
   buildTaskContext,
   resolveProjectFile,
   displayProjectPath,
-} from "../src/context-injection.ts";
+} from "../.pi/extensions/myflow/context-injection.ts";
 
 function makeProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "myflow-"));
@@ -35,8 +35,12 @@ test("taskContextJsonlNames: research agent", () => {
   assert.deepEqual(taskContextJsonlNames("myflow-research"), []);
 });
 
-test("taskContextJsonlNames: null agent", () => {
-  assert.deepEqual(taskContextJsonlNames(null), ["implement.jsonl", "check.jsonl"]);
+test("taskContextJsonlNames: null agent gets no manifest", () => {
+  assert.deepEqual(taskContextJsonlNames(null), []);
+});
+
+test("taskContextJsonlNames: custom agent gets no manifest", () => {
+  assert.deepEqual(taskContextJsonlNames("my-custom-agent"), []);
 });
 
 test("taskContextInputPaths: includes config, prd, info", () => {

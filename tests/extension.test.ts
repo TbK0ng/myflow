@@ -216,3 +216,36 @@ test("context: replaces stale task-context with current prd.md", async () => {
   assert.ok(taskMsg!.content!.includes("# Demo PRD"), "task-context must contain current prd.md content");
   rmSync(root, { recursive: true, force: true });
 });
+
+test("context: re-injects the breadcrumb after compaction", async () => {
+  const root = makeProject();
+  const { api } = makeMockAPI(root);
+  extension(api);
+  const handlers = getHandlers(api);
+  const ctx = getCtx(api);
+
+  await handlers.session_start({}, ctx);
+  await handlers.input({ text: "hello" }, ctx);
+  await handlers.before_agent_start({}, ctx);
+
+  // Without compaction the existing injection is still fresh, so context is a no-op.
+  const untouched = await (handlers.context as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+    { messages: [] },
+    ctx,
+  );
+  assert.equal(untouched, undefined, "context must not re-inject while the last injection is fresh");
+
+  // A compaction invalidates the last injection; the next context pass re-adds it.
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await handlers.session_before_compact({}, ctx);
+  const result = await (handlers.context as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+    { messages: [] },
+    ctx,
+  );
+  const projected = (result as { messages: Message[] } | undefined)?.messages ?? [];
+  assert.ok(
+    projected.some((m) => m.customType === "workflow-state"),
+    "context must re-inject the breadcrumb after compaction",
+  );
+  rmSync(root, { recursive: true, force: true });
+});

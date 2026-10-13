@@ -7,7 +7,7 @@ import {
   DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD,
   readPromptInjectionSkipKeyword,
   shouldSkipWorkflowState,
-} from "../src/escape-hatch.ts";
+} from "../.pi/extensions/myflow/escape-hatch.ts";
 
 function makeProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "myflow-"));

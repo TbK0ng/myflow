@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync, 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
-import { resolveActiveTaskStatus } from "../src/turn-cache.ts";
+import { resolveActiveTaskStatus } from "../.pi/extensions/myflow/turn-cache.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const TASK_PY = join(ROOT, ".myflow", "scripts", "task.py");
@@ -140,7 +140,6 @@ test("task.py archive moves the task and clears the session pointer", () => {
     assert.equal(JSON.parse(readFileSync(archivedJson!, "utf-8")).status, "completed");
 
     assert.equal(resolveActiveTaskStatus(root, "pi_arch-1").status, "no_task");
-    assert.match(runTask(root, ["list-archive"], { PI_SESSION_ID: "arch-1" }), /arch\tcompleted\tArchive me/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

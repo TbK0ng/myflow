@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findProjectRoot } from "../src/find-project-root.ts";
-import { parseWorkflowStateBlocks } from "../src/parse-workflow-state.ts";
+import { findProjectRoot } from "../.pi/extensions/myflow/find-project-root.ts";
+import { parseWorkflowStateBlocks } from "../.pi/extensions/myflow/parse-workflow-state.ts";
 
 test("findProjectRoot: finds .myflow/ in cwd", () => {
   const dir = mkdtempSync(join(tmpdir(), "myflow-"));

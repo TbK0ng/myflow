@@ -225,11 +225,15 @@ Main agent: WebFetch(url-A) → WebFetch(url-B) → Bash(gh api ...)
 
 ✅ Good:
 ```
-Main agent: myflow_subagent({ tasks: [
-               { agent: "myflow-research", task: "Research topic A; persist to research/topic-a.md" },
-               { agent: "myflow-research", task: "Research topic B; persist to research/topic-b.md" },
-               { agent: "myflow-research", task: "Research topic C; persist to research/topic-c.md" },
-             ] })
+Main agent: myflow_subagent({
+               agent: "myflow-research",
+               mode: "parallel",
+               prompts: [
+                 "Research topic A; persist to research/topic-a.md",
+                 "Research topic B; persist to research/topic-b.md",
+                 "Research topic C; persist to research/topic-c.md",
+               ],
+             })
 → Reads research/topic-{a,b,c}.md after they finish.
 ```
 

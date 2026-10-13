@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { findProjectRoot } from "../../../src/find-project-root.ts";
-import { TurnContextCache, resolveActiveTaskStatus } from "../../../src/turn-cache.ts";
-import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "../../../src/escape-hatch.ts";
-import { type AgentType, buildTaskContext } from "../../../src/context-injection.ts";
+import { findProjectRoot } from "./find-project-root.ts";
+import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
+import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
+import { type AgentType, buildTaskContext } from "./context-injection.ts";
 import {
   MYFLOW_AGENT_ENV,
   registerMyflowSubagent,
@@ -58,21 +58,18 @@ export interface ToolCallEvent {
   input?: Record<string, unknown>;
 }
 
-const MYFLOW_AGENTS = new Set(["myflow-implement", "myflow-check", "myflow-research"]);
 const SUBAGENT_TOOL_NAME = "myflow_subagent";
 
 /**
- * Detect whether the current process is a myflow sub-agent.
+ * Detect whether the current process is a sub-agent.
  *
- * The native `myflow_subagent` tool sets `MYFLOW_AGENT_TYPE` when it spawns a
- * child `pi` process, which is how a sub-agent knows its role.
+ * `myflow_subagent` sets `MYFLOW_AGENT_TYPE` to the dispatched agent's name
+ * when it spawns a child `pi`. Any name counts, so custom agents under
+ * `.pi/agents/` count exactly like the ones shipped here.
  */
 export function detectAgentType(env: NodeJS.ProcessEnv = process.env): AgentType {
-  const declared = env[MYFLOW_AGENT_ENV];
-  if (declared && MYFLOW_AGENTS.has(declared)) {
-    return declared as AgentType;
-  }
-  return null;
+  const declared = env[MYFLOW_AGENT_ENV]?.trim();
+  return declared ? declared : null;
 }
 
 export function sanitizeKey(raw: string): string {
@@ -316,12 +313,12 @@ export default function extension(pi: ExtensionAPI): void {
     const toolEvent = event as ToolCallEvent;
     if (toolEvent.toolName !== SUBAGENT_TOOL_NAME) return;
     if (!isSubAgent) return;
-    // Recursion guard: only the main session may dispatch myflow sub-agents.
+    // Recursion guard: only the main session may dispatch sub-agents.
     return {
       block: true,
       reason:
-        `Recursion guard: ${agentType} is a myflow sub-agent and must not dispatch ` +
-        `${SUBAGENT_TOOL_NAME}. Report the recommended next step to the main session instead.`,
+        `Recursion guard: this process is the sub-agent "${agentType}" and must not ` +
+        `dispatch ${SUBAGENT_TOOL_NAME}. Report the recommended next step to the main session instead.`,
     };
   });
 

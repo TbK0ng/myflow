@@ -62,8 +62,9 @@ Summarize the concrete findings from repository analysis.
 ## Optional Helper Agents
 
 Helpers are optional. The main agent still owns integration and final quality.
-In this harness, helpers are dispatched with `myflow_subagent` (single, or
-`tasks` for independent scopes). Their tasks must have clear ownership:
+In this harness, helpers are dispatched with `myflow_subagent` (`single`, or
+`parallel` prompts for independent scopes). Their tasks must have clear
+ownership:
 
 - Read-only research tasks may inspect any source needed for the assigned scope.
 - Write tasks must own disjoint spec directories.

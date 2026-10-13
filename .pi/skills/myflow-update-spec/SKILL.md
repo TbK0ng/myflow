@@ -25,11 +25,11 @@ If a rule is only a question to ask yourself, it belongs in
 
 | Trigger | Example | Target |
 | --- | --- | --- |
-| Feature implemented | New tool, hook, or script subcommand | `spec/harness/index.md` or the area index |
+| Feature implemented | New tool, hook, or script subcommand | `.myflow/spec/<area>/index.md` |
 | Design decision | Chose file-based state over a daemon | Relevant spec, "Design Decisions" |
 | Bug fixed | Silent fallback hid a real error | Relevant spec, "Gotchas" |
 | Gotcha found | `PI_SESSION_ID` is only set for shell tools | Relevant spec, "Contracts" |
-| Convention established | Tests never touch the network | `spec/harness/index.md` |
+| Convention established | Tests never touch the network | `.myflow/spec/<area>/index.md` |
 | New area of the code | A second spec area is warranted | New `<area>/index.md` |
 
 Do **not** update spec for: task-specific details (they belong in the task
@@ -48,6 +48,24 @@ directory), one-off debugging notes, or anything already written down.
 4. **Write it.** One concept per section. Include a short concrete example or
    command. State the *why*.
 5. **Update the index** if you added a new file or section.
+
+### Minimal Tree
+
+When the project has no spec tree yet, this is enough:
+
+```markdown
+# <Project> Spec
+
+`.myflow/spec/` is this project's coding-convention store. `index.md` is the
+entry point: which areas exist and how to use them.
+
+## Layout
+
+- `<area>/index.md` — the rules for that area, with a Pre-Development
+  Checklist and a Quality Check section.
+```
+
+`myflow-spec-bootstrap` can replace it with a tree generated from the codebase.
 
 ## Templates
 
@@ -103,6 +121,8 @@ directory), one-off debugging notes, or anything already written down.
 
 ## Related
 
+- `myflow-meta/references/harness-conventions.md` — the rules for changing the
+  myflow harness itself; capture harness lessons there, not in the project spec.
 - `myflow-spec-bootstrap` — the bulk counterpart: generate or refresh the whole
   `.myflow/spec/` tree from the codebase.
 - `myflow-break-loop` — deep analysis of a bug that often produces spec updates.
