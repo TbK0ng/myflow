@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Get session context for the Myflow omp harness.
+"""Get session context for the Myflow Pi harness.
 
 Usage:
     python3 get_context.py           Output context in text format

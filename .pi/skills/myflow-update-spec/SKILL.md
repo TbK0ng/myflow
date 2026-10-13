@@ -334,15 +334,15 @@ Before finishing your code-spec update:
 
 ```
 Development Flow:
-  Learn something → /myflow:update-spec → Knowledge captured
+  Learn something → /skill:myflow-update-spec → Knowledge captured
        ↑                                  ↓
-  /myflow:break-loop ←──────────────────── Future sessions benefit
+  /skill:myflow-break-loop ←──────────────────── Future sessions benefit
   (deep bug analysis)
 ```
 
-- `/myflow:break-loop` - Analyzes bugs deeply, often reveals spec updates needed
-- `/myflow:update-spec` - Actually makes the updates
-- `/myflow:finish-work` - Reminds you to check if specs need updates
+- `/skill:myflow-break-loop` - Analyzes bugs deeply, often reveals spec updates needed
+- `/skill:myflow-update-spec` - Actually makes the updates
+- `/myflow-finish-work` - Reminds you to check if specs need updates
 
 ---
 

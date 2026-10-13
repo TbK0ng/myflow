@@ -19,7 +19,7 @@ This page lists common myflow file locations in a user project by platform. Whet
 | CodeBuddy | `--codebuddy` | `.codebuddy/` | `.codebuddy/skills/` | `.codebuddy/agents/` | `.codebuddy/hooks/` + `.codebuddy/settings.json` |
 | GitHub Copilot | `--copilot` | `.github/` | `.github/skills/` | `.github/agents/` | `.github/copilot/hooks/` + prompts |
 | Factory Droid | `--droid` | `.factory/` | `.factory/skills/` | `.factory/droids/` | `.factory/hooks/` + settings |
-| Pi Agent | `--pi` | `.pi/` | `.agents/skills/` | `.pi/agents/` | `.pi/extensions/myflow/` (native `myflow_subagent` tool) + `.pi/settings.json` |
+| Pi Agent | `--pi` | `.pi/` | `.pi/skills/` | `.pi/agents/` | `.pi/extensions/myflow/` (native `myflow_subagent` tool) + `.pi/settings.json` |
 | Trae IDE | `--trae` | `.trae/` | `.trae/skills/` | `.trae/agents/` | `.trae/hooks/` + `.trae/hooks.json` |
 | Reasonix | `--reasonix` | `.reasonix/` | `.reasonix/skills/` | None — sub-agents are skills with `runAs: subagent` frontmatter | None |
 | ZCode | `--zcode` | `.zcode/` | `.zcode/skills/` | `.zcode/agents/` | `.zcode/hooks/` + `.zcode/config.json` (SessionStart + UserPromptSubmit + PreToolUse Agent/Task); sub-agents use hook-injected context |
@@ -73,7 +73,7 @@ When changing behavior, inspect workflows and skills first. Do not assume myflow
 
 ### Shared `.agents/skills/`
 
-Codex, Gemini CLI, Pi Agent, and Kimi Code write the shared `.agents/skills/` layer. Some tools that support agentskills.io can also read this directory. If the user wants multiple compatible tools to share one skill, consider `.agents/skills/` first, but do not assume every platform reads it. ZCode keeps myflow-managed skills under `.zcode/skills/`.
+Codex, Gemini CLI, and Kimi Code write the shared `.agents/skills/` layer. Some tools that support agentskills.io can also read this directory. If the user wants multiple compatible tools to share one skill, consider `.agents/skills/` first, but do not assume every platform reads it. Pi Agent keeps its project skills in `.pi/skills/`; ZCode keeps myflow-managed skills under `.zcode/skills/`.
 
 ## Decision Rules When Modifying Platform Files
 
@@ -92,20 +92,3 @@ Platform ecosystems change, and user projects may already be customized. If this
 - Judge behavior by the read rules currently written in the agent file.
 
 Do not delete a custom file just because it is not listed in this path table.
-
-### `.omp/` — Oh My Pi (OMP)
-
-Extension-backed platform. OMP native provider auto-discovers all subdirectories.
-
-```text
-.omp/
-├── commands/          # Slash commands (flat .md)
-├── skills/            # Auto-triggered skills (SKILL.md per dir)
-├── agents/            # Agent definitions (.md)
-└── extensions/
-    └── myflow/
-        └── index.ts   # myflow extension (context injection)
-```
-
-No `settings.json` — OMP scans `.omp/` subdirectories automatically.
-No Python hooks — hook-equivalent behavior lives in the TypeScript extension.

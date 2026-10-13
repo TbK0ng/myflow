@@ -43,7 +43,7 @@ Phase rules (full detail in `.myflow/workflow.md`):
 Once you know which step to resume at:
 
 ```bash
-python3 ./.myflow/scripts/get_context.py --mode phase --step <X.X> --platform omp
+python3 ./.myflow/scripts/get_context.py --mode phase --step <X.X> --platform pi
 ```
 
 Follow the loaded instructions. After each `[required]` step completes, move to the next.

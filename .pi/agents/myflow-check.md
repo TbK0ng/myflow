@@ -2,7 +2,7 @@
 name: myflow-check
 description: |
   Code quality check expert. Reviews changes against Myflow specs, fixes issues directly, and verifies quality gates.
-tools: read, write, edit, bash, find, search, ast_grep, lsp
+tools: read, write, edit, bash, find, grep, ls
 ---
 
 # Check Agent

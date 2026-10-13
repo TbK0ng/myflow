@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Task management for the Myflow omp harness.
+"""Task management for the Myflow Pi harness.
 
 Usage:
     task.py create <title> --description <desc> --slug <slug> [--parent <dir>]
@@ -36,6 +36,30 @@ def _slugify(title: str) -> str:
     return slug or "task"
 
 
+def _sanitize_key(raw: str) -> str:
+    """Mirror the extension's sanitizeKey so context keys match exactly."""
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", raw.strip()).strip("._-")
+    return safe[:160]
+
+
+def _context_key() -> str | None:
+    """Resolve the myflow context key for the current shell session.
+
+    Pi exposes the session id to shell commands as ``PI_SESSION_ID``, which is
+    the shell/session bridge: the TypeScript extension derives ``pi_<session>``
+    from the same id, so both sides address one session file.
+    """
+    override = os.environ.get("MYFLOW_CONTEXT_ID", "").strip()
+    if override:
+        return _sanitize_key(override) or None
+    session_id = os.environ.get("PI_SESSION_ID", "").strip()
+    if session_id:
+        safe = _sanitize_key(session_id)
+        if safe:
+            return f"pi_{safe}"
+    return None
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -60,8 +84,14 @@ def _read_task(task_dir: Path) -> dict | None:
 
 
 def _session_file() -> Path:
-    """Return the single session file, creating it if needed."""
+    """Return the session file for the current context, creating it if needed."""
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    context_key = _context_key()
+    if context_key:
+        session_file = SESSIONS_DIR / f"{context_key}.json"
+        if not session_file.exists():
+            session_file.write_text(json.dumps({"current_task": None}, indent=2), encoding="utf-8")
+        return session_file
     files = sorted(f for f in SESSIONS_DIR.iterdir() if f.suffix == ".json")
     if len(files) == 1:
         return files[0]

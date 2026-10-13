@@ -4,8 +4,8 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import extension from "../.omp/extensions/myflow/index.ts";
-import type { ExtensionAPI, HookContext, Message } from "../.omp/extensions/myflow/index.ts";
+import extension from "../.pi/extensions/myflow/index.ts";
+import type { ExtensionAPI, HookContext, Message } from "../.pi/extensions/myflow/index.ts";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-ext-"));
@@ -28,32 +28,42 @@ function makeProject(): string {
     status: "implementing",
   }));
   writeFileSync(
-    join(root, ".myflow", ".runtime", "sessions", "omp_session_test.json"),
+    join(root, ".myflow", ".runtime", "sessions", "pi_session_test.json"),
     JSON.stringify({ current_task: "tasks/demo" }),
   );
   return root;
 }
 
-function makeMockAPI(root: string): { api: ExtensionAPI; sent: Message[] } {
+function makeMockAPI(root: string): { api: ExtensionAPI; sent: Message[]; tools: Array<Record<string, unknown>> } {
   const sent: Message[] = [];
+  const tools: Array<Record<string, unknown>> = [];
   const handlers: Record<string, (event: unknown, ctx: HookContext) => Promise<void>> = {};
   const api: ExtensionAPI = {
     on: (name: string, handler: (event: unknown, ctx: HookContext) => Promise<void>) => {
       handlers[name] = handler;
     },
-    sendMessage: async (msg: Message) => {
+    registerTool: (tool: Record<string, unknown>) => {
+      tools.push(tool);
+    },
+    registerCommand: () => {},
+    sendUserMessage: () => {},
+    appendEntry: () => {},
+    getActiveTools: () => [],
+    setActiveTools: () => {},
+    events: { emit: () => {}, on: () => () => {} },
+    sendMessage: (msg: Message) => {
       sent.push(msg);
     },
   };
   const ctx: HookContext = {
     cwd: root,
-    session: { id: "test", contextKey: "omp_session_test" },
+    session: { id: "test", contextKey: "pi_session_test" },
     ui: { notify: () => {} },
-  };
+  } as unknown as HookContext;
   // Store handlers for the test to invoke
   (api as unknown as Record<string, unknown>).__handlers = handlers;
   (api as unknown as Record<string, unknown>).__ctx = ctx;
-  return { api, sent };
+  return { api, sent, tools };
 }
 
 function getHandlers(api: ExtensionAPI): Record<string, (event: unknown, ctx: HookContext) => Promise<void>> {

@@ -24,7 +24,7 @@ Guide AI through collaborative requirements discovery **before implementation**,
 
 ## When to Use
 
-Triggered from /myflow:start when the user describes a development task, especially when:
+Triggered from /skill:myflow-brainstorm when the user describes a development task, especially when:
 
 * requirements are unclear or evolving
 * there are multiple valid implementation paths
@@ -202,7 +202,7 @@ Examples:
 
 ### Delegate to `myflow-research` sub-agent (don't research inline)
 
-For each research topic, **spawn a `myflow-research` sub-agent via the Task tool** — don't do WebFetch / WebSearch / `gh api` inline in the main conversation.
+For each research topic, **spawn a `myflow-research` sub-agent via the `myflow_subagent` tool** — don't do WebFetch / WebSearch / `gh api` inline in the main conversation.
 
 Why:
 - The sub-agent has its own context window → doesn't pollute brainstorm context with raw tool output
@@ -543,6 +543,6 @@ The task directory and PRD already exist from brainstorm, so Phase 1 of the Task
 
 | Command | When to Use |
 |---------|-------------|
-| `/myflow:start` | Entry point that triggers brainstorm |
-| `/myflow:finish-work` | After implementation is complete |
-| `/myflow:update-spec` | If new patterns emerge during work |
+| `/skill:myflow-brainstorm` | Entry point that triggers brainstorm |
+| `/myflow-finish-work` | After implementation is complete |
+| `/skill:myflow-update-spec` | If new patterns emerge during work |

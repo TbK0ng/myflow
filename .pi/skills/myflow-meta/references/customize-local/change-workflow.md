@@ -43,9 +43,9 @@ If the formal Phase 1 flow also needs to change, synchronize the Phase 1 section
 
 If the user wants only one platform to avoid sub-agents, first confirm whether that platform has a separate group in the workflow. Then change Phase 2 routing for that platform group instead of deleting all `myflow-implement` / `myflow-check` instructions across platforms.
 
-## `/myflow:continue` Route Table
+## `/myflow-continue` Route Table
 
-`/myflow:continue` resumes a task by deciding which phase step to load next. The decision combines `task.json.status` with the presence of artifacts inside the task directory. The mapping is fixed in the command itself; forks that add custom statuses must extend both the workflow.md tag block and this table.
+`/myflow-continue` resumes a task by deciding which phase step to load next. The decision combines `task.json.status` with the presence of artifacts inside the task directory. The mapping is fixed in the command itself; forks that add custom statuses must extend both the workflow.md tag block and this table.
 
 | `status` | Artifact state | Resume at |
 | --- | --- | --- |
@@ -55,9 +55,9 @@ If the user wants only one platform to avoid sub-agents, first confirm whether t
 | `in_progress` | no implementation in conversation history | Phase 2.1 (`myflow-implement`) |
 | `in_progress` | implementation done, no `myflow-check` run | Phase 2.2 (`myflow-check`) |
 | `in_progress` | check passed | Phase 3.1 (verify quality + spec update) |
-| `completed` | task is still in active tree | Phase 3.5 (run `/myflow:finish-work` to archive) |
+| `completed` | task is still in active tree | Phase 3.5 (run `/myflow-finish-work` to archive) |
 
-When you add a custom status (e.g. `in-review`), add a `[workflow-state:in-review]` block in `.myflow/workflow.md` for the per-turn breadcrumb AND extend this route table — usually by editing the `/myflow:continue` command file (`.{platform}/commands/myflow/continue.md` or equivalent) to add a row that decides where to resume from. Without the route entry, `/myflow:continue` will fall through to a default branch and the user will not land on the step you intended.
+When you add a custom status (e.g. `in-review`), add a `[workflow-state:in-review]` block in `.myflow/workflow.md` for the per-turn breadcrumb AND extend this route table — usually by editing the `/myflow-continue` command file (on Pi Agent: `.pi/prompts/myflow-continue.md`; other platforms: `.{platform}/commands/myflow/continue.md` or equivalent) to add a row that decides where to resume from. Without the route entry, `/myflow-continue` will fall through to a default branch and the user will not land on the step you intended.
 
 ## Notes
 

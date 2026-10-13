@@ -2,7 +2,7 @@
 name: myflow-research
 description: |
   Research expert. Investigates the codebase and produces research notes for the task.
-tools: read, find, search, ast_grep, lsp
+tools: read, find, grep, ls
 ---
 
 # Research Agent

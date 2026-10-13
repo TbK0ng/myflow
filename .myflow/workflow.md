@@ -17,12 +17,12 @@ Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research mani
 [/workflow-state:planning]
 
 [workflow-state:in_progress]
-Tools: `myflow-implement` / `myflow-research` are sub-agent types only (Task/Agent tool, NOT Skill; there is no skill by these names). `myflow-update-spec` is a skill. `myflow-check` exists as both; prefer the Agent form when verifying after code changes.
-Flow: `myflow-implement` -> `myflow-check` -> `myflow-update-spec` -> commit (Phase 3.4) -> `/myflow:finish-work`.
+Tools: `myflow-implement` / `myflow-research` are sub-agent types only (`myflow_subagent` tool, NOT Skill; there is no skill by these names). `myflow-update-spec` is a skill. `myflow-check` exists as both; prefer the Agent form when verifying after code changes.
+Flow: `myflow-implement` -> `myflow-check` -> `myflow-update-spec` -> commit (Phase 3.4) -> `/myflow-finish-work`.
 Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `myflow-implement`, do NOT spawn another `myflow-implement` or `myflow-check`; if already running as `myflow-check`, do NOT spawn another `myflow-check` or `myflow-implement`. Dispatch is main session only.
 Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
 [/workflow-state:in_progress]
 
 [workflow-state:completed]
-Code committed. Run `/myflow:finish-work`; if dirty, return to Phase 3.4 first.
+Code committed. Run `/myflow-finish-work`; if dirty, return to Phase 3.4 first.
 [/workflow-state:completed]

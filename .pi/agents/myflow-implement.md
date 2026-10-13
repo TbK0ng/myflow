@@ -2,7 +2,7 @@
 name: myflow-implement
 description: |
   Implementation expert. Reads the task PRD and curated implement.jsonl, then writes code that satisfies the requirements.
-tools: read, write, edit, bash, find, search, ast_grep, lsp
+tools: read, write, edit, bash, find, grep, ls
 ---
 
 # Implement Agent
