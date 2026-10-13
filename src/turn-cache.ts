@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
 
 /** Session overview text injected into every turn. */
@@ -11,10 +11,65 @@ export const SESSION_OVERVIEW_TEXT =
 export function resolveActiveTaskStatus(
   projectRoot: string,
   contextKey: string | null,
-): { status: string } {
-  // Default to "implement" status. A full implementation would read the
-  // task tracker to determine the active status.
-  return { status: "implement" };
+): { status: string; taskDir: string | null; taskTitle: string | null } {
+  const sessionsDir = join(projectRoot, ".myflow", ".runtime", "sessions");
+  if (!existsSync(sessionsDir)) {
+    return { status: "no_task", taskDir: null, taskTitle: null };
+  }
+
+  let sessionFilePath: string | null = null;
+
+  if (contextKey) {
+    const candidate = join(sessionsDir, `${contextKey}.json`);
+    if (existsSync(candidate)) {
+      sessionFilePath = candidate;
+    } else {
+      return { status: "no_task", taskDir: null, taskTitle: null };
+    }
+  } else {
+    let sessionFiles: string[];
+    try {
+      sessionFiles = readdirSync(sessionsDir).filter((f) => f.endsWith(".json"));
+    } catch {
+      return { status: "no_task", taskDir: null, taskTitle: null };
+    }
+    if (sessionFiles.length === 1) {
+      sessionFilePath = join(sessionsDir, sessionFiles[0]);
+    } else {
+      return { status: "no_task", taskDir: null, taskTitle: null };
+    }
+  }
+
+  let sessionData: Record<string, unknown>;
+  try {
+    sessionData = JSON.parse(readFileSync(sessionFilePath, "utf-8"));
+  } catch {
+    return { status: "no_task", taskDir: null, taskTitle: null };
+  }
+
+  const currentTask = sessionData.current_task;
+  if (typeof currentTask !== "string" || !currentTask) {
+    return { status: "no_task", taskDir: null, taskTitle: null };
+  }
+
+  const taskDir = resolve(projectRoot, currentTask);
+  const taskJsonPath = join(taskDir, "task.json");
+  if (!existsSync(taskJsonPath)) {
+    return { status: "no_task", taskDir: null, taskTitle: null };
+  }
+
+  let taskData: Record<string, unknown>;
+  try {
+    taskData = JSON.parse(readFileSync(taskJsonPath, "utf-8"));
+  } catch {
+    return { status: "no_task", taskDir: null, taskTitle: null };
+  }
+
+  return {
+    status: typeof taskData.status === "string" ? taskData.status : "planning",
+    taskDir,
+    taskTitle: typeof taskData.title === "string" ? taskData.title : null,
+  };
 }
 
 /**
