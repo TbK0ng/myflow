@@ -31,12 +31,21 @@ function unquoteYaml(value: string): string {
   return value;
 }
 
-/** True if the scalar is a non-string YAML type (number, bool, null). */
-function isYamlNonStringScalar(value: string): boolean {
-  if (value === "" || value === "~" || value === "null") return true;
-  if (/^[+-]?\d+(\.\d+)?$/.test(value)) return true;
-  if (value === "true" || value === "false" || value === "True" || value === "False") return true;
-  return false;
+/**
+ * PyYAML-compatible resolution of scalars that parse as non-strings: null
+ * (empty, ~, null variants), bool (YAML 1.1 set), and numbers. Quoted scalars
+ * never reach this check and stay strings.
+ */
+function isYamlNonStringScalar(raw: string): boolean {
+  if (raw === "" || raw === "~" || /^(?:null|Null|NULL)$/.test(raw)) return true;
+  if (/^(?:true|True|TRUE|false|False|FALSE|yes|Yes|YES|no|No|NO|on|On|ON|off|Off|OFF)$/.test(raw)) return true;
+  // PyYAML int resolver: binary/octal/decimal/hex; leading-zero decimals are not ints.
+  if (/^[-+]?(?:0[bB][01_]+|0[0-7_]+|0[xX][0-9a-fA-F_]+|[1-9][\d_]*|0)$/.test(raw)) return true;
+  // PyYAML float resolver: requires a dot and a signed exponent ("1.5e+3",
+  // not "1.5e3" — the latter stays a string in PyYAML).
+  return /^[-+]?(?:\d[\d_]*\.[\d_]*|\.[\d_]+)(?:[eE][-+]\d+)?$/.test(raw) ||
+    /^[-+]?\.(?:inf|Inf|INF)$/.test(raw) ||
+    /^\.(?:nan|NaN|NAN)$/.test(raw);
 }
 
 /**

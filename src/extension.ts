@@ -1,19 +1,14 @@
 import { findProjectRoot } from "./find-project-root.ts";
-import { TurnContextCache } from "./turn-cache.ts";
+import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
 import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
-import {
-  type AgentType,
-  taskContextJsonlNames,
-  taskContextInputPaths,
-  taskContextSignature,
-  ContextBudget,
-  materialize,
-  readJsonlLines,
-  DEFAULT_CONTEXT_INJECTION_LIMITS,
-} from "./context-injection.ts";
+import { type AgentType, buildTaskContext } from "./context-injection.ts";
 import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+export type { ExtensionAPI };
 
 /** Message shape used by the omp event system. */
 export interface Message {
@@ -27,7 +22,10 @@ export interface Message {
 /** Context passed to event hooks. */
 export interface HookContext {
   cwd: string;
-  sessionManager?: { getSessionId?: () => string };
+  sessionManager?: {
+    getSessionId?: () => string | undefined;
+    getSessionFile?: () => string | undefined;
+  };
   ui?: { notify: (msg: string, level: string) => void };
 }
 
@@ -57,18 +55,6 @@ export interface ContextResult {
   messages: Message[];
 }
 
-/** Extension API surface. */
-export interface ExtensionAPI {
-  on: (
-    event: string,
-    handler: (event: unknown, ctx: HookContext) => void | Promise<void>,
-  ) => void;
-  sendMessage: (msg: {
-    customType: string;
-    content: string;
-    display: boolean;
-  }) => Promise<void>;
-}
 
 const MYFLOW_AGENTS = new Set(["myflow-implement", "myflow-check", "myflow-research"]);
 
@@ -80,39 +66,59 @@ function detectAgentType(): AgentType {
   return null;
 }
 
-function deriveContextKey(ctx: HookContext): string | null {
-  const sessionId = ctx.sessionManager?.getSessionId?.();
-  if (!sessionId) return null;
-  return `myflow_session_${sessionId}`;
+export function sanitizeKey(raw: string): string {
+  const safe = raw.trim().replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+|[._-]+$/g, "");
+  return safe ? safe.slice(0, 160) : "";
 }
 
-function resolveActiveTaskStatus(
-  projectRoot: string,
-  contextKey: string | null,
-): { status: string; taskDir: string | null } {
-  const tasksDir = join(projectRoot, ".myflow", "tasks");
-  if (!existsSync(tasksDir)) return { status: "implement", taskDir: null };
-  return { status: "implement", taskDir: null };
+export function hashValue(raw: string): string {
+  return createHash("sha256").update(raw).digest("hex").slice(0, 24);
 }
+
+export function buildContextKey(platformName: string, kind: string, value: string): string {
+  if (kind === "transcript") {
+    return `${platformName}_transcript_${hashValue(value)}`;
+  }
+  const safeValue = sanitizeKey(value);
+  return safeValue ? `${platformName}_${safeValue}` : `${platformName}_${hashValue(value)}`;
+}
+
+export function deriveContextKey(ctx: HookContext): string | null {
+  const sessionId = ctx.sessionManager?.getSessionId?.();
+  if (sessionId) {
+    return buildContextKey("omp", "session", sessionId);
+  }
+  const sessionFile = ctx.sessionManager?.getSessionFile?.();
+  if (sessionFile) {
+    return buildContextKey("omp", "transcript", sessionFile);
+  }
+  const override = process.env.MYFLOW_CONTEXT_ID?.trim();
+  return override ? sanitizeKey(override) || hashValue(override) : null;
+}
+
 
 function buildSessionContext(
   projectRoot: string,
   contextKey: string | null,
 ): string {
-  const workflowPath = join(projectRoot, ".myflow", "workflow.md");
-  let workflowMd = "";
+  const scriptPath = join(projectRoot, ".myflow", "scripts", "get_context.py");
+  if (!existsSync(scriptPath)) return "";
+  const env: Record<string, string> = { ...process.env } as Record<string, string>;
+  if (contextKey) env.MYFLOW_CONTEXT_ID = contextKey;
   try {
-    workflowMd = readFileSync(workflowPath, "utf-8");
+    const output = execFileSync("python3", [scriptPath], {
+      cwd: projectRoot,
+      env,
+      encoding: "utf-8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const trimmed = output.trim();
+    if (!trimmed) return "";
+    return `<session-context>\n${trimmed}\n</session-context>`;
   } catch {
     return "";
   }
-  const blocks = parseWorkflowStateBlocks(workflowMd);
-  if (blocks.size === 0) return "";
-  const parts: string[] = [];
-  for (const [status, content] of blocks) {
-    parts.push(`[workflow-state:${status}]\n${content}\n[/workflow-state:${status}]`);
-  }
-  return `<session-context>\n${parts.join("\n\n")}\n</session-context>`;
 }
 
 function getTaskContext(
@@ -120,14 +126,7 @@ function getTaskContext(
   projectRoot: string,
   agentType?: AgentType,
 ): string {
-  const prdPath = join(taskDir, "prd.md");
-  let prd = "";
-  try {
-    prd = readFileSync(prdPath, "utf-8");
-  } catch {
-    return "";
-  }
-  return `<task-context>\n### prd.md\n\n${prd}\n</task-context>`;
+  return buildTaskContext(projectRoot, taskDir, agentType);
 }
 
 export default function extension(pi: ExtensionAPI): void {
@@ -156,6 +155,14 @@ export default function extension(pi: ExtensionAPI): void {
     if (sessionCtx) {
       await pi.sendMessage({ customType: "session-context", content: sessionCtx, display: false });
     }
+
+    const { taskDir } = resolveActiveTaskStatus(projectRoot, contextKey);
+    if (taskDir) {
+      const taskCtx = getTaskContext(taskDir, projectRoot, agentType);
+      if (taskCtx) await pi.sendMessage({ customType: "task-context", content: taskCtx, display: false });
+    }
+
+    ctx.ui?.notify("myflow workflow system available", "info");
   });
 
   pi.on("input", async (event, ctx) => {
@@ -166,14 +173,10 @@ export default function extension(pi: ExtensionAPI): void {
     if (!projectRoot) return;
 
     const contextKey = deriveContextKey(ctx);
-    const { taskDir } = resolveActiveTaskStatus(projectRoot, contextKey);
-    if (!taskDir) return;
-
-    const signature = taskContextSignature(projectRoot, taskDir, agentType);
-    const taskCtx = getTaskContext(taskDir, projectRoot, agentType);
-    if (taskCtx) {
-      await pi.sendMessage({ customType: "task-context", content: taskCtx, display: false });
-    }
+    const skipKeyword = readPromptInjectionSkipKeyword(projectRoot);
+    const skipThisTurn = shouldSkipWorkflowState(inputEvent.text ?? "", skipKeyword);
+    turnCache.beginTurn(skipThisTurn);
+    turnCache.get(projectRoot, contextKey);
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
@@ -183,27 +186,18 @@ export default function extension(pi: ExtensionAPI): void {
     if (!projectRoot) return;
 
     const contextKey = deriveContextKey(ctx);
-    const { status } = resolveActiveTaskStatus(projectRoot, contextKey);
-    const workflowPath = join(projectRoot, ".myflow", "workflow.md");
-    let workflowMd = "";
-    try {
-      workflowMd = readFileSync(workflowPath, "utf-8");
-    } catch {
-      return;
-    }
-    const blocks = parseWorkflowStateBlocks(workflowMd);
-    const content = blocks.get(status) ?? "";
-    if (!content) return;
+    const cached = turnCache.get(projectRoot, contextKey);
+    lastInjectionTs = Date.now();
 
-    const result: BeforeAgentStartResult = {
+    if (!cached.workflowMsg) return;
+
+    return {
       message: {
         customType: "workflow-state",
-        content: `[workflow-state:${status}]\n${content}\n[/workflow-state:${status}]`,
+        content: cached.workflowMsg,
         display: false,
       },
     };
-    // The result is returned to the caller; in a real harness this would be
-    // injected into the agent's system prompt.
   });
 
   pi.on("context", async (event, ctx) => {
@@ -214,44 +208,91 @@ export default function extension(pi: ExtensionAPI): void {
     if (!projectRoot) return;
 
     const contextKey = deriveContextKey(ctx);
+    const messages = contextEvent.messages as Message[];
     const { taskDir } = resolveActiveTaskStatus(projectRoot, contextKey);
-    if (!taskDir) return;
+    const currentTaskContext = taskDir ? getTaskContext(taskDir, projectRoot, agentType) : "";
 
-    const inputPaths = taskContextInputPaths(projectRoot, taskDir, agentType);
-    const budget = new ContextBudget(DEFAULT_CONTEXT_INJECTION_LIMITS.max_total_bytes);
-    const messages: Message[] = [...contextEvent.messages];
+    const taskContextIndexes = messages
+      .map((message, index) => (message.customType === "task-context" ? index : -1))
+      .filter((index) => index >= 0);
+    const existingTaskContext =
+      taskContextIndexes.length > 0 ? (messages[taskContextIndexes[0]]?.content ?? "") : "";
+    const taskContextChanged =
+      existingTaskContext !== currentTaskContext || taskContextIndexes.length > 1;
 
-    for (const filePath of inputPaths) {
-      if (!existsSync(filePath)) continue;
-      const displayPath = filePath.replace(projectRoot + "/", "");
-      const materialized = materialize(
-        filePath,
-        displayPath,
-        "context injection",
-        DEFAULT_CONTEXT_INJECTION_LIMITS.max_file_bytes,
-        "file",
-      );
-      if (materialized.block) {
-        const emitted = budget.emit(materialized.block);
-        if (emitted) {
-          messages.push({
-            role: "system",
-            customType: "file-context",
-            content: emitted,
+    let projectedMessages = messages;
+    if (taskContextChanged) {
+      const replacement = currentTaskContext
+        ? {
+            role: "custom",
+            customType: "task-context",
+            content: currentTaskContext,
             display: false,
-          });
-        }
+            timestamp: Date.now(),
+          }
+        : null;
+      let replaced = false;
+      projectedMessages = messages.flatMap((message) => {
+        if (message.customType !== "task-context") return [message];
+        if (replaced || !replacement) return [];
+        replaced = true;
+        return [replacement];
+      });
+      if (replacement && !replaced) projectedMessages.push(replacement);
+    }
+
+    const cached = turnCache.get(projectRoot, contextKey);
+    const skipping = !cached.workflowMsg;
+
+    if (!taskContextChanged && !skipping && lastInjectionTs > lastCompactionTs) return;
+
+    if (skipping) {
+      const withoutBreadcrumb = projectedMessages.filter(
+        (message) => !(message.role === "custom" && message.customType === "workflow-state"),
+      );
+      if (withoutBreadcrumb.length === projectedMessages.length && !taskContextChanged) return;
+      lastInjectionTs = Date.now();
+      return { messages: withoutBreadcrumb };
+    }
+
+    for (let i = projectedMessages.length - 1; i >= 0; i--) {
+      if (
+        projectedMessages[i].role === "custom" &&
+        projectedMessages[i].customType === "workflow-state"
+      ) {
+        lastInjectionTs = Date.now();
+        return taskContextChanged ? { messages: projectedMessages } : undefined;
       }
     }
+
+    lastInjectionTs = Date.now();
+    return {
+      messages: [
+        ...projectedMessages,
+        {
+          role: "custom",
+          customType: "workflow-state",
+          content: cached.workflowMsg,
+          display: false,
+          timestamp: Date.now(),
+        },
+      ],
+    };
   });
 
-  pi.on("tool_call", async (event, _ctx) => {
+  pi.on("tool_call", async (event, ctx) => {
     const toolEvent = event as ToolCallEvent;
-    if (toolEvent.toolName !== "read") return;
-    // In a real harness this would track file reads for context injection.
+    if (toolEvent.toolName !== "bash") return;
+    const contextKey = deriveContextKey(ctx);
+    if (!contextKey) return;
+    const input = toolEvent.input as { env?: Record<string, string> };
+    input.env = {
+      MYFLOW_CONTEXT_ID: contextKey,
+      ...input.env,
+    };
   });
 
-  pi.on("compaction", async (_event, _ctx) => {
+  pi.on("session_before_compact", async (_event, _ctx) => {
     lastCompactionTs = Date.now();
   });
 }

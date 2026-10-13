@@ -1,14 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import extension from "../src/extension.ts";
 import type { ExtensionAPI, HookContext, Message } from "../src/extension.ts";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-ext-"));
   mkdirSync(join(root, ".myflow", ".runtime", "sessions"), { recursive: true });
+  mkdirSync(join(root, ".myflow", "scripts"), { recursive: true });
+  copyFileSync(join(fileURLToPath(new URL("..", import.meta.url)), ".myflow", "scripts", "get_context.py"), join(root, ".myflow", "scripts", "get_context.py"));
   writeFileSync(join(root, ".myflow", "workflow.md"), [
     "[workflow-state:planning]",
     "Plan the work.",
@@ -119,14 +122,14 @@ test("tool_call: read tool is tracked", async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("compaction: records timestamp", async () => {
+test("session_before_compact: records timestamp", async () => {
   const root = makeProject();
   const { api } = makeMockAPI(root);
   extension(api);
   const handlers = getHandlers(api);
   const ctx = getCtx(api);
   await handlers.session_start({}, ctx);
-  await handlers.compaction({}, ctx);
+  await handlers.session_before_compact({}, ctx);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -140,6 +143,42 @@ test("all 6 hooks registered", () => {
   assert.ok(handlers.before_agent_start);
   assert.ok(handlers.context);
   assert.ok(handlers.tool_call);
-  assert.ok(handlers.compaction);
+  assert.ok(handlers.session_before_compact);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("session_start: sends task-context when prd.md exists (real task resolution)", async () => {
+  const root = makeProject();
+  // Add a prd.md so getTaskContext returns non-empty content.
+  writeFileSync(join(root, "tasks", "demo", "prd.md"), "# Demo PRD\nBuild the thing.");
+  const { api, sent } = makeMockAPI(root);
+  extension(api);
+  const handlers = getHandlers(api);
+  const ctx = getCtx(api);
+  await handlers.session_start({}, ctx);
+  const taskMsg = sent.find((m) => m.customType === "task-context");
+  assert.ok(taskMsg, "session_start must send a task-context message");
+  assert.ok(taskMsg!.content!.includes("# Demo PRD"), "task-context must contain prd.md content");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("context: replaces stale task-context with current prd.md", async () => {
+  const root = makeProject();
+  writeFileSync(join(root, "tasks", "demo", "prd.md"), "# Demo PRD\nBuild the thing.");
+  const { api } = makeMockAPI(root);
+  extension(api);
+  const handlers = getHandlers(api);
+  const ctx = getCtx(api);
+  await handlers.session_start({}, ctx);
+  // Feed a stale task-context; the hook must replace it with the current prd.md.
+  const staleMessage = { role: "custom", customType: "task-context", content: "stale", display: false, timestamp: 0 };
+  const result = await (handlers.context as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+    { messages: [staleMessage] },
+    ctx,
+  );
+  const projected = (result as { messages: Message[] } | undefined)?.messages ?? [];
+  const taskMsg = projected.find((m) => m.customType === "task-context");
+  assert.ok(taskMsg, "context must produce a task-context message");
+  assert.ok(taskMsg!.content!.includes("# Demo PRD"), "task-context must contain current prd.md content");
   rmSync(root, { recursive: true, force: true });
 });

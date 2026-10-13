@@ -95,3 +95,107 @@ test("shouldSkipWorkflowState: keyword not at word boundary", () => {
 test("shouldSkipWorkflowState: empty keyword never matches", () => {
   assert.ok(!shouldSkipWorkflowState("anything", ""));
 });
+
+test("config with null scalar returns default", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: null\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("config with YAML 1.1 bool scalar returns default", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: yes\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("config with hex int scalar returns default", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: 0x1F\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("config with float scalar returns default", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: 1.5e+3\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("config with inf scalar returns default", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: .inf\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("config with nan scalar returns default", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: .nan\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("config with octal int scalar returns default", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: 0123\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("config with unsigned exponent stays string", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: 1.5e3\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "1.5e3");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
