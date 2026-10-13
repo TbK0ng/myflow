@@ -52,6 +52,13 @@ Keep these consistent across files; change them together or not at all:
 - **Delegated runs**: `MYFLOW_SKIP_BREADCRUMB=1` suppresses the per-turn
   breadcrumb for a process that receives a work order rather than a user turn
   (channel workers set it).
+- **Project marker**: a project root is a directory whose `.myflow/` holds
+  `workflow.md` (`find-project-root.ts`). The file is part of the payload and
+  nothing writes it at runtime, so it cannot appear by accident.
+- **User-level state**: the channel store lives at `~/.pi/myflow/channels`. Never
+  put user-level state in `~/.myflow` — that name is the project marker, so a
+  directory called that above a project makes the resolve step stop there and
+  redirect the harness (tasks, sessions, archive) into the home directory.
 
 ## Extension Rules
 

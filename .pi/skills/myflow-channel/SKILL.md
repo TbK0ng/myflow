@@ -1,6 +1,6 @@
 ---
 name: myflow-channel
-description: "Use the local channel runtime for live multi-agent collaboration: spawn runtime-agent workers, send and read durable messages, wait for a worker's completion, interrupt a stalled worker, and keep forum boards with threads and linked context. Use when the user wants two agents to discuss a problem, wants an implement/check/plan/research worker spawned as a peer process, wants an issue board or changelog board, or when a worker needs to be inspected, redirected, or stopped."
+description: "Use the local channel runtime for live multi-agent collaboration: spawn runtime-agent workers, send and read durable messages, wait for a worker's completion, and interrupt a stalled worker. Use when the user wants two agents to discuss a problem, wants an implement/check/plan/research worker spawned as a peer process, or when a worker needs to be inspected, redirected, or stopped."
 ---
 
 # myflow channel
@@ -53,36 +53,6 @@ python3 ./.myflow/scripts/channel.py wait review --from checker --kind done
 The `--task` path becomes the worker's `Active task:` line, so it loads the task
 artifacts itself.
 
-### Forum boards
-
-A forum channel keeps durable items instead of a chat stream:
-
-```bash
-python3 ./.myflow/scripts/channel.py create board --type forum
-python3 ./.myflow/scripts/channel.py title set board "Release Board"
-python3 ./.myflow/scripts/channel.py post board "Flaky test in CI" --as me --text "<details>"
-python3 ./.myflow/scripts/channel.py forum board                 # open threads
-python3 ./.myflow/scripts/channel.py forum board --state all     # include closed
-python3 ./.myflow/scripts/channel.py thread board flaky-test-in-ci
-python3 ./.myflow/scripts/channel.py thread board flaky-test-in-ci --text "Root cause found" --as me
-python3 ./.myflow/scripts/channel.py thread board flaky-test-in-ci --close --as me
-```
-
-Threads are event-sourced: `thread` is the durable record, so use it instead
-of parsing `events.jsonl`. A taken slug gets a numeric suffix.
-
-### Linked context
-
-```bash
-python3 ./.myflow/scripts/channel.py context add board --kind spec --value docs/spec.md --label Spec --as me
-python3 ./.myflow/scripts/channel.py context add board --target thread --thread <id> --kind file --value src/x.ts
-python3 ./.myflow/scripts/channel.py context list board [--thread <id>]
-python3 ./.myflow/scripts/channel.py context delete board <context-id>
-```
-
-Context makes a board self-describing: a reviewer sees which spec or file an
-item refers to without leaving the channel.
-
 ### Interrupt and redirect
 
 ```bash
@@ -97,22 +67,28 @@ python3 ./.myflow/scripts/channel.py workers --json
 python3 ./.myflow/scripts/channel.py prune          # drop dead workers, stop idle ones
 python3 ./.myflow/scripts/channel.py kill <handle>
 python3 ./.myflow/scripts/channel.py rm <channel>
+python3 ./.myflow/scripts/channel.py rm <channel> --force   # stop its live workers first
 ```
 
 ## Rules
 
+- A channel carries messages; task artifacts under `.myflow/tasks/<slug>/` carry
+  the durable record. Do not re-invent a tracker on top of the event log.
 - Completion signal is `--kind done`, a system event the runtime understands. A
   user `--tag` is an opaque label; never rely on a worker writing a tag to mean
   "finished".
-- `post`, `forum`, `thread`, `context`, and `title` are for `--type forum`
-  boards; `post` on a chat channel is rejected on purpose.
 - Use `--stdin` or `--text-file` for long text instead of a giant positional
   argument.
 - `--scope project` (default) keeps the channel with this project;
   `--scope global` shares one bucket across projects. Pick deliberately — a
-  global channel is invisible from project listings.
+  global channel is invisible from project listings. Both live under
+  `~/.pi/myflow/channels`, never inside the repository and never under a
+  `~/.myflow` (that name is the project marker).
 - Long work goes to `research/<topic>.md` or the task artifacts; the channel
   carries instructions and short reports.
+- A worker keeps its log file open until it exits, so `rm` refuses while a
+  worker of that channel is alive. Stop it (`kill <channel>`) or use
+  `rm --force`, which stops the workers before deleting.
 - The worker guard caps live workers (`channel.worker_guard.max_live_workers`,
   default 3) and stops idle ones (`channel.worker_guard.idle_timeout`, default
   900s).

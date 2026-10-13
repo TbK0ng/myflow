@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, cpSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 
 const ROOT = join(import.meta.dirname, "..");
 const CHANNEL_PY = join(ROOT, ".myflow", "scripts", "channel.py");
@@ -41,8 +41,12 @@ function channel(sandbox: Sandbox, args: string[], expectFailure = false): strin
   }
 }
 
+function channelRoot(sandbox: Sandbox): string {
+  return join(sandbox.home, ".pi", "myflow", "channels");
+}
+
 function projectStore(sandbox: Sandbox): string {
-  const root = join(sandbox.home, ".myflow", "channels");
+  const root = channelRoot(sandbox);
   const bucket = readdirSync(root).find((entry) => entry !== "__global__");
   assert.ok(bucket, "project bucket must exist");
   return join(root, bucket);
@@ -57,14 +61,14 @@ test("channel create and list keep project and global buckets apart", () => {
   try {
     channel(sandbox, ["create", "alpha"]);
     assert.match(channel(sandbox, ["create", "alpha"], true), /already exists/);
-    channel(sandbox, ["create", "shared", "--scope", "global", "--type", "forum"]);
+    channel(sandbox, ["create", "shared", "--scope", "global"]);
 
     const projectList = channel(sandbox, ["list"]);
-    assert.match(projectList, /^alpha\tchat\tproject\t0 event\(s\)$/m);
+    assert.match(projectList, /^alpha\tproject\t0 event\(s\)$/m);
     assert.ok(!projectList.includes("shared"), "global channels stay out of project listings");
 
     const all = channel(sandbox, ["list", "--all"]);
-    assert.match(all, /^shared\tforum\tglobal\t0 event\(s\)$/m);
+    assert.match(all, /^shared\tglobal\t0 event\(s\)$/m);
   } finally {
     cleanup(sandbox);
   }
@@ -219,116 +223,97 @@ test("channel rm and prune: remove a channel and drop dead worker records", () =
   }
 });
 
+test("channel rm: refuses live workers and --force stops them first", () => {
+  const sandbox = makeSandbox();
+  const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: true, stdio: "ignore" });
+  sleeper.unref();
+  try {
+    channel(sandbox, ["create", "guarded"]);
+    const store = projectStore(sandbox);
+    writeFileSync(
+      join(store, "workers.json"),
+      JSON.stringify({
+        workers: [
+          { handle: "w1", channel: "guarded", scope: "project", agent: "research", pid: sleeper.pid, started_at: "x", log: "x" },
+        ],
+      }),
+      "utf-8",
+    );
+
+    assert.match(channel(sandbox, ["rm", "guarded"], true), /still has live worker\(s\): w1/);
+    assert.ok(existsSync(join(store, "guarded", "events.jsonl")), "a refused rm leaves the channel alone");
+
+    assert.match(channel(sandbox, ["rm", "guarded", "--force"]), /removed: guarded/);
+    assert.ok(!existsSync(join(store, "guarded")), "the forced rm deletes the channel");
+    assert.equal(JSON.parse(readFileSync(join(store, "workers.json"), "utf-8")).workers.length, 0);
+    let stopped = false;
+    try {
+      process.kill(sleeper.pid!, 0);
+    } catch {
+      stopped = true;
+    }
+    assert.ok(stopped, "the forced rm stopped the live worker");
+  } finally {
+    try {
+      process.kill(sleeper.pid!, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    cleanup(sandbox);
+  }
+});
+
+test("channel rm --force waits out a log handle that is still open", () => {
+  const sandbox = makeSandbox();
+  channel(sandbox, ["create", "held"]);
+  const store = projectStore(sandbox);
+  const log = join(store, "held", "logs", "w1.log");
+  mkdirSync(dirname(log), { recursive: true });
+  writeFileSync(log, "x");
+  const holder = spawn(
+    process.execPath,
+    ["-e", "require('fs').openSync(process.argv[1], 'a'); setTimeout(() => {}, 3000)", log],
+    { detached: true, stdio: "ignore" },
+  );
+  holder.unref();
+  try {
+    writeFileSync(
+      join(store, "workers.json"),
+      JSON.stringify({ workers: [{ handle: "w1", channel: "held", pid: holder.pid, started_at: "x", log }] }),
+      "utf-8",
+    );
+    assert.match(channel(sandbox, ["rm", "held", "--force"]), /removed: held/);
+    assert.ok(!existsSync(join(store, "held")), "the channel is gone once the handle is released");
+  } finally {
+    try {
+      process.kill(holder.pid!, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    cleanup(sandbox);
+  }
+});
+
+test("channel store never creates a .myflow directory in the home directory", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "chat"]);
+    assert.ok(existsSync(channelRoot(sandbox)), "the store lives under the user channel root");
+    assert.ok(
+      !existsSync(join(sandbox.home, ".myflow")),
+      ".myflow is the project-root marker; a store of that name would capture every project under it",
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
 test("channel store stays under the user channel root", () => {
   const sandbox = makeSandbox();
   try {
     channel(sandbox, ["create", "chat"]);
     assert.ok(existsSync(join(projectStore(sandbox), "chat", "events.jsonl")));
     assert.ok(!existsSync(join(sandbox.project, ".myflow", "channels")), "channels never live inside the project");
-  } finally {
-    cleanup(sandbox);
-  }
-});
-
-test("forum: post, duplicate titles, list, view, reply, and close", () => {
-  const sandbox = makeSandbox();
-  try {
-    channel(sandbox, ["create", "board", "--type", "forum"]);
-    assert.match(
-      channel(sandbox, ["post", "board", "First issue", "--as", "alice", "--text", "broken"]),
-      /posted: #\d+ thread first-issue/,
-    );
-    channel(sandbox, ["post", "board", "Second issue", "--as", "bob", "--text", "again"]);
-    assert.match(
-      channel(sandbox, ["post", "board", "First issue", "--as", "alice", "--text", "another angle"]),
-      /thread first-issue-2/,
-      "a taken slug gets a suffix",
-    );
-
-    const listing = channel(sandbox, ["forum", "board"]);
-    assert.match(listing, /^first-issue\topen\t1 post\(s\)\tFirst issue/m);
-    assert.match(listing, /first-issue-2/);
-    assert.match(listing, /second-issue/);
-
-    assert.match(channel(sandbox, ["thread", "board", "first-issue"]), /open alice: broken/);
-    assert.match(channel(sandbox, ["thread", "board", "first-issue", "--text", "looking", "--as", "bob"]), /reply first-issue/);
-    const json = JSON.parse(channel(sandbox, ["thread", "board", "first-issue", "--json"]));
-    assert.equal(json.posts.length, 2);
-    assert.equal(json.state, "open");
-    assert.equal(json.posts[1].action, "reply");
-
-    channel(sandbox, ["thread", "board", "second-issue", "--close", "--as", "bob"]);
-    assert.ok(!channel(sandbox, ["forum", "board"]).includes("second-issue"), "closed threads leave the open list");
-    assert.match(channel(sandbox, ["forum", "board", "--state", "all"]), /^second-issue\tclosed/m);
-    channel(sandbox, ["thread", "board", "second-issue", "--reopen", "--as", "bob"]);
-    assert.match(channel(sandbox, ["forum", "board"]), /second-issue/);
-
-    assert.match(
-      channel(sandbox, ["thread", "board", "second-issue", "--rename", "Renamed issue", "--as", "bob"]),
-      /renamed second-issue: Renamed issue/,
-    );
-    assert.match(channel(sandbox, ["forum", "board"]), /Renamed issue/);
-
-    assert.match(channel(sandbox, ["thread", "board", "nope"], true), /unknown thread/);
-    assert.match(channel(sandbox, ["thread", "board", "first-issue", "--close"], true), /--as is required/);
-  } finally {
-    cleanup(sandbox);
-  }
-});
-
-test("forum commands are rejected on a chat channel", () => {
-  const sandbox = makeSandbox();
-  try {
-    channel(sandbox, ["create", "chat"]);
-    assert.match(
-      channel(sandbox, ["post", "chat", "Title", "--as", "me", "--text", "x"], true),
-      /not a forum channel/,
-    );
-  } finally {
-    cleanup(sandbox);
-  }
-});
-
-test("channel context: add, list, and delete for channel and thread scope", () => {
-  const sandbox = makeSandbox();
-  try {
-    channel(sandbox, ["create", "board", "--type", "forum"]);
-    channel(sandbox, ["post", "board", "Issue", "--as", "alice", "--text", "body"]);
-
-    const added = channel(sandbox, [
-      "context", "add", "board", "--kind", "spec", "--value", "docs/spec.md", "--label", "Spec", "--as", "alice",
-    ]);
-    const contextId = added.match(/context (\S+) \(/)?.[1];
-    assert.ok(contextId, `context id expected in: ${added}`);
-    channel(sandbox, [
-      "context", "add", "board", "--target", "thread", "--thread", "issue", "--kind", "file", "--value", "src/x.ts",
-    ]);
-
-    const listing = channel(sandbox, ["context", "list", "board"]);
-    assert.match(listing, new RegExp(`${contextId}\tchannel\tspec\tSpec\tdocs/spec\.md`));
-    assert.match(listing, /file-\d+\tissue\tfile/);
-
-    const json = JSON.parse(channel(sandbox, ["context", "list", "board", "--json"]));
-    assert.equal(json.context.length, 2);
-    assert.equal(json.context.find((item: { thread: string | null }) => item.thread === "issue").value, "src/x.ts");
-
-    channel(sandbox, ["context", "delete", "board", contextId]);
-    assert.equal(JSON.parse(channel(sandbox, ["context", "list", "board", "--json"])).context.length, 1);
-    assert.match(channel(sandbox, ["context", "add", "board", "--target", "thread", "--kind", "x", "--value", "y"], true), /needs --thread/);
-  } finally {
-    cleanup(sandbox);
-  }
-});
-
-test("channel title: set and clear through the event log", () => {
-  const sandbox = makeSandbox();
-  try {
-    channel(sandbox, ["create", "board", "--type", "forum"]);
-    assert.match(channel(sandbox, ["title", "set", "board", "My", "Board"]), /title set: My Board/);
-    assert.equal(JSON.parse(channel(sandbox, ["forum", "board", "--json"])).title, "My Board");
-    assert.match(channel(sandbox, ["title", "clear", "board"]), /title cleared/);
-    assert.equal(JSON.parse(channel(sandbox, ["forum", "board", "--json"])).title, null);
-    assert.match(channel(sandbox, ["title", "set", "board"], true), /needs a title/);
   } finally {
     cleanup(sandbox);
   }
