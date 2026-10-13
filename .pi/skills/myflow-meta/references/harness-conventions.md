@@ -54,7 +54,9 @@ Keep these consistent across files; change them together or not at all:
   `context`, `tool_call`, `session_before_compact`.
 - Inject context with `pi.sendMessage({ customType, content, display: false })`;
   never paste injected blocks into user-visible output.
-- `tool_call` owns the subagent recursion guard; do not remove it.
+- Agents declare tool allowlists that exclude `myflow_subagent`, so a sub-agent
+  cannot dispatch in practice. `tool_call` also blocks that call as a second
+  line of defense (for agents without an allowlist); keep both.
 - New tools use a plain JSON-schema `parameters` object (no TypeBox import). Pi
   validates it at runtime.
 - Keep runtime logic importable by `node --test` regardless of whether Pi is

@@ -53,8 +53,9 @@ without a model call.
 
 ## Dispatch Protocol
 
-- Only the main session may dispatch `myflow_subagent`; a sub-agent is blocked
-  by the recursion guard and must report its recommendation instead.
+- Only the main session may dispatch `myflow_subagent`. Sub-agent definitions
+  omit the tool from their allowlist, and `tool_call` blocks the call as a
+  second line of defense; a sub-agent must report its recommendation instead.
 - Every dispatch prompt starts with `Active task: <path from task.py current>`.
 - Read order inside a sub-agent: `implement.jsonl` / `check.jsonl` referenced
   files → `prd.md` → `design.md` if present → `implement.md` if present.
