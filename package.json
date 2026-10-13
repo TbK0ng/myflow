@@ -1,0 +1,10 @@
+{
+  "name": "myflow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A reproduction of the Myflow omp harness, built strictly from the book.",
+  "scripts": {
+    "test": "node --test tests/"
+  }
+}
