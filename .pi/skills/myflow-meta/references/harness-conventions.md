@@ -9,16 +9,21 @@ harness itself, so they hold in every project that carries the payload.
 
 - `.pi/extensions/myflow/` (self-contained; no files outside this directory)
 - `.pi/agents/` — `myflow-implement`, `myflow-check`, `myflow-research`
-- `.pi/prompts/` — `myflow-continue`, `myflow-finish-work`
+- `.pi/prompts/` — `myflow-continue`, `myflow-finish-work`, `myflow-parallel`
 - `.pi/skills/` — the workflow skills
 - `.myflow/workflow.md`
 - `.myflow/scripts/`
+- `.myflow/agents/` — the channel runtime's worker definitions
 
 **Project-owned** — never copy between projects:
 
 - `.myflow/spec/` (this project's conventions), `.myflow/config.yaml`,
   `.myflow/worktree.yaml`
-- `.myflow/tasks/`, `.myflow/archive/`, `.myflow/.runtime/`
+- `.myflow/tasks/`, `.myflow/archive/` — deliverables, committed with the code
+- `.myflow/.runtime/` — machine state (sessions, worktree registry, worker
+  logs, channel-adjacent records). Add it to the project's `.gitignore`; a
+  tracked runtime directory pollutes every diff and makes worktree merges
+  collide with untracked copies.
 
 **Harness development** — not needed to run the payload:
 
@@ -52,9 +57,26 @@ Keep these consistent across files; change them together or not at all:
 - **Delegated runs**: `MYFLOW_SKIP_BREADCRUMB=1` suppresses the per-turn
   breadcrumb for a process that receives a work order rather than a user turn
   (channel workers set it).
+- **One writer per working tree**: `myflow_subagent` rejects `mode: parallel`
+  for write-capable agents (tools include `write`/`edit`, or no allowlist).
+  `myflow-implement` and `myflow-check` both write, so they run one at a time in
+  the shared tree; research is the parallel agent. True concurrency uses
+  worktrees, one session each.
+- **Verify gate scope**: the gate holds a dispatched `myflow-check` sub-agent
+  (agent type) or any process with `MYFLOW_VERIFY_GATE=1`, which is how
+  `channel.py spawn --agent reviewer` covers a peer review that carries no
+  agent type.
+- **Worktree sessions**: `worktree.py start` mints a fresh session id per
+  launch (`myflow-<name>-<MMDD-HHMMSS>-<ms>`, recorded in `worktrees.json`) and
+  prints the resume command. pi resumes a session it is handed by id, so
+  reusing an id would silently continue a finished conversation in a new
+  worktree; continuity is explicit via `--session-id` or `pi --resume`.
 - **Project marker**: a project root is a directory whose `.myflow/` holds
-  `workflow.md` (`find-project-root.ts`). The file is part of the payload and
-  nothing writes it at runtime, so it cannot appear by accident.
+  `workflow.md`. `find-project-root.ts` and every script (`task.py`,
+  `get_context.py`, `channel.py`, `worktree.py`) resolve it the same way by
+  walking up, so running from a subdirectory targets the project; with no
+  project above, the start directory is used as-is. The file is part of the
+  payload and nothing writes it at runtime, so it cannot appear by accident.
 - **User-level state**: the channel store lives at `~/.pi/myflow/channels`. Never
   put user-level state in `~/.myflow` — that name is the project marker, so a
   directory called that above a project makes the resolve step stop there and

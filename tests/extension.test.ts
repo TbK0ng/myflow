@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import extension, { SKIP_BREADCRUMB_ENV } from "../.pi/extensions/myflow/index.ts";
 import type { ExtensionAPI, HookContext, Message } from "../.pi/extensions/myflow/index.ts";
-import { MYFLOW_AGENT_ENV } from "../.pi/extensions/myflow/subagent.ts";
+import { MYFLOW_AGENT_ENV, MYFLOW_VERIFY_GATE_ENV } from "../.pi/extensions/myflow/subagent.ts";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-ext-"));
@@ -309,6 +309,44 @@ test("verify gate: a check sub-agent is held until verify passes", async () => {
   } finally {
     if (previous === undefined) delete process.env[MYFLOW_AGENT_ENV];
     else process.env[MYFLOW_AGENT_ENV] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("verify gate: a channel review worker is held without an agent type", async () => {
+  // Channel workers run as ordinary pi processes: no MYFLOW_AGENT_TYPE, just
+  // the flag their launcher sets.
+  const root = makeProject();
+  const agentBackup = process.env[MYFLOW_AGENT_ENV];
+  const flagBackup = process.env.MYFLOW_VERIFY_GATE_ENV;
+  delete process.env[MYFLOW_AGENT_ENV];
+  process.env[MYFLOW_VERIFY_GATE_ENV] = "1";
+  try {
+    writeVerifyScript(root, true);
+    const { api } = makeMockAPI(root);
+    extension(api);
+    const handlers = getHandlers(api);
+    const ctx = getCtx(api);
+    await handlers.session_start({}, ctx);
+
+    const blocked = (await (handlers.agent_before_settle as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+      { outcome: "completed" },
+      ctx,
+    )) as { continue?: boolean; entries?: Array<{ customType: string }> } | undefined;
+    assert.equal(blocked?.continue, true, "a flagged review worker is held while verify fails");
+    assert.equal(blocked?.entries?.[0]?.customType, "verify-gate");
+
+    delete process.env[MYFLOW_VERIFY_GATE_ENV];
+    const plain = await (handlers.agent_before_settle as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+      { outcome: "completed" },
+      ctx,
+    );
+    assert.equal(plain, undefined, "without the flag and without an agent type nothing is gated");
+  } finally {
+    if (agentBackup === undefined) delete process.env[MYFLOW_AGENT_ENV];
+    else process.env[MYFLOW_AGENT_ENV] = agentBackup;
+    if (flagBackup === undefined) delete process.env[MYFLOW_VERIFY_GATE_ENV];
+    else process.env[MYFLOW_VERIFY_GATE_ENV] = flagBackup;
     rmSync(root, { recursive: true, force: true });
   }
 });

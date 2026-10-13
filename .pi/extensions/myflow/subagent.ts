@@ -29,6 +29,13 @@ import { basename, join } from "node:path";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
 
 export const MYFLOW_AGENT_ENV = "MYFLOW_AGENT_TYPE";
+
+/**
+ * Marks a process as a review worker for the verify gate. Dispatched
+ * sub-agents carry an agent type instead; a channel worker is an ordinary pi
+ * process, so its launcher flags it explicitly.
+ */
+export const MYFLOW_VERIFY_GATE_ENV = "MYFLOW_VERIFY_GATE";
 export const MYFLOW_CONTEXT_ENV = "MYFLOW_CONTEXT_ID";
 export const PROGRESS_CHANNEL = "myflow-subagent-progress";
 
@@ -98,6 +105,21 @@ const EMPTY_USAGE = (): UsageStats => ({
   contextTokens: 0,
   turns: 0,
 });
+
+/** Tools that write to the shared working tree. */
+const WRITE_TOOLS = new Set(["write", "edit"]);
+
+/**
+ * Whether an agent can write to the caller's working tree.
+ *
+ * An agent with no `tools:` allowlist runs with every tool, so it counts as a
+ * writer. Parallel mode is rejected for writers: sub-agents share one tree, so
+ * two of them writing at once is the one thing the dispatch protocol forbids.
+ */
+export function isWriteCapable(agent: AgentConfig): boolean {
+  if (!agent.tools || agent.tools.length === 0) return true;
+  return agent.tools.some((tool) => WRITE_TOOLS.has(tool));
+}
 
 /** Normalize a caller-provided agent name to its `myflow-` form. */
 export function normalizeAgentName(agent?: string): string {
@@ -380,7 +402,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       "Run one myflow project sub-agent with active task context.",
       `Modes: single (prompt), parallel (prompts, max ${MAX_PARALLEL_PROMPTS}), chain (sequential prompts with "Previous output:").`,
       "The agent must have a definition file in .pi/agents/; `implement` expands to `myflow-implement`.",
-      "Sub-agents share the caller's working tree, so keep parallel dispatch to read-only work.",
+      "Sub-agents share the caller's working tree, so at most one writer (implement, check) may run there at a time: parallel mode is rejected for write-capable agents. Parallelize read-only research instead.",
     ].join(" "),
     promptSnippet: "Run a myflow-implement / myflow-check / myflow-research sub-agent",
     parameters: SUBAGENT_PARAMETERS,
@@ -433,6 +455,14 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       }
       if (mode === "parallel" && prompts.length > MAX_PARALLEL_PROMPTS) {
         throw new Error(`subagent parallel mode supports at most ${MAX_PARALLEL_PROMPTS} prompts`);
+      }
+      if (mode === "parallel" && isWriteCapable(agent)) {
+        // The rule the workflow, the tool description, and this check all state:
+        // one writer per working tree. Repeats are fine — they are sequential.
+        throw new Error(
+          `parallel dispatch is for read-only work: ${agent.name} can write, and sub-agents share the caller's working tree. ` +
+            "Run one writer at a time (single or chain), or parallelize a read-only agent such as myflow-research.",
+        );
       }
 
       const config = resolveRunConfig(params, agent, {

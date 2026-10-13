@@ -20,6 +20,7 @@ import {
   normalizeAgentName,
   registerMyflowSubagent,
   resolveRunConfig,
+  isWriteCapable,
 } from "../.pi/extensions/myflow/subagent.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -181,6 +182,40 @@ test("myflow_subagent: missing prompt for single mode is rejected", async () => 
   );
 });
 
+test("myflow_subagent: parallel dispatch is rejected for write-capable agents", async () => {
+  const { api, tools } = makeMockAPI();
+  registerMyflowSubagent(api as any);
+  const tool = tools.find((candidate) => candidate.name === "myflow_subagent")!;
+
+  // Two writers in one working tree is the case the protocol forbids, so it
+  // fails before any child process is spawned.
+  for (const agent of ["implement", "check", "myflow-implement", "myflow-check"]) {
+    await assert.rejects(
+      () => tool.execute("id", { agent, mode: "parallel", prompts: ["one", "two"] }, undefined, undefined, { cwd: ROOT }),
+      /parallel dispatch is for read-only work/
+    );
+  }
+
+  // The same agents stay available one at a time.
+  await assert.rejects(
+    () => tool.execute("id", { agent: "implement", mode: "single" }, undefined, undefined, { cwd: ROOT }),
+    /prompt is required/,
+    "single mode is a prompt check, not a writer rejection",
+  );
+});
+
+test("isWriteCapable: a missing allowlist counts as a writer", () => {
+  const implement = discoverAgents(ROOT).agents.find((agent) => agent.name === "myflow-implement")!;
+  const research = discoverAgents(ROOT).agents.find((agent) => agent.name === "myflow-research")!;
+  assert.equal(isWriteCapable(implement), true);
+  assert.equal(isWriteCapable(research), false);
+  assert.equal(isWriteCapable({ name: "custom", systemPrompt: "", source: "project", filePath: "" }), true);
+  assert.equal(
+    isWriteCapable({ name: "reader", systemPrompt: "", source: "project", filePath: "", tools: ["read", "grep"] }),
+    false,
+  );
+});
+
 test("myflow_subagent: emits progress before the child starts", async () => {
   const { api, tools, events } = makeMockAPI();
   registerMyflowSubagent(api as any);
@@ -194,7 +229,7 @@ test("myflow_subagent: emits progress before the child starts", async () => {
   try {
     const result = await tool.execute(
       "id",
-      { agent: "implement", mode: "parallel", prompts: ["one", "two"] },
+      { agent: "research", mode: "parallel", prompts: ["one", "two"] },
       undefined,
       undefined,
       { cwd: ROOT },

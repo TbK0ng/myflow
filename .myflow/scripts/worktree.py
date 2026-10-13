@@ -39,7 +39,24 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECT_ROOT = Path.cwd()
+def _find_project_root(start: Path | None = None) -> Path:
+    """The nearest ancestor whose `.myflow/` holds `workflow.md`.
+
+    Walking up means the scripts behave the same from a subdirectory, and a
+    worktree session resolves its own root rather than the parent checkout.
+    The `workflow.md` part matters: `.myflow` alone is a marker a stray
+    directory can carry, and treating one above the project (a home directory,
+    say) as the root would quietly redirect every task, session, and archive
+    there. With no project above, the start directory is used as-is.
+    """
+    directory = (start or Path.cwd()).resolve()
+    for candidate in [directory, *directory.parents]:
+        if (candidate / ".myflow" / "workflow.md").is_file():
+            return candidate
+    return directory
+
+
+PROJECT_ROOT = _find_project_root()
 CONFIG_PATH = PROJECT_ROOT / ".myflow" / "worktree.yaml"
 RUNTIME_DIR = PROJECT_ROOT / ".myflow" / ".runtime"
 REGISTRY_PATH = RUNTIME_DIR / "worktrees.json"
@@ -129,6 +146,39 @@ def run_git(args: list[str], cwd: Path = PROJECT_ROOT) -> tuple[int, str, str]:
 def repo_root() -> Path | None:
     code, out, _ = run_git(["rev-parse", "--show-toplevel"])
     return Path(out.strip()) if code == 0 and out.strip() else None
+
+
+COPIED_INPUT_MARKER = "# myflow copied input for this worktree; never part of this branch"
+
+
+def shield_copied_inputs(target: Path, copied: list[str]) -> None:
+    """Keep `copy:`ed directories out of the worktree's `git status`.
+
+    They are inputs for the session (task artifacts, local config), not part of
+    the branch. Without this, `git add -A` stages them and merging that branch
+    into the main tree aborts with "untracked working tree files would be
+    overwritten", because the same paths exist there untracked.
+
+    The rule lives inside the copied directory, so it applies to this worktree
+    only: the main tree keeps tracking the same paths as deliverables. (An
+    ignore rule in the git directory cannot do this — `info/exclude` is read
+    from the common directory and would hide the main tree's copies too.)
+    """
+    for entry in copied:
+        directory = target / entry
+        if not directory.is_dir():
+            continue
+        ignore_file = directory / ".gitignore"
+        try:
+            existing = ignore_file.read_text(encoding="utf-8") if ignore_file.is_file() else ""
+            if COPIED_INPUT_MARKER in existing:
+                continue
+            block = COPIED_INPUT_MARKER + "\n*\n"
+            if existing and not existing.endswith("\n"):
+                existing += "\n"
+            ignore_file.write_text(existing + block, encoding="utf-8")
+        except OSError:
+            continue
 
 
 def worktree_dir(root: Path, config: dict) -> Path:
@@ -238,6 +288,8 @@ def cmd_create(args: argparse.Namespace) -> int:
             shutil.copy2(source, destination)
         copied.append(entry)
 
+    shield_copied_inputs(target, copied)
+
     post_create_failed: str | None = None
     for command in config.get("post_create", []):
         completed = subprocess.run(command, cwd=target, shell=True, text=True, encoding="utf-8", errors="replace")
@@ -326,12 +378,33 @@ def _pi_command() -> list[str]:
     return [executable] if executable else ["pi"]
 
 
+def new_session_id(name: str) -> str:
+    """A fresh session id for every launch: `myflow-<name>-<MMDD-HHMMSS>-<ms>`.
+
+    pi resumes a session when handed a session id it already knows, so a fixed
+    id per worktree name would make a later launch continue a finished
+    conversation inside a brand-new worktree. The milliseconds matter: removing
+    a worktree and starting the same name again can happen within one second,
+    and the registry entry for the first launch is gone by then. Continuity is
+    an explicit act: pass `--session-id`, or resume the id printed at startup.
+    """
+    now = datetime.now(timezone.utc)
+    base = f"myflow-{name}-{now.strftime('%m%d-%H%M%S')}-{now.microsecond // 1000:03d}"
+    taken = {str(entry.get("session_id")) for entry in read_registry()}
+    candidate = base
+    suffix = 2
+    while candidate in taken:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     root = repo_root()
     if root is None:
         print("error: not inside a git repository", file=sys.stderr)
         return 1
-    session_id = args.session_id or f"myflow-{args.name}"
+    session_id = args.session_id or new_session_id(args.name)
     log_path = LOG_DIR / f"{args.name}.log"
     # The initial run is a delegated work order, so it carries the task line and
     # suppresses the per-turn workflow breadcrumb: the session would otherwise
@@ -393,6 +466,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         print(f"started: {args.name} (pid {process.pid}, session {session_id})")
         print(f"worktree: {target}")
         print(f"log:      {log_path}")
+        print(f"resume:   pi --resume {session_id}")
     return 0
 
 
@@ -472,7 +546,7 @@ def main() -> int:
     p_start.add_argument("--task", default=None, help="task path; becomes the session's Active task line")
     p_start.add_argument("--branch", default=None)
     p_start.add_argument("--base", default=None)
-    p_start.add_argument("--session-id", default=None)
+    p_start.add_argument("--session-id", default=None, help="continue this session id instead of minting a fresh one")
     p_start.add_argument("--dry-run", action="store_true")
     p_start.set_defaults(func=cmd_start)
 

@@ -45,7 +45,23 @@ def _force_utf8_stdio() -> None:
 
 _force_utf8_stdio()
 
-PROJECT_ROOT = Path.cwd()
+def _find_project_root(start: Path | None = None) -> Path:
+    """The nearest ancestor whose `.myflow/` holds `workflow.md`.
+
+    Walking up means the scripts behave the same from a subdirectory. The
+    `workflow.md` part matters: `.myflow` alone is a marker a stray directory
+    can carry, and treating one above the project (a home directory, say) as
+    the root would quietly redirect every task, session, and archive there.
+    With no project above, the start directory is used as-is.
+    """
+    directory = (start or Path.cwd()).resolve()
+    for candidate in [directory, *directory.parents]:
+        if (candidate / ".myflow" / "workflow.md").is_file():
+            return candidate
+    return directory
+
+
+PROJECT_ROOT = _find_project_root()
 TASKS_DIR = PROJECT_ROOT / ".myflow" / "tasks"
 ARCHIVE_DIR = PROJECT_ROOT / ".myflow" / "archive"
 SESSIONS_DIR = PROJECT_ROOT / ".myflow" / ".runtime" / "sessions"
@@ -216,6 +232,15 @@ def cmd_create(args: argparse.Namespace) -> int:
         "created_at": _now(),
     }
     _write_task(task_dir, data)
+    session, _source = _read_session()
+    if not session.get("current_task"):
+        # Planning needs a pointer too. Without one the extension reports
+        # no_task, so the planning block — and the jsonl review gate it
+        # carries — never reaches the model while a task sits in planning.
+        # An existing pointer is left alone: creating a second task (or a
+        # child) must not hijack the session that is already working.
+        session["current_task"] = _relative(task_dir)
+        _write_session(session)
     print(f"created: {_relative(task_dir)}")
     return 0
 
@@ -279,22 +304,6 @@ def cmd_current(args: argparse.Namespace) -> int:
     if args.source:
         line += f"\tsource:{source}"
     print(line)
-    return 0
-
-
-def cmd_finish(_args: argparse.Namespace) -> int:
-    session, _source = _read_session()
-    current = session.get("current_task")
-    if current:
-        task_dir = PROJECT_ROOT / current
-        task = _read_task(task_dir)
-        if task is not None:
-            task["status"] = "done"
-            task["finished_at"] = _now()
-            _write_task(task_dir, task)
-    session["current_task"] = None
-    _write_session(session)
-    print("finished")
     return 0
 
 
@@ -401,8 +410,6 @@ def main() -> int:
     p_current.add_argument("--json", action="store_true", help="machine-readable output")
     p_current.set_defaults(func=cmd_current)
 
-    p_finish = sub.add_parser("finish", help="finish the active task and clear the pointer")
-    p_finish.set_defaults(func=cmd_finish)
 
     p_archive = sub.add_parser("archive", help="archive a finished task under .myflow/archive/<YYYY-MM>/")
     p_archive.add_argument("task_dir")

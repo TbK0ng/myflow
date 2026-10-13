@@ -71,15 +71,16 @@ test("shell/session bridge: MYFLOW_CONTEXT_ID overrides PI_SESSION_ID", () => {
   }
 });
 
-test("task.py finish clears the active task", () => {
+test("task.py archive clears the active task pointer", () => {
   const root = makeProject();
   try {
-    runTask(root, ["create", "Finish task", "--slug", "finish"], { PI_SESSION_ID: "fin" });
-    runTask(root, ["start", ".myflow/tasks/finish"], { PI_SESSION_ID: "fin" });
-    const finished = runTask(root, ["finish"], { PI_SESSION_ID: "fin" });
-    assert.equal(finished, "finished");
-    const result = resolveActiveTaskStatus(root, "pi_fin");
-    assert.equal(result.status, "no_task");
+    runTask(root, ["create", "Archived task", "--slug", "archived"], { PI_SESSION_ID: "arc" });
+    runTask(root, ["start", ".myflow/tasks/archived"], { PI_SESSION_ID: "arc" });
+    assert.equal(resolveActiveTaskStatus(root, "pi_arc").status, "in_progress");
+
+    const archived = runTask(root, ["archive", ".myflow/tasks/archived"], { PI_SESSION_ID: "arc" });
+    assert.match(archived, /^archived: .*archived/);
+    assert.equal(resolveActiveTaskStatus(root, "pi_arc").status, "no_task");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -179,24 +180,69 @@ test("get_context.py reports session runtime context and the active task", () =>
   }
 });
 
-test("get_context.py rejects unsupported modes instead of returning unrelated output", () => {
+test("get_context.py rejects unknown arguments instead of printing default output", () => {
   const root = makeProject();
   try {
     const rejected = spawnSync("python3", [GET_CONTEXT_PY, "--mode", "phase"], {
       cwd: root,
       encoding: "utf-8",
-      env: { ...process.env },
+      env: { ...process.env, PI_SESSION_ID: "ctx-1" },
     });
     assert.equal(rejected.status, 2);
-    assert.match(rejected.stderr, /unsupported --mode 'phase'/);
-    assert.equal(rejected.stdout.trim(), "");
+    assert.match(rejected.stderr, /unrecognized argument/);
 
-    const accepted = spawnSync("python3", [GET_CONTEXT_PY, "--mode", "default"], {
+    const accepted = spawnSync("python3", [GET_CONTEXT_PY, "--json"], {
       cwd: root,
       encoding: "utf-8",
-      env: { ...process.env },
+      env: { ...process.env, PI_SESSION_ID: "ctx-1" },
     });
     assert.equal(accepted.status, 0);
+    assert.ok(JSON.parse(accepted.stdout).blocks);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("planning is reachable: task.py create points the session at the new task", () => {
+  const root = makeProject();
+  try {
+    runTask(root, ["create", "Planning task", "--slug", "planning-task"], { PI_SESSION_ID: "plan-1" });
+
+    // Before the fix the pointer stayed empty until `start`, so the extension
+    // reported no_task for the whole planning phase and its block (jsonl gate
+    // included) never reached the model.
+    const sessionFile = join(root, ".myflow", ".runtime", "sessions", "pi_plan-1.json");
+    assert.ok(existsSync(sessionFile), "create must materialize the session file");
+    assert.ok(
+      readFileSync(sessionFile, "utf-8").replaceAll("\\", "/").includes("tasks/planning-task"),
+      "the session points at the new task",
+    );
+
+    const status = resolveActiveTaskStatus(root, "pi_plan-1");
+    assert.equal(status.status, "planning");
+    assert.equal(status.taskTitle, "Planning task");
+
+    // Starting it moves the same session on to in_progress.
+    runTask(root, ["start", ".myflow/tasks/planning-task"], { PI_SESSION_ID: "plan-1" });
+    assert.equal(resolveActiveTaskStatus(root, "pi_plan-1").status, "in_progress");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("task.py create never hijacks a session that is already on a task", () => {
+  const root = makeProject();
+  try {
+    runTask(root, ["create", "First", "--slug", "first"], { PI_SESSION_ID: "plan-2" });
+    runTask(root, ["start", ".myflow/tasks/first"], { PI_SESSION_ID: "plan-2" });
+    runTask(root, ["create", "Second", "--slug", "second"], { PI_SESSION_ID: "plan-2" });
+
+    const status = resolveActiveTaskStatus(root, "pi_plan-2");
+    assert.equal(status.status, "in_progress");
+    assert.ok(
+      String(status.taskDir).replaceAll("\\", "/").endsWith("tasks/first"),
+      "the active task stays the one being worked on",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

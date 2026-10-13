@@ -38,7 +38,7 @@ const SKILLS = [
   "myflow-channel",
 ];
 const AGENTS = ["myflow-implement", "myflow-check", "myflow-research"];
-const RUNTIME_AGENTS = ["architect", "plan", "research", "implement", "check"];
+const RUNTIME_AGENTS = ["architect", "reviewer"];
 const PROMPTS = ["myflow-continue", "myflow-finish-work", "myflow-parallel"];
 
 function copyPayload(destination: string): void {

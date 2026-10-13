@@ -4,7 +4,6 @@
 Usage:
     python3 get_context.py            Output context in text format
     python3 get_context.py --json     Output context in JSON format
-    python3 get_context.py --mode default   (explicit form of the default mode)
 
 Output:
 
@@ -13,13 +12,6 @@ Output:
    full set is useful once at session start.
 2. The active task summary (path / status / title).
 3. Git branch, working-tree status, and recent commits.
-
-Only ``--mode default`` exists on purpose. This single-user Pi harness has one
-platform, no structured workflow step tree, and a plain ``.myflow/spec/``
-directory that is read directly, so the other modes some myflow builds ship
-(phase/step/platform, packages) are deliberately not implemented. Passing an
-unsupported mode fails loudly so missing output can never be mistaken for real
-output.
 """
 
 from __future__ import annotations
@@ -57,6 +49,22 @@ MAX_COMMITS_REPORTED = 5
 # ---------------------------------------------------------------------------
 # workflow.md
 # ---------------------------------------------------------------------------
+
+
+def _find_project_root(start: Path | None = None) -> Path:
+    """The nearest ancestor whose `.myflow/` holds `workflow.md`.
+
+    Walking up means a read from a subdirectory still resolves the project.
+    The `workflow.md` part matters: `.myflow` alone is a marker a stray
+    directory can carry, and treating one above the project (a home directory,
+    say) as the root would report the wrong task and workflow state. With no
+    project above, the start directory is used as-is.
+    """
+    directory = (start or Path.cwd()).resolve()
+    for candidate in [directory, *directory.parents]:
+        if (candidate / ".myflow" / "workflow.md").is_file():
+            return candidate
+    return directory
 
 
 def _workflow_blocks(workflow_md: str) -> list[tuple[str, str]]:
@@ -237,30 +245,16 @@ def _render_text(blocks: list[tuple[str, str]], task: dict | None, git: dict | N
 def main() -> int:
     args = sys.argv[1:]
 
-    mode = "default"
-    if "--mode" in args:
-        index = args.index("--mode")
-        if index + 1 >= len(args):
-            print("error: --mode requires a value (supported: default)", file=sys.stderr)
-            return 2
-        mode = args[index + 1]
-    elif "-m" in args:
-        index = args.index("-m")
-        if index + 1 >= len(args):
-            print("error: -m requires a value (supported: default)", file=sys.stderr)
-            return 2
-        mode = args[index + 1]
-
-    if mode != "default":
-        print(
-            f"error: unsupported --mode '{mode}'. This harness only implements 'default'.\n"
-            "Phase/step/platform and package-listing modes are not implemented here; "
-            "read .myflow/workflow.md directly instead (and .myflow/spec/ if the project has a spec tree).",
-            file=sys.stderr,
-        )
+    unknown = [arg for arg in args if arg not in {"--json", "-j"}]
+    if unknown:
+        # Fail loudly rather than print the default context for a flag we do
+        # not implement: output that was never produced must not look like
+        # output that was.
+        print("error: unrecognized argument(s): " + " ".join(unknown), file=sys.stderr)
+        print("usage: get_context.py [--json|-j]", file=sys.stderr)
         return 2
 
-    project_root = Path.cwd()
+    project_root = _find_project_root()
     workflow_path = project_root / ".myflow" / "workflow.md"
     blocks: list[tuple[str, str]] = []
     if workflow_path.is_file():

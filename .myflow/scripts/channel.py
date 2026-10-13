@@ -43,13 +43,30 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECT_ROOT = Path.cwd()
+def _find_project_root(start: Path | None = None) -> Path:
+    """The nearest ancestor whose `.myflow/` holds `workflow.md`.
+
+    Walking up means the scripts behave the same from a subdirectory. The
+    `workflow.md` part matters: `.myflow` alone is a marker a stray directory
+    can carry, and treating one above the project (a home directory, say) as
+    the root would quietly redirect every task, session, and archive there.
+    With no project above, the start directory is used as-is.
+    """
+    directory = (start or Path.cwd()).resolve()
+    for candidate in [directory, *directory.parents]:
+        if (candidate / ".myflow" / "workflow.md").is_file():
+            return candidate
+    return directory
+
+
+PROJECT_ROOT = _find_project_root()
 # Deliberately NOT `~/.myflow`: `.myflow/` is the project-root marker, so a
 # user-level store of that name would make every project under the home
 # directory resolve its root to the home directory.
@@ -295,6 +312,32 @@ def terminate(pid: object) -> bool:
         return False
 
 
+def terminate_tree(pid: object) -> bool:
+    """Stop a worker together with everything it started.
+
+    A worker's own children (MCP servers, for one) inherit its log handle and
+    outlive a kill aimed at the worker alone, which is why a channel could not
+    be removed right after its worker stopped. Workers are started detached /
+    in their own session, so the whole tree can be addressed at once.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        completed = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return completed.returncode == 0
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        return True
+    except (OSError, SystemError, ValueError):
+        return terminate(pid)
+
+
 def wait_for_exit(pids: list[object], timeout: float = 5.0) -> None:
     """Block until the pids are gone, so their file handles are released.
 
@@ -457,14 +500,28 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     scope = args.scope
     guard = read_worker_guard()
     workers = [worker for worker in read_workers(scope) if is_alive(worker.get("pid"))]
-    if not args.dry_run:
-        live = [worker for worker in workers if worker.get("channel") == args.name]
-        if len(live) >= guard["max_live_workers"]:
+    # The guards run for --dry-run too: a plan that could not be launched is
+    # worth refusing up front rather than reporting as ready.
+    live = [worker for worker in workers if worker.get("channel") == args.name]
+    if len(live) >= guard["max_live_workers"]:
+        print(
+            f"error: worker guard: {len(live)} live worker(s) >= max_live_workers={guard['max_live_workers']}",
+            file=sys.stderr,
+        )
+        return 1
+    if args.agent == "reviewer":
+        # One writer per tree: a reviewer fixes files, so two of them in the
+        # same project would edit the working tree at once.
+        reviewers = [worker for worker in workers if worker.get("agent") == "reviewer"]
+        if reviewers:
+            handles = ", ".join(str(worker.get("handle")) for worker in reviewers)
             print(
-                f"error: worker guard: {len(live)} live worker(s) >= max_live_workers={guard['max_live_workers']}",
+                f"error: one reviewer per tree: {handles} is already live; "
+                "wait for it (or stop it) before starting another",
                 file=sys.stderr,
             )
             return 1
+    if not args.dry_run:
         write_workers(scope, workers)
 
     handle = args.handle or f"{args.agent}-{int(time.time())}"
@@ -499,14 +556,27 @@ def cmd_spawn(args: argparse.Namespace) -> int:
         command += ["--model", args.model]
     command.append(worker_prompt)
 
+    # A worker receives a work order, not a user turn: suppress the per-turn
+    # workflow breadcrumb so it does not stop to ask about task creation.
+    worker_env = {**os.environ, "MYFLOW_SKIP_BREADCRUMB": "1"}
+    if args.agent == "reviewer":
+        # A channel worker is an ordinary pi process, not a dispatched
+        # sub-agent, so it carries no agent type. Flag review workers so the
+        # verify gate holds them to the same standard as a myflow-check
+        # sub-agent.
+        worker_env["MYFLOW_VERIFY_GATE"] = "1"
+
     if args.dry_run:
-        print(json.dumps({"handle": handle, "command": command, "log": str(log_path), "since": since}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"handle": handle, "command": command, "env": worker_env, "log": str(log_path), "since": since},
+                ensure_ascii=False,
+            )
+        )
         return 0
 
     kwargs: dict = {"cwd": str(PROJECT_ROOT), "stdin": subprocess.DEVNULL, "stdout": open(log_path, "wb"), "stderr": subprocess.STDOUT}
-    # A worker receives a work order, not a user turn: suppress the per-turn
-    # workflow breadcrumb so it does not stop to ask about task creation.
-    kwargs["env"] = {**os.environ, "MYFLOW_SKIP_BREADCRUMB": "1"}
+    kwargs["env"] = worker_env
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
@@ -556,7 +626,7 @@ def cmd_kill(args: argparse.Namespace) -> int:
     for worker in workers:
         match = args.all or worker.get("handle") == args.name or worker.get("channel") == args.name
         if match and is_alive(worker.get("pid")):
-            if terminate(worker.get("pid")):
+            if terminate_tree(worker.get("pid")):
                 killed += 1
             continue
         survivors.append(worker)
@@ -582,7 +652,7 @@ def cmd_rm(args: argparse.Namespace) -> int:
         return 1
     if live:
         for worker in live:
-            terminate(worker.get("pid"))
+            terminate_tree(worker.get("pid"))
         stopped = {worker.get("pid") for worker in live}
         write_workers(
             args.scope,
@@ -615,7 +685,7 @@ def cmd_prune(args: argparse.Namespace) -> int:
             continue
         last = last_event_time(str(worker.get("channel")), args.scope, str(worker.get("handle")))
         if last is not None and time.time() - last > guard["idle_timeout"]:
-            if terminate(worker.get("pid")):
+            if terminate_tree(worker.get("pid")):
                 killed_idle += 1
                 continue
         kept.append(worker)

@@ -140,7 +140,7 @@ test("channel spawn --dry-run: builds a worker command from the runtime agent", 
         "spawn",
         "review",
         "--agent",
-        "check",
+        "reviewer",
         "--task",
         ".myflow/tasks/demo",
         "--handle",
@@ -151,12 +151,23 @@ test("channel spawn --dry-run: builds a worker command from the runtime agent", 
     assert.equal(planned.handle, "checker");
     assert.ok(planned.command.includes("--append-system-prompt"));
     assert.ok(
-      planned.command.some((part: string) => part.endsWith(join(".myflow", "agents", "check.md"))),
+      planned.command.some((part: string) => part.endsWith(join(".myflow", "agents", "reviewer.md"))),
       "the runtime agent definition is attached",
     );
     const prompt = planned.command[planned.command.length - 1];
     assert.match(prompt, /Active task: \.myflow\/tasks\/demo/);
     assert.match(prompt, /--as checker/);
+
+    assert.equal(planned.env.MYFLOW_VERIFY_GATE, "1", "a review worker carries the verify-gate flag");
+    assert.equal(planned.env.MYFLOW_SKIP_BREADCRUMB, "1");
+
+    // The flag is the launcher standing in for an agent type: without it a peer
+    // check would settle without the verify gate ever running.
+    channel(sandbox, ["create", "peer"]);
+    const peer = JSON.parse(
+      channel(sandbox, ["spawn", "peer", "--agent", "architect", "--dry-run"]),
+    );
+    assert.ok(!("MYFLOW_VERIFY_GATE" in peer.env), "a non-review worker stays ungated");
 
     assert.match(channel(sandbox, ["spawn", "review", "--agent", "nope", "--dry-run"], true), /no runtime agent definition/);
   } finally {
@@ -192,7 +203,7 @@ test("channel worker guard: refuses to exceed max_live_workers", () => {
     assert.equal(workers.guard.max_live_workers, 1);
 
     assert.match(
-      channel(sandbox, ["spawn", "review", "--agent", "check", "--prompt", "go"], true),
+      channel(sandbox, ["spawn", "review", "--agent", "reviewer", "--prompt", "go"], true),
       /worker guard: 1 live worker\(s\) >= max_live_workers=1/,
     );
   } finally {
@@ -290,6 +301,133 @@ test("channel rm --force waits out a log handle that is still open", () => {
     } catch {
       /* already gone */
     }
+    cleanup(sandbox);
+  }
+});
+
+async function waitForFile(path: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${path}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+test("channel rm --force stops the worker together with its children", async () => {
+  const sandbox = makeSandbox();
+  channel(sandbox, ["create", "tree"]);
+  const store = projectStore(sandbox);
+  const log = join(store, "tree", "logs", "w1.log");
+  const pidFile = join(store, "tree", "child.pid");
+  mkdirSync(dirname(log), { recursive: true });
+  writeFileSync(log, "x");
+  // A worker that leaves a child holding its log handle open: the case that used
+  // to keep the channel undeletable, because only the worker itself was stopped.
+  // A real worker leaves MCP servers behind in exactly the same way.
+  // A worker that leaves a child holding its log handle open: the case that used
+  // to keep the channel undeletable, because only the worker itself was stopped.
+  // A real worker leaves MCP servers behind in exactly the same way. The holder is
+  // Python on purpose: Python opens files without FILE_SHARE_DELETE, so its handle
+  // really blocks the delete (Node's handles do not).
+  const holder = join(store, "tree", "holder.py");
+  writeFileSync(
+    holder,
+    [
+      'import os',
+      'import subprocess',
+      'import sys',
+      'import time',
+      '',
+      'mode, log, pidfile = sys.argv[1], sys.argv[2], sys.argv[3]',
+      'if mode == "child":',
+      '    handle = open(log, "ab")',
+      '    time.sleep(120)',
+      'else:',
+      '    child = subprocess.Popen(',
+      '        [sys.executable, __file__, "child", log, pidfile],',
+      '        stdin=subprocess.DEVNULL,',
+      '        stdout=subprocess.DEVNULL,',
+      '        stderr=subprocess.DEVNULL,',
+      '    )',
+      '    with open(pidfile, "w", encoding="utf-8") as out:',
+      '        out.write(str(child.pid))',
+      '    handle = open(log, "ab")',
+      '    time.sleep(120)',
+    ].join(String.fromCharCode(10)),
+    "utf-8",
+  );
+  const worker = spawn("python3", [holder, "parent", log, pidFile], { stdio: "ignore" });
+  try {
+    writeFileSync(
+      join(store, "workers.json"),
+      JSON.stringify({ workers: [{ handle: "w1", channel: "tree", scope: "project", agent: "research", pid: worker.pid, started_at: "x", log }] }),
+      "utf-8",
+    );
+    await waitForFile(pidFile);
+    const childPid = Number(readFileSync(pidFile, "utf-8"));
+
+    assert.match(channel(sandbox, ["rm", "tree", "--force"]), /removed: tree/);
+    assert.ok(!existsSync(join(store, "tree")), "the log is deletable, so nothing holds it");
+    let alive = true;
+    try {
+      process.kill(childPid, 0);
+    } catch {
+      alive = false;
+    }
+    assert.equal(alive, false, "the worker process is stopped with its children");
+  } finally {
+    try {
+      process.kill(worker.pid!, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    cleanup(sandbox);
+  }
+});
+
+test("channel spawn: one reviewer per tree, other peers unaffected", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "review"]);
+    // A live reviewer is the writer slot in this tree; the guard counts peers
+    // with the same job, not every worker.
+    const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { detached: true, stdio: "ignore" });
+    sleeper.unref();
+    const store = projectStore(sandbox);
+    writeFileSync(
+      join(store, "workers.json"),
+      JSON.stringify({
+        workers: [{ handle: "rev", channel: "review", scope: "project", agent: "reviewer", pid: sleeper.pid, started_at: "x", log: "x" }],
+      }),
+      "utf-8",
+    );
+    try {
+      const refused = channel(sandbox, ["spawn", "review", "--agent", "reviewer", "--handle", "rev2", "--dry-run"], true);
+      assert.match(refused, /one reviewer per tree/);
+      assert.match(refused, /rev is already live/);
+
+      // A design peer is read-mostly outreach, not a second writer.
+      const peer = JSON.parse(channel(sandbox, ["spawn", "review", "--agent", "architect", "--handle", "arch2", "--dry-run"]));
+      assert.equal(peer.handle, "arch2");
+
+      // A dead reviewer frees the slot.
+      writeFileSync(
+        join(store, "workers.json"),
+        JSON.stringify({
+          workers: [{ handle: "old", channel: "review", scope: "project", agent: "reviewer", pid: 999999999, started_at: "x", log: "x" }],
+        }),
+        "utf-8",
+      );
+      const allowed = JSON.parse(channel(sandbox, ["spawn", "review", "--agent", "reviewer", "--handle", "rev3", "--dry-run"]));
+      assert.equal(allowed.handle, "rev3");
+    } finally {
+      try {
+        process.kill(sleeper.pid!, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+  } finally {
     cleanup(sandbox);
   }
 });

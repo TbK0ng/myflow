@@ -209,6 +209,7 @@ Why:
 - It persists findings to `{TASK_DIR}/research/<topic>.md` (the contract — see `workflow.md` Phase 1.2)
 - It returns only `{file path, one-line summary}` to the main agent
 - Independent topics can be **parallelized** — spawn multiple sub-agents in one tool call
+- Only read-only agents may run in parallel: `parallel` is rejected for `myflow-implement` and `myflow-check` (one writer per working tree)
 
 > **Fallback**: if `myflow_subagent` dispatch is unavailable in the current session, do the research inline and write the same files to `{TASK_DIR}/research/<topic>.md` yourself. Keep the contract (persisted file + one-line summary) either way.
 

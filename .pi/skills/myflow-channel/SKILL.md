@@ -22,8 +22,8 @@ python3 ./.myflow/scripts/channel.py messages <channel> --json
 
 ## Runtime Agents
 
-`.myflow/agents/` — `architect`, `plan`, `research`, `implement`, `check`. They
-are peer workers, not sub-agents: they run in this project, keep their own
+`.myflow/agents/` — `architect` (design peer) and `reviewer` (code review peer).
+They are peer workers, not sub-agents: they run in this project, keep their own
 session, and report back through the channel.
 
 ## Workflows
@@ -45,7 +45,7 @@ a brainstorm.
 ### Spawn an implement or check worker
 
 ```bash
-python3 ./.myflow/scripts/channel.py spawn review --agent check --handle checker \
+python3 ./.myflow/scripts/channel.py spawn review --agent reviewer --handle checker \
   --task .myflow/tasks/<slug>
 python3 ./.myflow/scripts/channel.py wait review --from checker --kind done
 ```
@@ -72,6 +72,8 @@ python3 ./.myflow/scripts/channel.py rm <channel> --force   # stop its live work
 
 ## Rules
 
+- One reviewer per tree: `reviewer` fixes files, so `spawn` refuses a second live
+  reviewer. `architect` (read-mostly outreach) has no such limit.
 - A channel carries messages; task artifacts under `.myflow/tasks/<slug>/` carry
   the durable record. Do not re-invent a tracker on top of the event log.
 - Completion signal is `--kind done`, a system event the runtime understands. A
