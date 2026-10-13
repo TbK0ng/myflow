@@ -242,15 +242,54 @@ def write_workers(scope: str, workers: list[dict]) -> None:
 
 
 def is_alive(pid: object) -> bool:
+    """Whether the process is still running.
+
+    Windows cannot use the POSIX `kill(pid, 0)` probe: it fails with
+    `SystemError`/`OSError` for a live process owned by another process. Ask the
+    kernel for the exit code instead.
+    """
     if not isinstance(pid, int) or pid <= 0:
         return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except (OSError, SystemError, ValueError):
-        # Windows reports an unopenable pid as OSError or, from some CPython
-        # builds, SystemError with the OSError attached.
         return False
     return True
+
+
+def terminate(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+        if not handle:
+            return False
+        try:
+            return bool(kernel32.TerminateProcess(handle, 1))
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 15)
+        return True
+    except (OSError, SystemError, ValueError):
+        return False
 
 
 def last_event_time(name: str, scope: str, handle: str) -> float | None:
@@ -264,6 +303,104 @@ def last_event_time(name: str, scope: str, handle: str) -> float | None:
             continue
         latest = parsed.timestamp()
     return latest
+
+
+def _read_meta(name: str, scope: str) -> dict:
+    path = channel_dir(name, scope) / "meta.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_meta(name: str, scope: str, meta: dict) -> None:
+    path = channel_dir(name, scope) / "meta.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _slug(text: str, max_length: int = 24) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return (slug or "thread")[:max_length].strip("-") or "thread"
+
+
+def fold_threads(events: list[dict]) -> list[dict]:
+    """Fold thread events into ordered thread records."""
+    threads: dict[str, dict] = {}
+    order: list[str] = []
+    for event in events:
+        if event.get("kind") != "thread":
+            continue
+        thread_id = event.get("thread")
+        if not thread_id:
+            continue
+        if thread_id not in threads:
+            threads[thread_id] = {
+                "id": thread_id,
+                "title": event.get("title") or "(untitled)",
+                "state": "open",
+                "author": event.get("speaker"),
+                "created_at": event.get("ts"),
+                "updated_at": event.get("ts"),
+                "posts": [],
+            }
+            order.append(thread_id)
+        thread = threads[thread_id]
+        action = event.get("action", "reply")
+        if action == "open" and event.get("title"):
+            thread["title"] = event["title"]
+        elif action == "rename" and event.get("title"):
+            thread["title"] = event["title"]
+        elif action == "close":
+            thread["state"] = "closed"
+        elif action == "reopen":
+            thread["state"] = "open"
+        thread["updated_at"] = event.get("ts")
+        thread["posts"].append(
+            {
+                "seq": event.get("seq"),
+                "action": action,
+                "speaker": event.get("speaker"),
+                "tag": event.get("tag"),
+                "text": event.get("text"),
+                "ts": event.get("ts"),
+            }
+        )
+    return [threads[thread_id] for thread_id in order]
+
+
+def fold_context(events: list[dict]) -> list[dict]:
+    """Fold context events into the current context set."""
+    items: dict[str, dict] = {}
+    for event in events:
+        if event.get("kind") != "context":
+            continue
+        context_id = event.get("context_id")
+        if not context_id:
+            continue
+        if event.get("action") == "delete":
+            items.pop(context_id, None)
+            continue
+        items[context_id] = {
+            "id": context_id,
+            "target": event.get("target", "channel"),
+            "thread": event.get("thread"),
+            "kind": event.get("context_kind"),
+            "label": event.get("label"),
+            "value": event.get("value"),
+            "added_at": event.get("ts"),
+        }
+    return list(items.values())
+
+
+def fold_title(events: list[dict]) -> str | None:
+    """The last title event wins; an empty title clears it."""
+    title: str | None = None
+    for event in events:
+        if event.get("kind") == "title":
+            title = event.get("title") or None
+    return title
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +450,213 @@ def cmd_list(args: argparse.Namespace) -> int:
                 pass
             rows.append(f"{entry.name}\t{kind}\t{scope}\t{len(read_events(entry.name, scope))} event(s)")
     print("\n".join(rows) if rows else "no channels")
+    return 0
+
+
+def cmd_post(args: argparse.Namespace) -> int:
+    if not _require_channel(args.name, args.scope):
+        return 1
+    meta = _read_meta(args.name, args.scope)
+    if meta.get("type") != "forum":
+        print(f"error: '{args.name}' is not a forum channel (create it with --type forum)", file=sys.stderr)
+        return 1
+    text = sys.stdin.read() if args.stdin else (args.text or "")
+    text = text.strip()
+    if not text:
+        print("error: empty post", file=sys.stderr)
+        return 1
+
+    events = read_events(args.name, args.scope)
+    taken = {thread["id"] for thread in fold_threads(events)}
+    base = _slug(args.title)
+    thread_id = base
+    suffix = 2
+    while thread_id in taken:
+        thread_id = f"{base}-{suffix}"
+        suffix += 1
+
+    event = append_event(
+        args.name,
+        args.scope,
+        {
+            "kind": "thread",
+            "action": "open",
+            "thread": thread_id,
+            "title": args.title,
+            "text": text,
+            "speaker": args.as_handle,
+            "tag": args.tag,
+            "idempotency_key": args.idempotency_key,
+        },
+    )
+    if event.get("action") == "open" and event.get("thread") != thread_id:
+        print(f"posted: #{event['seq']} thread {event['thread']} (duplicate)")
+        return 0
+    print(f"posted: #{event['seq']} thread {thread_id}")
+    return 0
+
+
+def cmd_forum(args: argparse.Namespace) -> int:
+    if not _require_channel(args.name, args.scope):
+        return 1
+    threads = fold_threads(read_events(args.name, args.scope))
+    if args.state != "all":
+        threads = [thread for thread in threads if thread["state"] == args.state]
+    if args.json:
+        print(json.dumps({"title": fold_title(read_events(args.name, args.scope)), "threads": threads}, ensure_ascii=False))
+        return 0
+    if not threads:
+        print("(no threads)")
+        return 0
+    for thread in threads:
+        print(f"{thread['id']}\t{thread['state']}\t{len(thread['posts'])} post(s)\t{thread['title']}\t{thread['updated_at']}")
+    return 0
+
+
+def cmd_thread(args: argparse.Namespace) -> int:
+    if not _require_channel(args.name, args.scope):
+        return 1
+    threads = {thread["id"]: thread for thread in fold_threads(read_events(args.name, args.scope))}
+    thread = threads.get(args.thread)
+    if thread is None:
+        print(f"error: unknown thread '{args.thread}'", file=sys.stderr)
+        return 1
+
+    if args.rename:
+        if not args.as_handle:
+            print("error: --as is required to rename a thread", file=sys.stderr)
+            return 1
+        event = append_event(
+            args.name,
+            args.scope,
+            {"kind": "thread", "action": "rename", "thread": args.thread, "title": args.rename, "speaker": args.as_handle},
+        )
+        print(f"#{event['seq']} renamed {args.thread}: {args.rename}")
+        return 0
+
+    if args.close or args.reopen:
+        if not args.as_handle:
+            print("error: --as is required to change a thread", file=sys.stderr)
+            return 1
+        event = append_event(
+            args.name,
+            args.scope,
+            {
+                "kind": "thread",
+                "action": "close" if args.close else "reopen",
+                "thread": args.thread,
+                "text": args.text or "",
+                "speaker": args.as_handle,
+            },
+        )
+        print(f"#{event['seq']} {event['action']} {args.thread}")
+        return 0
+
+    if args.text:
+        if not args.as_handle:
+            print("error: --as is required to reply", file=sys.stderr)
+            return 1
+        event = append_event(
+            args.name,
+            args.scope,
+            {
+                "kind": "thread",
+                "action": "reply",
+                "thread": args.thread,
+                "text": args.text,
+                "speaker": args.as_handle,
+                "tag": args.tag,
+                "idempotency_key": args.idempotency_key,
+            },
+        )
+        print(f"#{event['seq']} reply {args.thread}")
+        return 0
+
+    if args.json:
+        print(json.dumps(thread, ensure_ascii=False))
+        return 0
+    print(f"thread: {thread['id']} [{thread['state']}] {thread['title']}")
+    for post in thread["posts"]:
+        tag = f" [{post['tag']}]" if post.get("tag") else ""
+        print(f"#{post['seq']} {post['action']}{tag} {post['speaker']}: {post['text']}")
+    return 0
+
+
+def cmd_context(args: argparse.Namespace) -> int:
+    if not _require_channel(args.name, args.scope):
+        return 1
+    events = read_events(args.name, args.scope)
+
+    if args.action == "list":
+        items = fold_context(events)
+        if args.thread:
+            items = [item for item in items if item.get("thread") == args.thread]
+        if args.json:
+            print(json.dumps({"context": items}, ensure_ascii=False))
+        elif not items:
+            print("(no context)")
+        else:
+            for item in items:
+                scope_label = item["thread"] or "channel"
+                print(f"{item['id']}\t{scope_label}\t{item['kind']}\t{item['label'] or '-'}\t{item['value']}")
+        return 0
+
+    if args.action == "delete":
+        if not args.context_id:
+            print("error: context delete needs a context id", file=sys.stderr)
+            return 1
+        event = append_event(
+            args.name,
+            args.scope,
+            {"kind": "context", "action": "delete", "context_id": args.context_id, "speaker": args.as_handle or "system"},
+        )
+        print(f"#{event['seq']} deleted context {args.context_id}")
+        return 0
+
+    if not args.value or not args.kind:
+        print("error: context add needs --kind and --value", file=sys.stderr)
+        return 1
+    if args.target == "thread" and not args.thread:
+        print("error: context add --target thread needs --thread <id>", file=sys.stderr)
+        return 1
+    context_id = args.context_id or f"{_slug(args.label or args.kind, 16)}-{int(time.time())}"
+    event = append_event(
+        args.name,
+        args.scope,
+        {
+            "kind": "context",
+            "action": "add",
+            "context_id": context_id,
+            "target": args.target,
+            "thread": args.thread if args.target == "thread" else None,
+            "context_kind": args.kind,
+            "label": args.label,
+            "value": args.value,
+            "speaker": args.as_handle or "system",
+        },
+    )
+    print(f"#{event['seq']} context {context_id} ({args.target})")
+    return 0
+
+
+def cmd_title(args: argparse.Namespace) -> int:
+    if not _require_channel(args.name, args.scope):
+        return 1
+    title = " ".join(args.title).strip() if args.action == "set" else ""
+    if args.action == "set" and not title:
+        print("error: title set needs a title", file=sys.stderr)
+        return 1
+    event = append_event(args.name, args.scope, {"kind": "title", "title": title, "speaker": args.as_handle or "system"})
+    if title:
+        meta = _read_meta(args.name, args.scope)
+        meta["title"] = title
+        _write_meta(args.name, args.scope, meta)
+        print(f"#{event['seq']} title set: {title}")
+    else:
+        meta = _read_meta(args.name, args.scope)
+        meta.pop("title", None)
+        _write_meta(args.name, args.scope, meta)
+        print(f"#{event['seq']} title cleared")
     return 0
 
 
@@ -508,11 +852,8 @@ def cmd_kill(args: argparse.Namespace) -> int:
     for worker in workers:
         match = args.all or worker.get("handle") == args.name or worker.get("channel") == args.name
         if match and is_alive(worker.get("pid")):
-            try:
-                os.kill(int(worker["pid"]), 15)
+            if terminate(worker.get("pid")):
                 killed += 1
-            except (OSError, ValueError):
-                pass
             continue
         survivors.append(worker)
     write_workers(args.scope, survivors)
@@ -540,12 +881,9 @@ def cmd_prune(args: argparse.Namespace) -> int:
             continue
         last = last_event_time(str(worker.get("channel")), args.scope, str(worker.get("handle")))
         if last is not None and time.time() - last > guard["idle_timeout"]:
-            try:
-                os.kill(int(worker["pid"]), 15)
+            if terminate(worker.get("pid")):
                 killed_idle += 1
                 continue
-            except (OSError, ValueError):
-                pass
         kept.append(worker)
     write_workers(args.scope, kept)
     print(f"pruned: {len(workers) - len(kept)} worker record(s), killed {killed_idle} idle worker(s)")
@@ -568,6 +906,55 @@ def main() -> int:
     p_list = with_scope(sub.add_parser("list", help="list channels"))
     p_list.add_argument("--all", action="store_true", help="include the global bucket")
     p_list.set_defaults(func=cmd_list)
+
+    p_post = with_scope(sub.add_parser("post", help="open a thread in a forum channel"))
+    p_post.add_argument("name")
+    p_post.add_argument("title")
+    p_post.add_argument("--as", dest="as_handle", required=True)
+    p_post.add_argument("--text", default="")
+    p_post.add_argument("--stdin", action="store_true")
+    p_post.add_argument("--tag", default=None)
+    p_post.add_argument("--idempotency-key", default=None)
+    p_post.set_defaults(func=cmd_post)
+
+    p_forum = with_scope(sub.add_parser("forum", help="list threads in a forum channel"))
+    p_forum.add_argument("name")
+    p_forum.add_argument("--state", choices=["open", "closed", "all"], default="open")
+    p_forum.add_argument("--json", action="store_true")
+    p_forum.set_defaults(func=cmd_forum)
+
+    p_thread = with_scope(sub.add_parser("thread", help="view, reply to, close, or reopen a thread"))
+    p_thread.add_argument("name")
+    p_thread.add_argument("thread")
+    p_thread.add_argument("--text", default="")
+    p_thread.add_argument("--rename", default=None, help="new thread title")
+    p_thread.add_argument("--as", dest="as_handle", default=None)
+    p_thread.add_argument("--close", action="store_true")
+    p_thread.add_argument("--reopen", action="store_true")
+    p_thread.add_argument("--tag", default=None)
+    p_thread.add_argument("--idempotency-key", default=None)
+    p_thread.add_argument("--json", action="store_true")
+    p_thread.set_defaults(func=cmd_thread)
+
+    p_context = with_scope(sub.add_parser("context", help="manage channel or thread context"))
+    p_context.add_argument("action", choices=["add", "list", "delete"])
+    p_context.add_argument("name")
+    p_context.add_argument("context_id", nargs="?", default=None)
+    p_context.add_argument("--target", choices=["channel", "thread"], default="channel")
+    p_context.add_argument("--thread", default=None)
+    p_context.add_argument("--kind", default=None)
+    p_context.add_argument("--value", default=None)
+    p_context.add_argument("--label", default=None)
+    p_context.add_argument("--as", dest="as_handle", default=None)
+    p_context.add_argument("--json", action="store_true")
+    p_context.set_defaults(func=cmd_context)
+
+    p_title = with_scope(sub.add_parser("title", help="set or clear the channel title"))
+    p_title.add_argument("action", choices=["set", "clear"])
+    p_title.add_argument("name")
+    p_title.add_argument("title", nargs="*", default=[])
+    p_title.add_argument("--as", dest="as_handle", default=None)
+    p_title.set_defaults(func=cmd_title)
 
     p_send = with_scope(sub.add_parser("send", help="append a message"))
     p_send.add_argument("name")

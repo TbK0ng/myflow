@@ -229,3 +229,107 @@ test("channel store stays under the user channel root", () => {
     cleanup(sandbox);
   }
 });
+
+test("forum: post, duplicate titles, list, view, reply, and close", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "board", "--type", "forum"]);
+    assert.match(
+      channel(sandbox, ["post", "board", "First issue", "--as", "alice", "--text", "broken"]),
+      /posted: #\d+ thread first-issue/,
+    );
+    channel(sandbox, ["post", "board", "Second issue", "--as", "bob", "--text", "again"]);
+    assert.match(
+      channel(sandbox, ["post", "board", "First issue", "--as", "alice", "--text", "another angle"]),
+      /thread first-issue-2/,
+      "a taken slug gets a suffix",
+    );
+
+    const listing = channel(sandbox, ["forum", "board"]);
+    assert.match(listing, /^first-issue\topen\t1 post\(s\)\tFirst issue/m);
+    assert.match(listing, /first-issue-2/);
+    assert.match(listing, /second-issue/);
+
+    assert.match(channel(sandbox, ["thread", "board", "first-issue"]), /open alice: broken/);
+    assert.match(channel(sandbox, ["thread", "board", "first-issue", "--text", "looking", "--as", "bob"]), /reply first-issue/);
+    const json = JSON.parse(channel(sandbox, ["thread", "board", "first-issue", "--json"]));
+    assert.equal(json.posts.length, 2);
+    assert.equal(json.state, "open");
+    assert.equal(json.posts[1].action, "reply");
+
+    channel(sandbox, ["thread", "board", "second-issue", "--close", "--as", "bob"]);
+    assert.ok(!channel(sandbox, ["forum", "board"]).includes("second-issue"), "closed threads leave the open list");
+    assert.match(channel(sandbox, ["forum", "board", "--state", "all"]), /^second-issue\tclosed/m);
+    channel(sandbox, ["thread", "board", "second-issue", "--reopen", "--as", "bob"]);
+    assert.match(channel(sandbox, ["forum", "board"]), /second-issue/);
+
+    assert.match(
+      channel(sandbox, ["thread", "board", "second-issue", "--rename", "Renamed issue", "--as", "bob"]),
+      /renamed second-issue: Renamed issue/,
+    );
+    assert.match(channel(sandbox, ["forum", "board"]), /Renamed issue/);
+
+    assert.match(channel(sandbox, ["thread", "board", "nope"], true), /unknown thread/);
+    assert.match(channel(sandbox, ["thread", "board", "first-issue", "--close"], true), /--as is required/);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("forum commands are rejected on a chat channel", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "chat"]);
+    assert.match(
+      channel(sandbox, ["post", "chat", "Title", "--as", "me", "--text", "x"], true),
+      /not a forum channel/,
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel context: add, list, and delete for channel and thread scope", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "board", "--type", "forum"]);
+    channel(sandbox, ["post", "board", "Issue", "--as", "alice", "--text", "body"]);
+
+    const added = channel(sandbox, [
+      "context", "add", "board", "--kind", "spec", "--value", "docs/spec.md", "--label", "Spec", "--as", "alice",
+    ]);
+    const contextId = added.match(/context (\S+) \(/)?.[1];
+    assert.ok(contextId, `context id expected in: ${added}`);
+    channel(sandbox, [
+      "context", "add", "board", "--target", "thread", "--thread", "issue", "--kind", "file", "--value", "src/x.ts",
+    ]);
+
+    const listing = channel(sandbox, ["context", "list", "board"]);
+    assert.match(listing, new RegExp(`${contextId}\tchannel\tspec\tSpec\tdocs/spec\.md`));
+    assert.match(listing, /file-\d+\tissue\tfile/);
+
+    const json = JSON.parse(channel(sandbox, ["context", "list", "board", "--json"]));
+    assert.equal(json.context.length, 2);
+    assert.equal(json.context.find((item: { thread: string | null }) => item.thread === "issue").value, "src/x.ts");
+
+    channel(sandbox, ["context", "delete", "board", contextId]);
+    assert.equal(JSON.parse(channel(sandbox, ["context", "list", "board", "--json"])).context.length, 1);
+    assert.match(channel(sandbox, ["context", "add", "board", "--target", "thread", "--kind", "x", "--value", "y"], true), /needs --thread/);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("channel title: set and clear through the event log", () => {
+  const sandbox = makeSandbox();
+  try {
+    channel(sandbox, ["create", "board", "--type", "forum"]);
+    assert.match(channel(sandbox, ["title", "set", "board", "My", "Board"]), /title set: My Board/);
+    assert.equal(JSON.parse(channel(sandbox, ["forum", "board", "--json"])).title, "My Board");
+    assert.match(channel(sandbox, ["title", "clear", "board"]), /title cleared/);
+    assert.equal(JSON.parse(channel(sandbox, ["forum", "board", "--json"])).title, null);
+    assert.match(channel(sandbox, ["title", "set", "board"], true), /needs a title/);
+  } finally {
+    cleanup(sandbox);
+  }
+});

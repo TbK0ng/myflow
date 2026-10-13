@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, cpSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 
 const ROOT = join(import.meta.dirname, "..");
 const WORKTREE_PY = join(ROOT, ".myflow", "scripts", "worktree.py");
@@ -200,6 +200,61 @@ test("worktree registry lives under .myflow/.runtime and survives reads", () => 
     assert.equal(registry.sessions[0].name, "epsilon");
     assert.equal(registry.sessions[0].branch, "myflow/epsilon");
   } finally {
+    cleanup(project);
+  }
+});
+
+test("worktree start --dry-run: plans a delegated session without touching git", () => {
+  const project = makeRepo("worktree_dir: ../worktrees\n");
+  try {
+    const planned = JSON.parse(
+      worktree(project, [
+        "start",
+        "zeta",
+        "--prompt",
+        "do the work",
+        "--task",
+        ".myflow/tasks/demo",
+        "--dry-run",
+      ]),
+    );
+    assert.equal(planned.session_id, "myflow-zeta");
+    assert.equal(planned.env.MYFLOW_SKIP_BREADCRUMB, "1");
+    assert.ok(planned.command.includes("--session-id"));
+    assert.match(planned.command[planned.command.length - 1], /^Active task: \.myflow\/tasks\/demo\n\ndo the work$/);
+    assert.ok(!existsSync(join(project.worktrees, "zeta")), "dry-run must not create the worktree");
+    assert.ok(!existsSync(join(project.root, ".myflow", ".runtime", "worktrees.json")), "dry-run must not register a session");
+  } finally {
+    cleanup(project);
+  }
+});
+
+test("is_alive: a detached child is reported alive from another process", () => {
+  const project = makeRepo("worktree_dir: ../worktrees\n");
+  const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  sleeper.unref();
+  try {
+    mkdirSync(join(project.root, ".myflow", ".runtime"), { recursive: true });
+    writeFileSync(
+      join(project.root, ".myflow", ".runtime", "worktrees.json"),
+      JSON.stringify({
+        sessions: [
+          { name: "sleeper", path: project.root, branch: "myflow/sleeper", created_at: "x", pid: sleeper.pid },
+        ],
+      }),
+      "utf-8",
+    );
+    const listed = JSON.parse(worktree(project, ["list", "--json"])).sessions[0];
+    assert.equal(listed.alive, true, "a live detached process must not read as dead");
+  } finally {
+    try {
+      process.kill(sleeper.pid!, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
     cleanup(project);
   }
 });

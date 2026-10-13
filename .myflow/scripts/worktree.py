@@ -168,13 +168,31 @@ def forget(name: str) -> None:
 
 
 def is_alive(pid: object) -> bool:
+    """Whether the process is still running.
+
+    Windows cannot use the POSIX `kill(pid, 0)` probe: it fails with
+    `SystemError`/`OSError` for a live process owned by another process. Ask the
+    kernel for the exit code instead.
+    """
     if not isinstance(pid, int) or pid <= 0:
         return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except (OSError, SystemError, ValueError):
-        # Windows reports an unopenable pid as OSError or, from some CPython
-        # builds, SystemError with the OSError attached.
         return False
     return True
 
@@ -309,6 +327,34 @@ def _pi_command() -> list[str]:
 
 
 def cmd_start(args: argparse.Namespace) -> int:
+    root = repo_root()
+    if root is None:
+        print("error: not inside a git repository", file=sys.stderr)
+        return 1
+    session_id = args.session_id or f"myflow-{args.name}"
+    log_path = LOG_DIR / f"{args.name}.log"
+    # The initial run is a delegated work order, so it carries the task line and
+    # suppresses the per-turn workflow breadcrumb: the session would otherwise
+    # stop to ask about task creation instead of doing the work.
+    prompt = f"Active task: {args.task}\n\n{args.prompt}" if args.task else args.prompt
+    command = [*_pi_command(), "-p", "--approve", "--session-id", session_id, prompt]
+
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "name": args.name,
+                    "path": str(worktree_dir(root, read_config()) / args.name),
+                    "session_id": session_id,
+                    "log": str(log_path),
+                    "env": {"MYFLOW_SKIP_BREADCRUMB": "1"},
+                    "command": command,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+
     create_args = argparse.Namespace(
         name=args.name,
         branch=args.branch,
@@ -327,11 +373,8 @@ def cmd_start(args: argparse.Namespace) -> int:
     target = Path(created["path"])
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"{args.name}.log"
-    session_id = args.session_id or f"myflow-{args.name}"
-    command = [*_pi_command(), "-p", "--approve", "--session-id", session_id, args.prompt]
-
     kwargs: dict = {"cwd": str(target), "stdin": subprocess.DEVNULL, "stdout": open(log_path, "wb"), "stderr": subprocess.STDOUT}
+    kwargs["env"] = {**os.environ, "MYFLOW_SKIP_BREADCRUMB": "1"}
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
@@ -426,9 +469,11 @@ def main() -> int:
     p_start = with_json(sub.add_parser("start", help="create a worktree and run pi there"))
     p_start.add_argument("name")
     p_start.add_argument("--prompt", required=True)
+    p_start.add_argument("--task", default=None, help="task path; becomes the session's Active task line")
     p_start.add_argument("--branch", default=None)
     p_start.add_argument("--base", default=None)
     p_start.add_argument("--session-id", default=None)
+    p_start.add_argument("--dry-run", action="store_true")
     p_start.set_defaults(func=cmd_start)
 
     p_verify = with_json(sub.add_parser("verify", help="run the configured verify commands"))
