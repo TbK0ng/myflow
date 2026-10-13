@@ -1,14 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import extension from "../src/extension.ts";
 import type { ExtensionAPI, HookContext, Message } from "../src/extension.ts";
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-ext-"));
   mkdirSync(join(root, ".myflow", ".runtime", "sessions"), { recursive: true });
+  mkdirSync(join(root, ".myflow", "scripts"), { recursive: true });
+  copyFileSync(join(fileURLToPath(new URL("..", import.meta.url)), ".myflow", "scripts", "get_context.py"), join(root, ".myflow", "scripts", "get_context.py"));
   writeFileSync(join(root, ".myflow", "workflow.md"), [
     "[workflow-state:planning]",
     "Plan the work.",

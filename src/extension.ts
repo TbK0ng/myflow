@@ -5,6 +5,7 @@ import { type AgentType, buildTaskContext } from "./context-injection.ts";
 import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 
 /** Message shape used by the omp event system. */
 export interface Message {
@@ -82,20 +83,24 @@ function buildSessionContext(
   projectRoot: string,
   contextKey: string | null,
 ): string {
-  const workflowPath = join(projectRoot, ".myflow", "workflow.md");
-  let workflowMd = "";
+  const scriptPath = join(projectRoot, ".myflow", "scripts", "get_context.py");
+  if (!existsSync(scriptPath)) return "";
+  const env: Record<string, string> = { ...process.env } as Record<string, string>;
+  if (contextKey) env.MYFLOW_CONTEXT_ID = contextKey;
   try {
-    workflowMd = readFileSync(workflowPath, "utf-8");
+    const output = execFileSync("python3", [scriptPath], {
+      cwd: projectRoot,
+      env,
+      encoding: "utf-8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const trimmed = output.trim();
+    if (!trimmed) return "";
+    return `<session-context>\n${trimmed}\n</session-context>`;
   } catch {
     return "";
   }
-  const blocks = parseWorkflowStateBlocks(workflowMd);
-  if (blocks.size === 0) return "";
-  const parts: string[] = [];
-  for (const [status, content] of blocks) {
-    parts.push(`[workflow-state:${status}]\n${content}\n[/workflow-state:${status}]`);
-  }
-  return `<session-context>\n${parts.join("\n\n")}\n</session-context>`;
 }
 
 function getTaskContext(
