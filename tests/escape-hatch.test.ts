@@ -4,41 +4,45 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD,
   readPromptInjectionSkipKeyword,
   shouldSkipWorkflowState,
-  DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD,
 } from "../src/escape-hatch.ts";
 
-test("readPromptInjectionSkipKeyword: default when no config", () => {
+function makeProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "myflow-"));
   mkdirSync(join(dir, ".myflow"));
+  return dir;
+}
+
+test("default keyword is no-myflow", () => {
+  assert.equal(DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD, "no-myflow");
+});
+
+test("no config file returns default keyword", () => {
+  const dir = makeProject();
   try {
-    assert.equal(
-      readPromptInjectionSkipKeyword(dir),
-      DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD,
-    );
+    assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("readPromptInjectionSkipKeyword: reads custom keyword from config", () => {
-  const dir = mkdtempSync(join(tmpdir(), "myflow-"));
-  mkdirSync(join(dir, ".myflow"));
+test("config with custom keyword", () => {
+  const dir = makeProject();
   writeFileSync(
     join(dir, ".myflow", "config.yaml"),
-    "prompt_injection:\n  skip_keyword: skip-myflow\n",
+    "prompt_injection:\n  skip_keyword: skip-flow\n",
   );
   try {
-    assert.equal(readPromptInjectionSkipKeyword(dir), "skip-myflow");
+    assert.equal(readPromptInjectionSkipKeyword(dir), "skip-flow");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("readPromptInjectionSkipKeyword: quoted keyword", () => {
-  const dir = mkdtempSync(join(tmpdir(), "myflow-"));
-  mkdirSync(join(dir, ".myflow"));
+test("config with quoted keyword", () => {
+  const dir = makeProject();
   writeFileSync(
     join(dir, ".myflow", "config.yaml"),
     'prompt_injection:\n  skip_keyword: "my-skip"\n',
@@ -50,12 +54,24 @@ test("readPromptInjectionSkipKeyword: quoted keyword", () => {
   }
 });
 
-test("readPromptInjectionSkipKeyword: inline comment stripped", () => {
-  const dir = mkdtempSync(join(tmpdir(), "myflow-"));
-  mkdirSync(join(dir, ".myflow"));
+test("config with inline comment", () => {
+  const dir = makeProject();
   writeFileSync(
     join(dir, ".myflow", "config.yaml"),
-    "prompt_injection:\n  skip_keyword: no-myflow # the default\n",
+    "prompt_injection:\n  skip_keyword: flow-skip # the keyword\n",
+  );
+  try {
+    assert.equal(readPromptInjectionSkipKeyword(dir), "flow-skip");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("config with non-string scalar returns default", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "prompt_injection:\n  skip_keyword: 123\n",
   );
   try {
     assert.equal(readPromptInjectionSkipKeyword(dir), "no-myflow");
@@ -64,23 +80,18 @@ test("readPromptInjectionSkipKeyword: inline comment stripped", () => {
   }
 });
 
-test("shouldSkipWorkflowState: keyword present", () => {
-  assert.equal(shouldSkipWorkflowState("please no-myflow this", "no-myflow"), true);
+test("shouldSkipWorkflowState: keyword at word boundary", () => {
+  assert.ok(shouldSkipWorkflowState("please no-myflow this", "no-myflow"));
+  assert.ok(shouldSkipWorkflowState("no-myflow", "no-myflow"));
+  assert.ok(shouldSkipWorkflowState("NO-MYFLOW", "no-myflow"));
 });
 
-test("shouldSkipWorkflowState: keyword absent", () => {
-  assert.equal(shouldSkipWorkflowState("just a normal message", "no-myflow"), false);
+test("shouldSkipWorkflowState: keyword not at word boundary", () => {
+  assert.ok(!shouldSkipWorkflowState("xno-myflow", "no-myflow"));
+  assert.ok(!shouldSkipWorkflowState("no-myflowx", "no-myflow"));
+  assert.ok(!shouldSkipWorkflowState("no-myflow-2", "no-myflow"));
 });
 
 test("shouldSkipWorkflowState: empty keyword never matches", () => {
-  assert.equal(shouldSkipWorkflowState("any text", ""), false);
-});
-
-test("shouldSkipWorkflowState: word boundary — no partial match", () => {
-  assert.equal(shouldSkipWorkflowState("no-myflow-extra", "no-myflow"), false);
-  assert.equal(shouldSkipWorkflowState("xno-myflow", "no-myflow"), false);
-});
-
-test("shouldSkipWorkflowState: case insensitive", () => {
-  assert.equal(shouldSkipWorkflowState("NO-MYFLOW", "no-myflow"), true);
+  assert.ok(!shouldSkipWorkflowState("anything", ""));
 });
