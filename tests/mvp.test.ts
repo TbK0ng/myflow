@@ -9,6 +9,7 @@ import { parseWorkflowStateBlocks } from "../.pi/extensions/myflow/parse-workflo
 test("findProjectRoot: finds .myflow/ in cwd", () => {
   const dir = mkdtempSync(join(tmpdir(), "myflow-"));
   mkdirSync(join(dir, ".myflow"));
+  writeFileSync(join(dir, ".myflow", "workflow.md"), "x");
   try {
     assert.equal(findProjectRoot(dir), dir);
   } finally {
@@ -19,10 +20,21 @@ test("findProjectRoot: finds .myflow/ in cwd", () => {
 test("findProjectRoot: walks up to parent", () => {
   const dir = mkdtempSync(join(tmpdir(), "myflow-"));
   mkdirSync(join(dir, ".myflow"));
+  writeFileSync(join(dir, ".myflow", "workflow.md"), "x");
   const child = join(dir, "src", "deep");
   mkdirSync(child, { recursive: true });
   try {
     assert.equal(findProjectRoot(child), dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("findProjectRoot: a .myflow/ without workflow.md is not a project", () => {
+  const dir = mkdtempSync(join(tmpdir(), "myflow-"));
+  mkdirSync(join(dir, ".myflow", "channels"), { recursive: true });
+  try {
+    assert.equal(findProjectRoot(dir), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

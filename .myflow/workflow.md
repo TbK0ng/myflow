@@ -39,10 +39,12 @@ without a model call.
 | Implementation | `myflow_subagent` → `myflow-implement` |
 | Verification after code changes | `myflow_subagent` → `myflow-check` (or `myflow-check` skill) |
 | Preserve a lesson or contract | `myflow-update-spec` skill |
+| Discuss with a peer agent / spawn a worker | `myflow-channel` skill (`channel.py`) |
 | Bootstrap or refresh specs from the codebase | `myflow-spec-bootstrap` skill |
 | After fixing a bug | `myflow-break-loop` skill |
 | Resume a task | `/myflow-continue` |
 | Wrap up a task | `/myflow-finish-work` |
+| Work on a second task in parallel | `/myflow-parallel` (`worktree.py`) |
 
 ## Task Artifacts
 
@@ -58,7 +60,10 @@ without a model call.
   second line of defense; a sub-agent must report its recommendation instead.
 - Sub-agents run in the caller's directory and share one working tree; nothing
   creates git worktrees. Parallel dispatch is for read-only work
-  (`myflow-research`); run writing agents one at a time.
+  (`myflow-research`); run writing agents one at a time. Independent *tasks*
+  run in isolated worktrees through `/myflow-parallel`.
+- A `myflow-check` sub-agent is held until `verify:` commands in
+  `.myflow/worktree.yaml` pass, so a checked change is a verified change.
 - Every dispatch prompt starts with `Active task: <path from task.py current>`.
 - Read order inside a sub-agent: `implement.jsonl` / `check.jsonl` referenced
   files → `prd.md` → `design.md` if present → `implement.md` if present.
