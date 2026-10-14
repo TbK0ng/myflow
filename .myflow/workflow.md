@@ -82,8 +82,12 @@ machine state: put it in `.gitignore`, never commit it.
   logs its raw stream under `.myflow/.runtime/subagent-logs/`. A run that hits the
   cap is stopped, reported with its log path, and leaves its changes in the tree —
   nothing is reverted, so re-dispatch a bounded next step instead of redoing it.
-- Read order inside a sub-agent: `implement.jsonl` / `check.jsonl` referenced
-  files → `prd.md` → `design.md` if present → `implement.md` if present.
+- Injected read order inside a sub-agent: `prd.md` → `design.md` if present →
+  `implement.md` if present → `info.md` → `implement.jsonl` / `check.jsonl`
+  referenced files. The extension materializes each into `<task-context>` —
+  artifacts bounded by `context_injection.max_artifact_bytes`, jsonl files by
+  `max_file_bytes` — so they are read, not merely named; a missing artifact is
+  skipped silently.
 
 ## Escape Hatch
 
@@ -110,7 +114,7 @@ Seeded-but-empty guard: `task.py start` refuses a task whose manifest was seeded
 Tools: `myflow-implement` / `myflow-check` / `myflow-research` are sub-agent types dispatched with `myflow_subagent` (not skills). `myflow-before-dev`, `myflow-check`, `myflow-update-spec`, and `myflow-break-loop` are skills.
 Flow: `myflow-implement` -> `myflow-check` -> `myflow-update-spec` -> commit (3.2) -> `/myflow-finish-work`.
 Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `myflow-implement`, do NOT dispatch another `myflow-implement` or `myflow-check`; if already running as `myflow-check`, do NOT dispatch another `myflow-check` or `myflow-implement`. Dispatch is main session only.
-Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
+Dispatch prompt starts with `Active task: <task path from task.py current>`. Injected context: `prd.md` -> `design.md if present` -> `implement.md if present` -> `info.md` -> jsonl-referenced files.
 [/workflow-state:in_progress]
 
 [workflow-state:completed]

@@ -43,16 +43,20 @@ test("taskContextJsonlNames: custom agent gets no manifest", () => {
   assert.deepEqual(taskContextJsonlNames("my-custom-agent"), []);
 });
 
-test("taskContextInputPaths: includes config, prd, info", () => {
+test("taskContextInputPaths: includes config, prd, design, implement, info", () => {
   const dir = makeProject();
   const taskDir = join(dir, ".myflow", "tasks", "test");
   mkdirSync(taskDir, { recursive: true });
   writeFileSync(join(taskDir, "prd.md"), "# PRD");
+  writeFileSync(join(taskDir, "design.md"), "# Design");
+  writeFileSync(join(taskDir, "implement.md"), "# Plan");
   writeFileSync(join(taskDir, "info.md"), "# Info");
   try {
     const paths = taskContextInputPaths(dir, taskDir);
     assert.ok(paths.includes(join(dir, ".myflow", "config.yaml")));
     assert.ok(paths.includes(join(taskDir, "prd.md")));
+    assert.ok(paths.includes(join(taskDir, "design.md")));
+    assert.ok(paths.includes(join(taskDir, "implement.md")));
     assert.ok(paths.includes(join(taskDir, "info.md")));
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -346,6 +350,125 @@ test("buildTaskContext: research agent skips jsonl", () => {
     );
     const ctx = buildTaskContext(dir, taskDir, "myflow-research");
     assert.ok(!ctx.includes("export const x = 1;"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: design.md and implement.md are injected", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "prd.md"), "# PRD\n\nBuild a widget.");
+    writeFileSync(join(taskDir, "design.md"), "# Design\n\nUse an event queue.");
+    writeFileSync(join(taskDir, "implement.md"), "# Plan\n\nStep one: enqueue.");
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    assert.ok(ctx.includes("Use an event queue."));
+    assert.ok(ctx.includes("Step one: enqueue."));
+    assert.ok(ctx.includes("design.md"));
+    assert.ok(ctx.includes("implement.md"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: absent design.md / implement.md are skipped silently", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "prd.md"), "# PRD\n\nOnly the PRD exists.");
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    // No error, no omitted/missing notice: a missing artifact is just absent.
+    assert.ok(ctx.includes("Only the PRD exists."));
+    assert.ok(!ctx.includes("design.md"));
+    assert.ok(!ctx.includes("implement.md"));
+    assert.ok(!ctx.includes("missing or unreadable"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: design/implement truncate like prd.md under max_artifact_bytes", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "context_injection:\n  max_artifact_bytes: 40\n  max_total_bytes: 100000\n",
+  );
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    const big = (label: string) => `# ${label}\n\n${"x".repeat(200)}`;
+    writeFileSync(join(taskDir, "prd.md"), big("PRD"));
+    writeFileSync(join(taskDir, "design.md"), big("Design"));
+    writeFileSync(join(taskDir, "implement.md"), big("Plan"));
+    writeFileSync(join(taskDir, "info.md"), big("Info"));
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    const truncations = ctx.match(/truncated at 40 bytes/g) ?? [];
+    assert.equal(truncations.length, 4, "all four artifacts share the max_artifact_bytes cap");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: artifacts precede the curated jsonl files", () => {
+  const dir = makeProject();
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "prd.md"), "PRD_MARKER");
+    writeFileSync(join(taskDir, "design.md"), "DESIGN_MARKER");
+    writeFileSync(join(taskDir, "implement.md"), "PLAN_MARKER");
+    writeFileSync(join(taskDir, "info.md"), "INFO_MARKER");
+    mkdirSync(join(dir, "spec"), { recursive: true });
+    writeFileSync(join(dir, "spec", "ref.md"), "JSONL_MARKER");
+    writeFileSync(
+      join(taskDir, "implement.jsonl"),
+      JSON.stringify({ file: "spec/ref.md", reason: "curated" }) + "\n",
+    );
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    const at = (marker: string) => ctx.indexOf(marker);
+    assert.ok(at("PRD_MARKER") < at("DESIGN_MARKER"));
+    assert.ok(at("DESIGN_MARKER") < at("PLAN_MARKER"));
+    assert.ok(at("PLAN_MARKER") < at("INFO_MARKER"));
+    // Artifacts are emitted first, so the curated jsonl is what degrades first
+    // under total-budget pressure.
+    assert.ok(at("INFO_MARKER") < at("JSONL_MARKER"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildTaskContext: total budget still holds after design/implement are added", () => {
+  const dir = makeProject();
+  writeFileSync(
+    join(dir, ".myflow", "config.yaml"),
+    "context_injection:\n  max_artifact_bytes: 300\n  max_total_bytes: 1200\n",
+  );
+  try {
+    const taskDir = join(dir, ".myflow", "tasks", "demo");
+    mkdirSync(taskDir, { recursive: true });
+    const filler = "y".repeat(800);
+    writeFileSync(join(taskDir, "prd.md"), `# PRD\n\nPRD_MARKER ${filler}`);
+    writeFileSync(join(taskDir, "design.md"), `# Design\n\nDESIGN_MARKER ${filler}`);
+    writeFileSync(join(taskDir, "implement.md"), `# Plan\n\nPLAN_MARKER ${filler}`);
+    writeFileSync(join(taskDir, "info.md"), `# Info\n\nINFO_MARKER ${filler}`);
+    mkdirSync(join(dir, "spec"), { recursive: true });
+    writeFileSync(join(dir, "spec", "ref.md"), "JSONL_MARKER curated content");
+    writeFileSync(
+      join(taskDir, "implement.jsonl"),
+      JSON.stringify({ file: "spec/ref.md", reason: "curated" }) + "\n",
+    );
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    assert.ok(
+      Buffer.byteLength(ctx, "utf-8") <= 1200,
+      "context must stay within context_injection.max_total_bytes",
+    );
+    // Degradation is never silent: the budget gives way with a notice, and the
+    // jsonl entry (emitted last) is the first thing dropped.
+    assert.ok(ctx.includes("context limit reached") || ctx.includes("[myflow: omitted"));
+    assert.ok(!ctx.includes("JSONL_MARKER"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

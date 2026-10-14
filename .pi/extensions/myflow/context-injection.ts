@@ -41,6 +41,8 @@ export function taskContextInputPaths(
   const paths = new Set<string>([
     join(projectRoot, ".myflow", "config.yaml"),
     join(taskDir, "prd.md"),
+    join(taskDir, "design.md"),
+    join(taskDir, "implement.md"),
     join(taskDir, "info.md"),
   ]);
   for (const jsonlName of taskContextJsonlNames(agentType)) {
@@ -434,17 +436,29 @@ export function buildTaskContext(projectRoot: string, taskDir: string, agentType
     if (output !== null) parts.push(output);
   };
 
-  // prd.md and info.md — always included
-  const prdPath = join(taskDir, "prd.md");
-  const relativePrdPath = displayProjectPath(projectRoot, prdPath, taskDir);
-  if (existsSync(prdPath)) {
-    const artifact = materialize(prdPath, relativePrdPath, "Requirements document", limits.max_artifact_bytes, "artifact");
-    appendCandidate(artifact.block, artifact.notice);
-  }
-  const infoPath = join(taskDir, "info.md");
-  const relativeInfoPath = displayProjectPath(projectRoot, infoPath, taskDir);
-  if (existsSync(infoPath)) {
-    const artifact = materialize(infoPath, relativeInfoPath, "Task information", limits.max_artifact_bytes, "artifact");
+  // Task artifacts, injected in a fixed order and each bounded by
+  // `max_artifact_bytes`: prd.md -> design.md -> implement.md -> info.md.
+  // `design.md` / `implement.md` get exactly the treatment `prd.md` does,
+  // which is what the Dispatch Protocol promises sub-agents. `info.md`
+  // is myflow's own extra artifact. A missing document is skipped silently —
+  // never an error — preserving the previous prd/info behavior.
+  const artifactDocs: Array<{ name: string; reason: string }> = [
+    { name: "prd.md", reason: "Requirements document" },
+    { name: "design.md", reason: "Technical design document" },
+    { name: "implement.md", reason: "Execution plan document" },
+    { name: "info.md", reason: "Task information" },
+  ];
+  for (const artifactDoc of artifactDocs) {
+    const artifactPath = join(taskDir, artifactDoc.name);
+    if (!existsSync(artifactPath)) continue;
+    const relativeArtifactPath = displayProjectPath(projectRoot, artifactPath, taskDir);
+    const artifact = materialize(
+      artifactPath,
+      relativeArtifactPath,
+      artifactDoc.reason,
+      limits.max_artifact_bytes,
+      "artifact",
+    );
     appendCandidate(artifact.block, artifact.notice);
   }
 

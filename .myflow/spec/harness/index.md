@@ -66,6 +66,30 @@ Payload tour and inventory:
   seeding (the gate then never fires); or a gate ships without `add-context` as
   its write side (an unsatisfiable gate).
 
+### Task context: what the extension injects
+
+- **Producer**: `.pi/extensions/myflow/context-injection.ts` `buildTaskContext`.
+- **Consumers**: the `<task-context>` block `myflow_subagent` injects into
+  every dispatched child, and `session_before_compact` re-injects.
+- **Value/shape**: task artifacts in a fixed order — `prd.md` → `design.md` →
+  `implement.md` → `info.md` — each materialized as an `artifact` and bounded
+  by `context_injection.max_artifact_bytes`; then the files referenced by
+  `implement.jsonl` / `check.jsonl`, each bounded by `max_file_bytes`; every
+  block scored against `max_total_bytes`.
+- **Invariant**: `design.md` and `implement.md` get exactly the treatment
+  `prd.md` does — same `max_artifact_bytes` cap, same truncation/omitted
+  fallback under `max_total_bytes`. A missing artifact is skipped silently,
+  never an error. `info.md` is myflow's own artifact and stays in the list.
+- **Ordering caveat**: artifacts are emitted **before** the curated jsonl
+  files, so under total-budget pressure the jsonl context is dropped or
+  degraded first. That inversion is known and
+  deliberately **not** changed here (a budget-priority
+  reorder is a separate change); if it is revisited, update the Dispatch
+  Protocol read order in `.myflow/workflow.md` and this entry together.
+- **Breaks if**: `design.md` / `implement.md` drop out of the injection list
+  (the Dispatch Protocol promises sub-agents see them), or a missing artifact
+  starts emitting an error instead of being skipped.
+
 ## Design Decisions
 
 ### Design Decision: bound the write scope, do not try to exclude writers
