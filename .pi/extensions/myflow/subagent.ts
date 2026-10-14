@@ -12,8 +12,10 @@
  * `myflow-` prefix and must have a definition file in `.pi/agents/`.
  *
  * Children spawn in the caller's working directory: sub-agents share one
- * working tree, so parallel dispatch is for read-only work. This tool never
- * creates git worktrees.
+ * working tree. Parallel dispatch therefore requires each writing agent to
+ * declare a bounded `writesUnder` scope (the child enforces it path-level);
+ * a writer that declares no scope runs one at a time. This tool never creates
+ * git worktrees.
  *
  * Every run is capped (`timeoutMs`, default 15 minutes, 0 disables it) and its
  * raw stream is kept under `.myflow/.runtime/subagent-logs/`, so a run that
@@ -30,9 +32,16 @@ import { execFileSync, spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { type AgentConfig, discoverAgents } from "./agents.ts";
+import { type AgentConfig, discoverAgents, isSafeWriteScope } from "./agents.ts";
 
 export const MYFLOW_AGENT_ENV = "MYFLOW_AGENT_TYPE";
+
+/**
+ * Carries an agent's declared `writesUnder` scope to the child process. The
+ * child's path guard blocks any write/edit outside `<active task>/<scope>/`.
+ * Injected only when the agent declares a scope.
+ */
+export const MYFLOW_WRITES_UNDER_ENV = "MYFLOW_WRITES_UNDER";
 
 /**
  * Marks a process as a review worker for the verify gate. Dispatched
@@ -154,12 +163,39 @@ const WRITE_TOOLS = new Set(["write", "edit"]);
  * Whether an agent can write to the caller's working tree.
  *
  * An agent with no `tools:` allowlist runs with every tool, so it counts as a
- * writer. Parallel mode is rejected for writers: sub-agents share one tree, so
- * two of them writing at once is the one thing the dispatch protocol forbids.
+ * writer. Parallel mode is rejected for a writer that declares no `writesUnder`
+ * scope (see `hasWriteScope`): sub-agents share one tree, so only a writer whose
+ * writes the child bounds to one directory may run alongside another.
  */
 export function isWriteCapable(agent: AgentConfig): boolean {
   if (!agent.tools || agent.tools.length === 0) return true;
   return agent.tools.some((tool) => WRITE_TOOLS.has(tool));
+}
+
+/**
+ * Whether an agent bounds its writes to a declared task-relative directory.
+ *
+ * A bounded writer may run in parallel: `runSingleAgent` injects the
+ * declaration as `MYFLOW_WRITES_UNDER`, and the child's `tool_call` guard
+ * refuses any write/edit outside `<active task>/<writesUnder>/`. This is a
+ * *boundary* guarantee, not mutual exclusion: the code cannot verify that
+ * parallel prompts write disjoint files, so it shrinks the blast radius to one
+ * directory and the agent contract requires one topic per file.
+ */
+export function hasWriteScope(agent: AgentConfig): boolean {
+  return declaresWriteScope(agent) && isSafeWriteScope(agent.writesUnder!);
+}
+
+/**
+ * Whether an agent declares any non-blank `writesUnder` value.
+ *
+ * Deliberately weaker than `hasWriteScope`: the child's guard must activate on
+ * *any* declaration so an unsafe scope fails closed inside the child instead of
+ * leaving writes unbounded. Only parallel mode needs the stricter check, since
+ * an escaping scope must not earn parallel mode.
+ */
+export function declaresWriteScope(agent: AgentConfig): boolean {
+  return typeof agent.writesUnder === "string" && agent.writesUnder.trim().length > 0;
 }
 
 /** Normalize a caller-provided agent name to its `myflow-` form. */
@@ -408,6 +444,13 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
     const invocation = getPiInvocation(args);
     const env: NodeJS.ProcessEnv = { ...process.env, [MYFLOW_AGENT_ENV]: agent.name };
     if (contextKey) env[MYFLOW_CONTEXT_ENV] = contextKey;
+    // Hand the declared write scope to the child so it can enforce it path-level.
+    // Inject on any non-blank declaration (not only a *safe* one) so the child's
+    // guard activates and blocks an escaping scope; clearing it otherwise keeps an
+    // inherited value from silently bounding an unscoped writer such as
+    // myflow-implement.
+    if (declaresWriteScope(agent)) env[MYFLOW_WRITES_UNDER_ENV] = agent.writesUnder!.trim();
+    else delete env[MYFLOW_WRITES_UNDER_ENV];
 
     const exitCode = await new Promise<number>((resolveExit) => {
       const proc = spawn(invocation.command, invocation.args, {
@@ -534,7 +577,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       "Run one myflow project sub-agent with active task context.",
       `Modes: single (prompt), parallel (prompts, max ${MAX_PARALLEL_PROMPTS}), chain (sequential prompts with "Previous output:").`,
       "The agent must have a definition file in .pi/agents/; `implement` expands to `myflow-implement`.",
-      "Sub-agents share the caller's working tree, so at most one writer (implement, check) may run there at a time: parallel mode is rejected for write-capable agents. Parallelize read-only research instead.",
+      "Sub-agents share the caller's working tree: parallel mode is rejected for a write-capable agent that declares no `writesUnder` scope, so myflow-implement and myflow-check run one at a time. An agent that declares `writesUnder` (myflow-research -> research/) may run in parallel because the child confines each run's writes to that directory.",
       `Every run is capped (timeoutMs, default ${SUBAGENT_TIMEOUT_MS} ms; 0 disables the cap) and logs its stream under ${SUBAGENT_LOG_DIR}/; a stopped run reports its log path.`,
     ].join(" "),
     promptSnippet: "Run a myflow-implement / myflow-check / myflow-research sub-agent",
@@ -590,12 +633,16 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       if (mode === "parallel" && prompts.length > MAX_PARALLEL_PROMPTS) {
         throw new Error(`subagent parallel mode supports at most ${MAX_PARALLEL_PROMPTS} prompts`);
       }
-      if (mode === "parallel" && isWriteCapable(agent)) {
+      if (mode === "parallel" && isWriteCapable(agent) && !hasWriteScope(agent)) {
         // The rule the workflow, the tool description, and this check all state:
-        // one writer per working tree. Repeats are fine — they are sequential.
+        // one *unbounded* writer per working tree. A declared `writesUnder`
+        // scope makes a writer parallel-safe within that directory. Repeats in
+        // single/chain mode are fine — they are sequential.
         throw new Error(
-          `parallel dispatch is for read-only work: ${agent.name} can write, and sub-agents share the caller's working tree. ` +
-            "Run one writer at a time (single or chain), or parallelize a read-only agent such as myflow-research.",
+          `parallel dispatch needs a bounded writer: ${agent.name} can write and declares no \`writesUnder\` scope, ` +
+            "and sub-agents share the caller's working tree. " +
+            "Either run one writer at a time (single or chain), or add `writesUnder: <dir>` to its frontmatter " +
+            "so the child confines every write to `<active task>/<dir>/` (one file per prompt).",
         );
       }
 

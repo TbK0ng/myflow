@@ -1,13 +1,15 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { isSafeWriteScope } from "./agents.ts";
 import { findProjectRoot } from "./find-project-root.ts";
 import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
 import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
 import { type AgentType, buildTaskContext } from "./context-injection.ts";
 import {
   MYFLOW_AGENT_ENV,
+  MYFLOW_WRITES_UNDER_ENV,
   MYFLOW_VERIFY_GATE_ENV,
   registerMyflowSubagent,
   type SubagentPi,
@@ -63,6 +65,86 @@ const SUBAGENT_TOOL_NAME = "myflow_subagent";
 const MAX_VERIFY_ATTEMPTS = 2;
 /** Set for delegated processes (channel workers) that must not see the breadcrumb. */
 export const SKIP_BREADCRUMB_ENV = "MYFLOW_SKIP_BREADCRUMB";
+
+/** Tools whose target path is bounded by a declared `writesUnder` scope. */
+const PATH_SCOPED_WRITE_TOOLS = new Set(["write", "edit"]);
+
+/**
+ * Normalize a write target for a containment check.
+ *
+ * `resolve` collapses `..` and normalizes separators; unifying to `/` keeps the
+ * prefix check from being fooled by a `\` vs `/` difference, and lowercasing on
+ * Windows makes the comparison case-insensitive (the filesystem is). This is a
+ * lexical check (it does not follow symlinks): the guarantee is a directory
+ * boundary, not mutual exclusion.
+ */
+export function normalizeWriterPath(target: string, baseDir: string): string {
+  const normalized = resolve(baseDir, target).split("\\").join("/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+/** Whether `target` resolves to `root` or a path inside it. */
+export function isWithinWriteScope(target: string, root: string, baseDir: string): boolean {
+  const normalizedTarget = normalizeWriterPath(target, baseDir);
+  let normalizedRoot = normalizeWriterPath(root, baseDir);
+  while (normalizedRoot.length > 1 && normalizedRoot.endsWith("/")) {
+    normalizedRoot = normalizedRoot.slice(0, -1);
+  }
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
+}
+
+/**
+ * Read the write target from a `write`/`edit` tool call.
+ *
+ * Pi's built-in `write` and `edit` schemas both name the target `path`
+ * (`dist/core/tools/write.d.ts`, `edit.d.ts`). Anything else yields null, which
+ * the guard treats as fail closed.
+ */
+export function getWriteTargetPath(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const value = (input as Record<string, unknown>).path;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Decide whether a scoped sub-agent's write/edit stays inside its declared
+ * scope. Returns a block reason, or null when the write is allowed.
+ *
+ * Fail closed: a blank declaration, an unreadable target path, or no resolvable
+ * active task all block instead of allowing.
+ */
+export function evaluateWriteScope(options: {
+  declaredScope: string | undefined;
+  path: string | null;
+  taskDir: string | null;
+  cwd: string;
+}): string | null {
+  const { declaredScope, path, taskDir, cwd } = options;
+  const scope = declaredScope?.trim();
+  if (!scope) {
+    return "Write blocked: this sub-agent declares no `writesUnder` scope (fail closed).";
+  }
+  if (!isSafeWriteScope(scope)) {
+    return (
+      "Write blocked: the declared `writesUnder` scope must be a relative directory " +
+      "under the active task (no `..`, no absolute path) (fail closed)."
+    );
+  }
+  if (!path) {
+    return "Write blocked: the write target path is missing or unreadable (fail closed).";
+  }
+  if (!taskDir) {
+    return "Write blocked: no active myflow task resolves, so the write scope is unknown (fail closed).";
+  }
+  const scopeRoot = join(taskDir, scope);
+  if (!isWithinWriteScope(path, scopeRoot, cwd)) {
+    return (
+      `Write blocked: ${path} is outside this sub-agent's write scope ` +
+      `(<active task>/${scope}/). Scoped writers may only write there (one file per topic).`
+    );
+  }
+  return null;
+}
 
 /**
  * Detect whether the current process is a sub-agent.
@@ -335,17 +417,39 @@ export default function extension(pi: ExtensionAPI): void {
     };
   });
 
-  pi.on("tool_call", async (event, _ctx) => {
+  pi.on("tool_call", async (event, ctx) => {
     const toolEvent = event as ToolCallEvent;
-    if (toolEvent.toolName !== SUBAGENT_TOOL_NAME) return;
-    if (!isSubAgent) return;
+
     // Recursion guard: only the main session may dispatch sub-agents.
-    return {
-      block: true,
-      reason:
-        `Recursion guard: this process is the sub-agent "${agentType}" and must not ` +
-        `dispatch ${SUBAGENT_TOOL_NAME}. Report the recommended next step to the main session instead.`,
-    };
+    if (toolEvent.toolName === SUBAGENT_TOOL_NAME) {
+      if (!isSubAgent) return;
+      return {
+        block: true,
+        reason:
+          `Recursion guard: this process is the sub-agent "${agentType}" and must not ` +
+          `dispatch ${SUBAGENT_TOOL_NAME}. Report the recommended next step to the main session instead.`,
+      };
+    }
+
+    // Path guard: a sub-agent that declared `writesUnder` may only write inside
+    // `<active task>/<writesUnder>/`. An agent with no declaration (implement,
+    // check) is the serial writer `subagent.ts` already keeps out of parallel
+    // mode, so it keeps full-tree access — do not break it. A *declared* scope
+    // fails closed on every ambiguity.
+    if (!isSubAgent || !PATH_SCOPED_WRITE_TOOLS.has(toolEvent.toolName)) return;
+    const declaredScope = process.env[MYFLOW_WRITES_UNDER_ENV];
+    if (declaredScope === undefined) return;
+
+    const root = projectRoot ?? findProjectRoot(ctx.cwd) ?? ctx.cwd;
+    const { taskDir } = resolveActiveTaskStatus(root, deriveContextKey(ctx));
+    const reason = evaluateWriteScope({
+      declaredScope,
+      path: getWriteTargetPath(toolEvent.input),
+      taskDir,
+      cwd: ctx.cwd,
+    });
+    if (reason) return { block: true, reason };
+    return;
   });
 
   pi.on("session_before_compact", async (_event, _ctx) => {

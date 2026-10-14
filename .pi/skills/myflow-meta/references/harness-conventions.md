@@ -57,11 +57,17 @@ Keep these consistent across files; change them together or not at all:
 - **Delegated runs**: `MYFLOW_SKIP_BREADCRUMB=1` suppresses the per-turn
   breadcrumb for a process that receives a work order rather than a user turn
   (channel workers set it).
-- **One writer per working tree**: `myflow_subagent` rejects `mode: parallel`
-  for write-capable agents (tools include `write`/`edit`, or no allowlist).
-  `myflow-implement` and `myflow-check` both write, so they run one at a time in
-  the shared tree; research is the parallel agent. True concurrency uses
-  worktrees, one session each.
+- **Bounded writers may run in parallel**: `myflow_subagent` rejects
+  `mode: parallel` for a write-capable agent (tools include `write`/`edit`, or no
+  allowlist) unless it declares `writesUnder: <dir>`. `myflow-implement` and
+  `myflow-check` declare none, so they run one at a time in the shared tree. A
+  declared scope is enforced in the child: `MYFLOW_WRITES_UNDER` carries the
+  declaration and `tool_call` blocks any `write`/`edit` outside
+  `<active task>/<dir>/`. `myflow-research` declares `writesUnder: research`, so
+  its parallel runs each persist one topic file under the active task's
+  `research/`. This is a **boundary** guarantee, not mutual exclusion: the code
+  cannot verify that parallel prompts write disjoint files. True concurrency
+  uses worktrees, one session each.
 - **Dispatch cap and log**: every `myflow_subagent` run is capped (default
   `SUBAGENT_TIMEOUT_MS`, override with `timeoutMs`, `0` disables) and tees its raw
   stream to `.myflow/.runtime/subagent-logs/`. Stopping is a tree kill
@@ -110,9 +116,10 @@ Keep these consistent across files; change them together or not at all:
 ## Gotchas
 
 - **Sub-agents share one working tree.** `myflow_subagent` always spawns
-  children in the caller's directory and never creates git worktrees. Use
-  parallel dispatch for read-only work (`myflow-research`); run writing agents
-  one at a time. For genuinely parallel *sessions*, use
+  children in the caller's directory and never creates git worktrees. Run
+  unbounded writing agents one at a time; parallel dispatch is allowed for
+  `myflow-research` because it declares `writesUnder: research` and the child
+  blocks writes outside that directory. For genuinely parallel *sessions*, use
   `worktree.py` (`/myflow-parallel`), which gives each session its own
   checkout and branch.
 - **Windows stdout encoding**: a Python process writing to a pipe defaults to
