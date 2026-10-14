@@ -1,0 +1,6 @@
+{"file": ".myflow/tasks/norma-benchmark-gap-analysis/research/00-baseline.md", "reason": "P0 冻结基线：版本锚点、归属域清单、Norma 语料清单、预算实测"}
+{"file": ".myflow/tasks/norma-benchmark-gap-analysis/research/myflow-enforcement-tiers.md", "reason": "T2：每个 CAP 的 myflow 强制层级与回归护栏（E-P/E-C 两章）"}
+{"file": ".myflow/tasks/norma-benchmark-gap-analysis/research/contract-risks-and-advantages.md", "reason": "T3：RISK-*/ADV-*/CAP-CTX 判定与三条必验链条结论"}
+{"file": ".myflow/tasks/norma-benchmark-gap-analysis/research/pi-surface-completeness.md", "reason": "T1：Pi docs 反向覆盖，现有 CAP 清单外的 Pi 能力"}
+{"file": ".myflow/tasks/norma-benchmark-gap-analysis/research/norma-cmpt-noa-core.md", "reason": "CMPT + NOA 核心（ref/tier/block/建议）判定"}
+{"file": ".myflow/tasks/norma-benchmark-gap-analysis/research/norma-noa-integrity.md", "reason": "NOA 行为完整性（nudge/turn/toolpair/保护/截断/常驻提示词）判定"}
