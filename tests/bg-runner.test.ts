@@ -683,7 +683,9 @@ test("S2 -2: 命令仍在运行时，另一个进程能立刻读到已写入的�
 test("S2 -3: 日志路径含空格/单引号、命令含引号与空格都能跑通", () => {
   // 回退点：去掉 quoteForBash 的引号包裹或单引号转义 → 含空格的日志路径被 shell
   //         拆成多个参数，重定向失败，marker 进不了日志（marker 断言变红）。
-  const dir = mkdtempSync(join(tmpdir(), "myflow bg space-"));
+  // 前缀必须以 `myflow-` 开头：`tests/leak-audit.test.ts` 的审计 glob 只认
+  // `%TEMP%/myflow-*`，前缀里那个**空格**是用例 S2 -3 故意要保留的。
+  const dir = mkdtempSync(join(tmpdir(), "myflow-bg-runner space-"));
   try {
     const log = join(dir, "a log file's name.log");
     const exit = join(dir, "a log file's name.exit");

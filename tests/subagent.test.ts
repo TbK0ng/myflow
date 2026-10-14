@@ -340,8 +340,11 @@ test("myflow_subagent: a declared writesUnder scope allows parallel dispatch", a
   // writer guard: both runs are dispatched, then both fail to spawn.
   const argv1 = process.argv[1];
   const pathEnv = process.env.PATH;
+  // 这个空目录只是为了逼 spawn 立刻失败；它必须在 finally 里被删除，
+  // 否则每次跑都会在 %TEMP% 留下一个 `myflow-no-path-*`。
+  const emptyPathDir = mkdtempSync(join(tmpdir(), "myflow-no-path-"));
   process.argv[1] = "/nonexistent/not-a-script";
-  process.env.PATH = mkdtempSync(join(tmpdir(), "myflow-no-path-"));
+  process.env.PATH = emptyPathDir;
   try {
     const result = (await tool.execute(
       "id",
@@ -355,6 +358,9 @@ test("myflow_subagent: a declared writesUnder scope allows parallel dispatch", a
   } finally {
     process.argv[1] = argv1;
     process.env.PATH = pathEnv;
+    // 先还原 PATH 再删目录；删除后显式断言，让将来回归时变红而不是又静默留下。
+    rmSync(emptyPathDir, { recursive: true, force: true });
+    assert.ok(!existsSync(emptyPathDir), `空 PATH 临时目录必须已删除：${emptyPathDir}`);
   }
 });
 
@@ -394,8 +400,10 @@ test("myflow_subagent: emits progress before the child starts", async () => {
   // this exercises the progress event without a model call or a child process.
   const argv1 = process.argv[1];
   const pathEnv = process.env.PATH;
+  // 同上一个用例：空目录只为逼 spawn 立刻失败，finally 里必须删掉并断言。
+  const emptyPathDir = mkdtempSync(join(tmpdir(), "myflow-no-path-"));
   process.argv[1] = "/nonexistent/not-a-script";
-  process.env.PATH = mkdtempSync(join(tmpdir(), "myflow-no-path-"));
+  process.env.PATH = emptyPathDir;
   try {
     const result = await tool.execute(
       "id",
@@ -409,6 +417,9 @@ test("myflow_subagent: emits progress before the child starts", async () => {
   } finally {
     process.argv[1] = argv1;
     process.env.PATH = pathEnv;
+    // 先还原 PATH 再删目录；删除后显式断言，让将来回归时变红而不是又静默留下。
+    rmSync(emptyPathDir, { recursive: true, force: true });
+    assert.ok(!existsSync(emptyPathDir), `空 PATH 临时目录必须已删除：${emptyPathDir}`);
   }
 });
 
