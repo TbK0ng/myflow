@@ -172,15 +172,35 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000, intervalMs 
   return predicate();
 }
 
-/** finally 里统一的清理：先杀进程树，给文件句柄一点时间释放，再删临时目录。 */
+/**
+ * finally 里统一的清理：先杀进程树，给文件句柄一点时间释放，再删临时目录。
+ *
+ * 时间上界：200ms 初始等待 + 最多 10 次 × 100ms 退避重试 ≈ 1.2s。
+ *
+ * `maxRetries > 0` 是缺的那一环：Node 的 `rmSync` 只在此时对
+ * EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM 退避重试（`force: true` 只忽略 ENOENT，
+ * 不重试占用）。detached 后台任务（runner + Git Bash 外壳）的日志句柄是内核直写的，
+ * 可能比 `taskkill` + 200ms 活得更久；另一个边界是 4s 的 `sleep` 已自然结束、
+ * `taskkill /T` 打在已死 pid 上失败，此时只能靠等待让持有者退出。
+ *
+ * 删完显式断言目录已消失；删不掉就**抛错让测试失败**（错误信息带上根因提示），
+ * 不再静默留给 OS —— 一个泄漏的临时目录会伪装成「测试通过」。
+ */
 async function cleanup(root: string, pid: unknown): Promise<void> {
   killTree(pid);
+  // 给被杀的进程树一点时间释放日志文件句柄。
   await new Promise((resolve) => setTimeout(resolve, 200));
   try {
-    rmSync(root, { recursive: true, force: true });
-  } catch {
-    /* Windows 上偶尔仍被占用：临时目录留给 OS 清理，不因此让测试失败 */
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (error) {
+    throw new Error(
+      `清理临时目录失败：${root}\n` +
+        "可能原因：detached 后台任务（runner + Git Bash 外壳）的日志句柄仍未释放，" +
+        "或 taskkill 打在已自然退出的 pid 上而进程尚未完全退出。\n" +
+        `原始错误：${String(error)}`,
+    );
   }
+  assert.ok(!existsSync(root), `临时目录必须已删除：${root}`);
 }
 
 test("F3 -1 起一个长跑命令 → 工具在 2000ms 内返回（立刻返回）", async () => {
