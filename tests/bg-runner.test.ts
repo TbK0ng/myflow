@@ -19,6 +19,8 @@ import {
   resolveShellPath,
   runCommand,
   shellArgsFor,
+  spawnRetryDelayMs,
+  SPAWN_RETRY_TOTAL_BUDGET_MS,
 } from "../.myflow/scripts/bg_runner.mjs";
 
 // F1 — the background-task wrapper (`.myflow/scripts/bg_runner.mjs`).
@@ -84,6 +86,33 @@ function isAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Kill a process and its descendants.
+ *
+ * The runner starts its shell *detached*, so killing the runner no longer reaps
+ * the shell: that is the whole point of detaching, but it means a test that
+ * leaves a long-running command behind also leaves a process holding the log
+ * file open, and Windows then refuses to remove the temp directory (EPERM).
+ * `taskkill /F /T` is invoked from Node with an argv array — never through Git
+ * Bash, which rewrites `/F` into an `F:/` path — and follows the parent/child
+ * tree even across the detached boundary.
+ */
+function killTree(pid: number): void {
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
   }
 }
 
@@ -340,12 +369,15 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
 
     let record: Record<string, unknown> | undefined;
     let runnerCode: number | undefined;
+    const delays: number[] = [];
     const outcome = await runCommand({
       command: "echo retried-ok",
       logPath: log,
       cwd: dir,
       spawnImpl: spawnImpl as unknown as typeof spawn,
-      wait: () => {},
+      wait: (ms: number) => {
+        delays.push(ms);
+      },
       onOutcome: (payload, code) => {
         record = payload;
         runnerCode = code;
@@ -354,6 +386,7 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
 
     assert.equal(calls, 3, "前两次 EAGAIN 失败后必须再试一次");
     assert.equal(outcome.attempts, 3);
+    assert.deepEqual(delays, [250, 375], "两次重试必须按退避曲线等待");
     assert.equal(record?.retries, 2, "靠重试才起来这件事必须写进 .exit");
     assert.equal(record?.exit_code, 0);
     assert.equal(runnerCode, 0);
@@ -382,18 +415,22 @@ test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记�
     };
 
     let record: Record<string, unknown> | undefined;
+    const delays: number[] = [];
     const outcome = await runCommand({
       command: "no-such-command-xyz",
       logPath: log,
       cwd: dir,
       spawnImpl: spawnImpl as unknown as typeof spawn,
-      wait: () => {},
+      wait: (ms: number) => {
+        delays.push(ms);
+      },
       onOutcome: (payload) => {
         record = payload;
       },
     });
 
     assert.equal(calls, 1, "ENOENT 重试也不会好转，必须只尝试一次");
+    assert.deepEqual(delays, [], "ENOENT 不得触发任何退避等待");
     assert.equal(outcome.attempts, 1);
     assert.equal(record?.exit_code, null);
     assert.match(String(record?.error), /ENOENT/);
@@ -633,7 +670,9 @@ test("S2 -2: 命令仍在运行时，另一个进程能立刻读到已写入的�
       assert.equal(existsSync(exit), false, "命令还在跑时不得写出 .exit");
       assert.equal(isAlive(child.pid!), true, "读取时命令进程必须仍然活着");
     } finally {
-      child.kill("SIGKILL");
+      // The runner starts the shell detached now, so killing the runner alone
+      // would leave the sleeping shell holding the log open; kill the tree.
+      killTree(child.pid!);
       await once(child, "close").catch(() => {});
     }
   } finally {
@@ -656,6 +695,165 @@ test("S2 -3: 日志路径含空格/单引号、命令含引号与空格都能跑
     assert.match(readFileSync(log, "utf-8"), /quoted marker with spaces/);
     const record = JSON.parse(readFileSync(exit, "utf-8"));
     assert.equal(record.exit_code, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- S3: no console when starting the shell, and a bounded retry budget ----
+//
+// S3 root cause: under load (the full test suite spawns hundreds of processes)
+// Windows intermittently refuses `CreateProcess` with ERROR_NO_SYSTEM_RESOURCES
+// (232) while building a console for the console programs the console-less
+// runner starts. Two changes: (A) start the shell itself detached so Windows
+// does not allocate a console for it at all, and (B) retry a transient refusal
+// on a bounded backoff instead of retrying twice in half a second.
+
+test("S3 -1: 起外壳时 stdio:'ignore' 且仅在 Windows 上 detached，不传任何 fd", async () => {
+  // 回退点：去掉 Windows 上的 detached（改回 { cwd, stdio: "ignore" }）
+  //         → win32 上 detached 断言变红；
+  //         改成无条件 detached（不再按平台判断）→ POSIX 上同一条断言变红，
+  //         因为那会把外壳移出 wrapper 的进程组、打掉 design.md §4.4 的组杀；
+  //         改回向子进程传数字 fd → collectNumbers 变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "detached.log");
+    const captured: Array<Record<string, unknown>> = [];
+    const spawnImpl = (
+      shell: string,
+      args: readonly string[],
+      options: Parameters<typeof spawn>[2],
+    ) => {
+      captured.push(options as unknown as Record<string, unknown>);
+      return spawn(shell, args, options);
+    };
+    let record: Record<string, unknown> | undefined;
+    await runCommand({
+      command: "echo detached-ok",
+      logPath: log,
+      cwd: dir,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      onOutcome: (payload) => {
+        record = payload;
+      },
+    });
+
+    assert.ok(captured.length >= 1, "至少要真正 spawn 一次");
+    for (const options of captured) {
+      assert.equal(
+        options.detached,
+        process.platform === "win32",
+        "Windows 上起外壳必须 detached（不建控制台窗口）；非 Windows 必须留在 wrapper 进程组内（design.md §4.4）",
+      );
+      assert.equal(options.stdio, "ignore", '起外壳必须 stdio:"ignore"');
+      assert.deepEqual(collectNumbers(options), [], "不得向子进程传任何数字 fd");
+    }
+    assert.equal(record?.exit_code, 0, "detached 后退出码仍必须被记录");
+    assert.match(readFileSync(log, "utf-8"), /detached-ok/, "detached 后命令仍必须真的跑起来且输出进日志");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("S3 -2: 被拒时按递增退避重试，穷尽 8 次并不超预算，错误可操作", async () => {
+  // 回退点：MAX_SPAWN_RETRIES 改回 2 → attempts/calls 变红；
+  //         退避改成固定值 → delays 断言变红；删掉可操作错误文案 → error 断言变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "exhausted.log");
+    const delays: number[] = [];
+    let calls = 0;
+    const spawnImpl = () => {
+      calls += 1;
+      const fake = new EventEmitter();
+      setImmediate(() => {
+        const error = new Error("spawn EAGAIN") as NodeJS.ErrnoException;
+        error.code = "EAGAIN";
+        error.errno = -4094;
+        fake.emit("error", error);
+      });
+      return fake as unknown as ChildProcess;
+    };
+    let record: Record<string, unknown> | undefined;
+    const outcome = await runCommand({
+      command: "never-runs",
+      logPath: log,
+      cwd: dir,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      wait: (ms: number) => {
+        delays.push(ms);
+      },
+      onOutcome: (payload) => {
+        record = payload;
+      },
+    });
+
+    assert.equal(outcome.attempts, 8, "1 次初始 + 7 次重试");
+    assert.equal(calls, 8);
+    // Hard-coded on purpose: deriving the expected values from
+    // `spawnRetryDelayMs` would make this assertion circular and would let a
+    // change to the backoff formula pass unnoticed.
+    assert.deepEqual(
+      delays,
+      [250, 375, 562.5, 843.75, 1265.625, 1898.4375, 2000],
+      "退避曲线必须是 250ms * 1.5^n，封顶 2s",
+    );
+    assert.deepEqual(
+      [1, 2, 3, 4, 5, 6, 7, 8].map((n) => spawnRetryDelayMs(n)),
+      [250, 375, 562.5, 843.75, 1265.625, 1898.4375, 2000, 2000],
+      "spawnRetryDelayMs 必须实现 250*1.5^n 且封顶 2s",
+    );
+    const total = delays.reduce((sum, value) => sum + value, 0);
+    assert.equal(total, 7195.3125, "退避总和必须是一个可断言的确切值");
+    assert.ok(total <= SPAWN_RETRY_TOTAL_BUDGET_MS, `退避总和 ${total}ms 不得超过预算 ${SPAWN_RETRY_TOTAL_BUDGET_MS}ms`);
+    assert.equal(record?.retries, 7, "穷尽重试的差值必须写进 .exit");
+    assert.equal(record?.exit_code, null);
+    assert.match(String(record?.error), /refused to create the process after 8 attempts/);
+    assert.match(String(record?.error), /environment condition/);
+    assert.match(String(record?.error), /foreground/);
+    assert.match(String(record?.error), /EAGAIN/);
+    assert.match(String(record?.error), /errno -4094/, "原始 errno 必须随错误一起留下");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("S3 -3: 永远失败时有界放弃（真实等待，总耗时小于预算+余量）", async () => {
+  // 回退点：把重试改成无上界的循环，或让 wait 的时长不再封顶
+  //         → 该用例要么超时要么 elapsed 超出上界而变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "bounded.log");
+    const spawnImpl = () => {
+      const fake = new EventEmitter();
+      setImmediate(() => {
+        const error = new Error("spawn UNKNOWN") as NodeJS.ErrnoException;
+        error.code = "UNKNOWN";
+        fake.emit("error", error);
+      });
+      return fake as unknown as ChildProcess;
+    };
+    let record: Record<string, unknown> | undefined;
+    const started = Date.now();
+    const outcome = await runCommand({
+      command: "never-runs",
+      logPath: log,
+      cwd: dir,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      onOutcome: (payload) => {
+        record = payload;
+      },
+    });
+    const elapsed = Date.now() - started;
+
+    assert.equal(outcome.attempts, 8);
+    assert.ok(elapsed >= 1000, `必须真的等过（实测 ${elapsed}ms）`);
+    assert.ok(
+      elapsed < SPAWN_RETRY_TOTAL_BUDGET_MS + 3000,
+      `总耗时 ${elapsed}ms 必须小于预算 ${SPAWN_RETRY_TOTAL_BUDGET_MS}ms + 余量`,
+    );
+    assert.match(String(record?.error), /refused to create the process after 8 attempts/);
+    assert.match(String(record?.error), /UNKNOWN/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

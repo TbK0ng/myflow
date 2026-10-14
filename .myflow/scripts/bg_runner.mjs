@@ -40,6 +40,20 @@
  *     Letting the shell open the log removes that path entirely. The log path is
  *     quoted for the shell that receives it (`quoteForBash` / `quoteForCmd`), so
  *     a path containing spaces or quotes cannot break out of the redirection.
+ *   - On Windows the shell is also started **detached**, so libuv asks for
+ *     `DETACHED_PROCESS` and the shell is created **without a console**. This
+ *     wrapper is console-less, so without the flag Windows would build a fresh
+ *     console — and a console window — for every background task; that is both
+ *     a visible flash and an allocation out of the interactive desktop heap,
+ *     whose exhaustion is reported as `ERROR_NO_SYSTEM_RESOURCES` (232).
+ *     Whether that heap is what refuses these spawns is **unmeasured**, so the
+ *     flag is not claimed as the fix. Off Windows the shell deliberately stays
+ *     in this process's group, because that group is what `myflow_bg_stop`
+ *     signals (`design.md` §4.4).
+ *     The flag does not change how the command runs or how its result is
+ *     observed: this process still waits for the child's `exit` event.
+ *   - Creating that shell is retried on a *bounded* backoff when the OS
+ *     refuses transiently (see the retry policy below).
  *   - When the command exits this script writes `<exitPath>`:
  *       `{"exit_code":N,"signal":S,"at":"<ISO>","shell":"<path>"}` on a
  *       normal exit,
@@ -92,21 +106,53 @@ const RENAME_RETRIES = 50;
 const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 
 /**
- * Bounded retry policy for a *transient* process-creation failure.
+ * Bounded backoff for a *transient* process-creation failure.
  *
  * Windows occasionally refuses to create a process with ERROR_NO_SYSTEM_RESOURCES
  * (232) while the machine is momentarily short of some resource (paged pool,
- * desktop heap, handles). The same command usually starts if it is attempted
- * again a moment later, so a small bounded number of retries turns a transient
- * refusal into a delayed success instead of a task that never started.
+ * desktop heap, handles). The refusal is a *snapshot* of a transient condition:
+ * the same command usually starts if it is attempted again a moment later, so
+ * retrying turns "the task never started" into "the task started a little late".
+ *
+ * The schedule is deliberately finite. A retry that waited forever would turn
+ * "the command genuinely cannot start" into a hung task, which is worse than a
+ * clear failure, so the budget is capped: at most `MAX_SPAWN_RETRIES` retries
+ * (8 attempts in total) with a growing delay, `250ms * 1.5^n` capped at `2s`,
+ * for a total wait well under `SPAWN_RETRY_TOTAL_BUDGET_MS`.
  *
  * Only *transient/unknown* failures are retried. A missing program (`ENOENT`),
  * a bad argument (`EINVAL`), or a permission problem (`EACCES` / `EPERM`) will
  * fail identically no matter how many times it is attempted, so retrying those
  * just wastes time and hides the real error.
  */
-const MAX_SPAWN_RETRIES = 2;
-const SPAWN_RETRY_DELAY_MS = 250;
+const MAX_SPAWN_RETRIES = 7;
+const SPAWN_RETRY_BASE_DELAY_MS = 250;
+const SPAWN_RETRY_BACKOFF_FACTOR = 1.5;
+const SPAWN_RETRY_MAX_DELAY_MS = 2000;
+
+/**
+ * The delay before retrying after attempt number `attempts` (1-based) failed.
+ *
+ * Exported so a test can assert the whole backoff schedule — and its total —
+ * without actually sleeping through it. The caller passes the number of
+ * attempts *already made*, so the first retry gets the base delay.
+ *
+ * @param {number} attempts how many attempts have been made so far (>= 1)
+ * @returns {number} milliseconds to wait before the next attempt
+ */
+export function spawnRetryDelayMs(attempts) {
+  const index = Math.max(0, attempts - 1);
+  const grown = SPAWN_RETRY_BASE_DELAY_MS * SPAWN_RETRY_BACKOFF_FACTOR ** index;
+  return Math.min(grown, SPAWN_RETRY_MAX_DELAY_MS);
+}
+
+/**
+ * The documented ceiling for the whole retry schedule. The default schedule
+ * sums to about 7.2s (250 + 375 + 562.5 + 843.75 + 1265.625 + 1898.4375 +
+ * 2000); this constant is the number a caller can rely on and a test asserts
+ * against, with headroom for the attempts themselves.
+ */
+export const SPAWN_RETRY_TOTAL_BUDGET_MS = 10_000;
 const RETRYABLE_SPAWN_CODES = new Set(["EAGAIN", "ENOMEM", "EMFILE", "ENFILE"]);
 const NON_RETRYABLE_SPAWN_CODES = new Set(["ENOENT", "EINVAL", "EACCES", "EPERM"]);
 
@@ -409,11 +455,57 @@ function retriesField(attempts) {
   return attempts > 1 ? { retries: attempts - 1 } : {};
 }
 
-/** The `.exit` payload for a creation that never produced a process. */
+/** The error code (`ENOENT`, `EAGAIN`, `UNKNOWN`, ...) if the error carries one. */
+function errorCodeOf(error) {
+  return error && typeof error === "object" && "code" in error
+    ? String(/** @type {{ code: unknown }} */ (error).code)
+    : "";
+}
+
+/**
+ * A readable description of a creation failure: the OS message plus the raw
+ * `code` and numeric `errno` when they are not already part of it. Windows
+ * errors with no POSIX mapping surface as `spawn UNKNOWN`; the numeric errno is
+ * then the only place the original NTSTATUS/Win32 value is preserved, so it has
+ * to travel with the message.
+ */
+function describeSpawnError(error) {
+  const message = messageOf(error);
+  const code = errorCodeOf(error);
+  const errno =
+    error && typeof error === "object" && "errno" in error
+      ? /** @type {{ errno: unknown }} */ (error).errno
+      : undefined;
+  const extras = [];
+  if (code && !message.includes(code)) extras.push(`code ${code}`);
+  if (typeof errno === "number" && !message.includes(String(errno))) extras.push(`errno ${errno}`);
+  return extras.length > 0 ? `${message} (${extras.join(", ")})` : message;
+}
+
+/**
+ * The `.exit` payload for a creation that never produced a process.
+ *
+ * When the creation was retried and every attempt was refused, the message has
+ * to say plainly that the *environment* refused to create a process — not that
+ * the command was mistyped — and it has to carry the raw code/errno, so a
+ * reader is not left debugging a command that was never the problem. A
+ * single-attempt deterministic failure (`ENOENT` and friends) keeps the raw OS
+ * message, which already names the cause.
+ */
 function spawnFailureRecord(error, attempts, shellPath) {
+  const detail = describeSpawnError(error);
+  const errorText =
+    attempts > 1
+      ? [
+          `the operating system refused to create the process after ${attempts} attempts: ${detail}.`,
+          "This is an environment condition — the OS was momentarily out of a resource",
+          "such as memory, handles, or desktop heap — not a mistyped command.",
+          "Retry later; to confirm the command itself is fine, run it in the foreground.",
+        ].join(" ")
+      : detail;
   return {
     exit_code: null,
-    error: messageOf(error),
+    error: errorText,
     at: isoTimestamp(),
     shell: shellPath,
     ...retriesField(attempts),
@@ -446,7 +538,6 @@ function spawnFailureRecord(error, attempts, shellPath) {
  *   spawnImpl?: typeof spawn,
  *   wait?: (milliseconds: number) => void,
  *   maxRetries?: number,
- *   retryDelayMs?: number,
  *   isRetryable?: (error: unknown) => boolean,
  * }} options
  * @returns {Promise<{ attempts: number }>}
@@ -461,7 +552,6 @@ export function runCommand(options) {
     spawnImpl = spawn,
     wait = sleepSync,
     maxRetries = MAX_SPAWN_RETRIES,
-    retryDelayMs = SPAWN_RETRY_DELAY_MS,
     isRetryable = isRetryableSpawnError,
   } = options;
 
@@ -492,12 +582,27 @@ export function runCommand(options) {
         // and break the "read new bytes while it still runs" guarantee; handing
         // a descriptor over as a standard handle would push libuv onto the
         // Windows handle-list path that can fail with ERROR_NO_SYSTEM_RESOURCES.
-        child = spawnImpl(shellPath, shellArgs, { cwd, stdio: "ignore" });
+        //
+        // On Windows the shell is started detached, i.e. with
+        // `DETACHED_PROCESS`, so it gets no console. This wrapper has none
+        // either, so without the flag Windows would build a fresh console --
+        // and a console window -- for every background task: a visible flash,
+        // and an allocation from the interactive desktop heap, the resource
+        // whose exhaustion is reported as ERROR_NO_SYSTEM_RESOURCES (232).
+        // Whether that heap is what refuses these spawns is unmeasured, so this
+        // is not claimed as the fix.
+        //
+        // Windows only. `detached` also moves the child into a new process
+        // group, and off Windows `myflow_bg_stop` signals this process's group
+        // (`process.kill(-pid)`, design.md §4.4); a detached shell would sit
+        // outside that group and survive the stop.
+        const detachShell = process.platform === "win32";
+        child = spawnImpl(shellPath, shellArgs, { cwd, stdio: "ignore", detached: detachShell });
       } catch (error) {
         // A synchronous throw from `spawn` means the process was never created,
         // so it is as safe to retry as an asynchronous `'error'`.
         if (attempts <= maxRetries && isRetryable(error)) {
-          wait(retryDelayMs);
+          wait(spawnRetryDelayMs(attempts));
           attempt();
           return;
         }
@@ -510,7 +615,7 @@ export function runCommand(options) {
         if (settled) return;
         settled = true;
         if (attempts <= maxRetries && isRetryable(error)) {
-          wait(retryDelayMs);
+          wait(spawnRetryDelayMs(attempts));
           attempt();
           return;
         }
