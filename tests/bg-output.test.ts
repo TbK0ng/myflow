@@ -44,6 +44,9 @@ import {
 //   -8：offset>size 时静默返回空 → text/reset 断言变红。
 //   -10：把 max_bytes 直接当字节偏移切（不回退到字符边界）→ 文本出现 U+FFFD / 拼接不等。
 //   -11：退化时返回空原地不动 → 循环卡死、拼不回全文；把 end 回退成空也会变红。
+//   -13：tail 不丢弃被 max_bytes 切开的半行（completeLines 改回 split）→ 首行是半行，断言变红；
+//         反过来「总是丢弃首行」→ 窗口正好落在行首时会多丢一整行，断言变红。
+//   -14：tail 的退化例外被去掉（partialFirstLine 时无条件丢弃首行）→ 单行超限返回空，断言变红。
 
 const KEY = "pi_bgoutput";
 
@@ -476,6 +479,72 @@ test("F4 -12 tail 起点对齐：max_bytes 落在字符中间时首字符不被�
     const degenerate = await run(root, { task_id: idD, mode: "tail", max_bytes: 1 });
     assert.equal(degenerate.details.text, "字", "退化时必须返回尾部一个完整字符，不得为空");
     assert.ok(!String(degenerate.details.text).includes("\uFFFD"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -13 tail 按行边界截断：max_bytes 切在行中间时不返回半行", async () => {
+  // 回退点：把 completeLines 改回 split（即不丢不完整首行）→ 返回文本以半行开头，
+  //         断言变红；把行首判定改成「总是丢弃首行」→ 窗口正好落在行首时断言变红。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0013";
+    writeEntry(dir, makeEntry(dir, id));
+    const content = "AAAA\nBBBB\nCCCC\nDDDD\n"; // 20 字节
+    const logFile = logPath(dir, id);
+    writeFileSync(logFile, content);
+
+    // max_bytes=12 → 窗口起点 = 20-12 = 8，正好落在第二行 "BBBB" 的中间。
+    const cursor = cursorPath(root, KEY, id);
+    const result = await run(root, { task_id: id, mode: "tail", lines: 3, max_bytes: 12 });
+    const text = String(result.details.text);
+    assert.equal(result.details.truncated, true, "被 max_bytes 截断必须标 truncated");
+    assert.equal(text, "CCCC\nDDDD\n", "必须从下一个完整行开始，不得返回半行");
+    assert.ok(!text.includes("BBB"), "不得包含被切开的半行片段");
+    assert.ok(content.includes(`\n${text}`), "返回的必须是完整行组成的后缀");
+    assert.equal(existsSync(cursor), false, "tail 不得创建游标文件");
+    assert.equal(readCursor(cursor), 0);
+    assert.equal(result.details.next_offset, 0, "tail 不动游标");
+
+    // 窗口正好落在行首（起点前一个字节是换行）时不得多丢首行。
+    const idBoundary = "bg-test-0013b";
+    writeEntry(dir, makeEntry(dir, idBoundary));
+    writeFileSync(logPath(dir, idBoundary), content);
+    const atBoundary = await run(root, {
+      task_id: idBoundary,
+      mode: "tail",
+      lines: 3,
+      max_bytes: 16,
+    });
+    // 20-16 = 4 → 起点是 index 4 的 '\n'，其后 "BBBB\nCCCC\nDDDD\n" 三行完整。
+    assert.equal(String(atBoundary.details.text), "BBBB\nCCCC\nDDDD\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -14 tail 单行超限：唯一例外是返回对齐片段并标 truncated", async () => {
+  // 回退点：把退化例外也丢掉（partialFirstLine 时无条件丢弃首行）→ 返回空，断言变红。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0014";
+    writeEntry(dir, makeEntry(dir, id));
+    const content = "0123456789"; // 单行、10 字节、无换行
+    const logFile = logPath(dir, id);
+    writeFileSync(logFile, content);
+
+    const cursor = cursorPath(root, KEY, id);
+    const result = await run(root, { task_id: id, mode: "tail", lines: 3, max_bytes: 4 });
+    const text = String(result.details.text);
+    assert.equal(result.details.truncated, true, "被 max_bytes 截断必须标 truncated");
+    assert.equal(text, "6789", "唯一例外：单行本身超限时返回其（字符边界对齐的）片段");
+    assert.ok(!text.includes("\uFFFD"));
+    assert.ok(content.endsWith(text), "片段必须是该行的尾部");
+    assert.equal(existsSync(cursor), false, "tail 不得创建游标文件");
+    assert.equal(readCursor(cursor), 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
