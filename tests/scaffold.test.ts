@@ -179,7 +179,7 @@ test("copied payload scripts run from the new project root", () => {
       encoding: "utf-8",
       env,
     });
-    execFileSync("python3", [task, "start", ".myflow/tasks/scaffold", "--allow-empty-context"], { cwd: destination, encoding: "utf-8", env });
+    execFileSync("python3", [task, "start", ".myflow/tasks/scaffold", "--allow-empty-context", "--allow-unapproved"], { cwd: destination, encoding: "utf-8", env });
     const current = execFileSync("python3", [task, "current", "--source"], { cwd: destination, encoding: "utf-8", env });
     assert.match(current, /\.myflow\/tasks\/scaffold\tin_progress\tScaffold task/);
   } finally {

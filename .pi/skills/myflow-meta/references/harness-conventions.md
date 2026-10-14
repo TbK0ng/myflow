@@ -95,6 +95,17 @@ Keep these consistent across files; change them together or not at all:
   put user-level state in `~/.myflow` — that name is the project marker, so a
   directory called that above a project makes the resolve step stop there and
   redirect the harness (tasks, sessions, archive) into the home directory.
+- **Plan approval gate**: `myflow_ask_user` appends `<active task>/questions.jsonl`
+  and `myflow_request_approval` writes `<active task>/approval.json`. `task.py start`
+  refuses to start until a plan file exists, `approval.json`'s `plan_hash`
+  equals the current plan hash, and at least one choice question was answered.
+  The plan hash and the answered count have exactly one implementation
+  (`.myflow/scripts/task.py`): every TS caller reads them through
+  `task.py gate-info` and never re-hashes the plan or counts `questions.jsonl`
+  itself. This is a convention reinforcement against forgetting, **not** a
+  permission boundary — a `bash`-capable agent can bypass it, and
+  `--allow-unapproved` is the escape hatch that leaves
+  `task.json.started_without_approval`.
 
 ## Extension Rules
 
@@ -105,6 +116,11 @@ Keep these consistent across files; change them together or not at all:
 - Agents declare tool allowlists that exclude `myflow_subagent`, so a sub-agent
   cannot dispatch in practice. `tool_call` also blocks that call as a second
   line of defense (for agents without an allowlist); keep both.
+- User interaction is main-session-only: `myflow_ask_user` (one multiple-choice
+  question, 2-4 options, appends `questions.jsonl`) and `myflow_request_approval`
+  (writes `approval.json` only when the user agrees). Both refuse in their
+  handler and again in `tool_call`; keep both lines, and do not put either tool
+  in an agent allowlist.
 - New tools use a plain JSON-schema `parameters` object (no TypeBox import). Pi
   validates it at runtime.
 - `agent_before_settle` holds a `myflow-check` sub-agent until

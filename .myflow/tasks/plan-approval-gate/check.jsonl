@@ -1,0 +1,3 @@
+{"file": ".myflow/spec/harness/index.md", "reason": "校验基准：新增契约是否与实现一致"}
+{"file": "tests/task-gate.test.ts", "reason": "校验基准：门的既有测试是否仍绿"}
+{"file": ".pi/extensions/myflow/index.ts", "reason": "校验基准：既有递归守卫与 writesUnder 路径守卫不得被削弱"}

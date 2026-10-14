@@ -27,6 +27,9 @@ function cleanup(project: Project): void {
 }
 
 function run(project: Project, script: string, args: string[], cwd = project.root): string {
+  // start calls in this suite exercise project-root resolution, not the
+  // plan-approval gate (tests/plan-approval-gate.test.ts), so they pass
+  // --allow-empty-context --allow-unapproved to reach `start` itself.
   return execFileSync("python3", [join(SCRIPTS, script), ...args], {
     cwd,
     encoding: "utf-8",
@@ -45,7 +48,7 @@ test("task.py resolves the project root from a subdirectory", () => {
   const project = makeProject();
   try {
     run(project, "task.py", ["create", "Rooted task", "--slug", "rooted"]);
-    run(project, "task.py", ["start", ".myflow/tasks/rooted", "--allow-empty-context"]);
+    run(project, "task.py", ["start", ".myflow/tasks/rooted", "--allow-empty-context", "--allow-unapproved"]);
 
     const fromDeep = run(project, "task.py", ["current"], deep(project.root));
     assert.match(fromDeep, /rooted|Rooted task/);
@@ -63,7 +66,7 @@ test("get_context.py reads the same state from a subdirectory", () => {
   const project = makeProject();
   try {
     run(project, "task.py", ["create", "Context task", "--slug", "contextual"]);
-    run(project, "task.py", ["start", ".myflow/tasks/contextual", "--allow-empty-context"]);
+    run(project, "task.py", ["start", ".myflow/tasks/contextual", "--allow-empty-context", "--allow-unapproved"]);
 
     const atRoot = JSON.parse(run(project, "get_context.py", ["--json"]));
     const atDeep = JSON.parse(run(project, "get_context.py", ["--json"], deep(project.root)));

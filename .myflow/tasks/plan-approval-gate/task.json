@@ -1,0 +1,9 @@
+{
+  "title": "brainstorm: plan 阶段的提问与批准门",
+  "status": "in_progress",
+  "description": "plan 阶段强制：先问选择性提问、答后出 plan、批准后才能开始执行",
+  "slug": "plan-approval-gate",
+  "parent": null,
+  "created_at": "2026-10-14T13:57:42Z",
+  "started_at": "2026-10-14T14:10:03Z"
+}

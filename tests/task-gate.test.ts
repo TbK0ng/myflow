@@ -18,6 +18,10 @@ import { resolveActiveTaskStatus } from "../.pi/extensions/myflow/turn-cache.ts"
  * `add-context` is the write side without which the gate would be impossible
  * to satisfy: it appends `{file, reason}` rows, the same shape the injection
  * materializes.
+ *
+ * Note: the separate approval gate (plan-approval-gate) also guards `start`.
+ * The cases here that expect a successful start bypass it knowingly with
+ * `--allow-unapproved`; the approval gate has its own suite.
  */
 
 const ROOT = join(import.meta.dirname, "..");
@@ -106,7 +110,7 @@ test("--allow-empty-context bypasses the empty-manifest gate", () => {
     run(root, ["create", "Bypassed", "--slug", "bypassed"], { PI_SESSION_ID: "gate-2" });
     const result = runResult(
       root,
-      ["start", ".myflow/tasks/bypassed", "--allow-empty-context"],
+      ["start", ".myflow/tasks/bypassed", "--allow-empty-context", "--allow-unapproved"],
       { PI_SESSION_ID: "gate-2" },
     );
     assert.equal(result.status, 0, result.stderr);
@@ -124,7 +128,9 @@ test("a missing manifest is not gated; only seeded-but-uncurated is", () => {
     mkdirSync(taskDir, { recursive: true });
     writeFileSync(join(taskDir, "task.json"), JSON.stringify({ title: "Legacy", status: "planning" }));
 
-    const result = runResult(root, ["start", ".myflow/tasks/legacy"], { PI_SESSION_ID: "gate-missing" });
+    // --allow-unapproved: this case pins the *manifest* asymmetry, so it must
+    // not be stopped by the separate approval gate.
+    const result = runResult(root, ["start", ".myflow/tasks/legacy", "--allow-unapproved"], { PI_SESSION_ID: "gate-missing" });
     assert.equal(result.status, 0, `an absent manifest must not gate: ${result.stderr}`);
     assert.equal(resolveActiveTaskStatus(root, "pi_gate-missing").status, "in_progress");
   } finally {
@@ -159,7 +165,7 @@ test("add-context writes a reason-bearing entry and does not duplicate it", () =
     assert.deepEqual(checkRow, { file: "specs/", type: "directory", reason: "the specs dir" });
 
     // With both manifests curated, `start` succeeds without the escape hatch.
-    const started = runResult(root, ["start", ".myflow/tasks/curated"], { PI_SESSION_ID: "gate-3" });
+    const started = runResult(root, ["start", ".myflow/tasks/curated", "--allow-unapproved"], { PI_SESSION_ID: "gate-3" });
     assert.equal(started.status, 0, started.stderr);
     assert.equal(resolveActiveTaskStatus(root, "pi_gate-3").status, "in_progress");
   } finally {
@@ -220,7 +226,7 @@ test("task.py finish clears the pointer without changing status or location", ()
   const root = makeProject();
   try {
     run(root, ["create", "Finishable", "--slug", "finishable"], { PI_SESSION_ID: "gate-fin" });
-    run(root, ["start", ".myflow/tasks/finishable", "--allow-empty-context"], { PI_SESSION_ID: "gate-fin" });
+    run(root, ["start", ".myflow/tasks/finishable", "--allow-empty-context", "--allow-unapproved"], { PI_SESSION_ID: "gate-fin" });
     const taskDir = join(root, ".myflow", "tasks", "finishable");
 
     const result = runResult(root, ["finish"], { PI_SESSION_ID: "gate-fin" });

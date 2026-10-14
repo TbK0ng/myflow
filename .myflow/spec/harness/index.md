@@ -19,6 +19,11 @@ Payload tour and inventory:
       change updates this file *and* every copy of the rule in the same change.
 - [ ] If you touch dispatch, or anything that writes, read
       "Write scope: `writesUnder`" below first.
+- [ ] If you change the approval gate, the plan hash, or either of the two new
+      tools (`myflow_ask_user` / `myflow_request_approval`), keep the
+      one-implementation rule: the hash and the "answered" count live only in
+      `.myflow/scripts/task.py`, and every TS caller goes through
+      `task.py gate-info`.
 
 ## Contracts
 
@@ -90,6 +95,60 @@ Payload tour and inventory:
   (the Dispatch Protocol promises sub-agents see them), or a missing artifact
   starts emitting an error instead of being skipped.
 
+### Plan approval gate and plan hash
+
+- **Producers**:
+  - `.pi/extensions/myflow/ask.ts` (`myflow_ask_user`) — the only writer of
+    `<active task>/questions.jsonl`. It appends one row per call; a row with
+    `via: "ui-select"` and a non-empty `answer` is the only thing that counts as
+    "the user was asked".
+  - `.pi/extensions/myflow/approval.ts` (`myflow_request_approval`) and
+    `task.py approve` — the two writers of `<active task>/approval.json`, the
+    user's approval of one plan revision.
+- **Consumers**:
+  - `task.py start` — refuses to start until a plan file exists and
+    `approval.json` parses with a `plan_hash` equal to the current plan hash;
+    then admits the task only when at least one choice question was answered
+    (the R2 backstop).
+  - `task.py gate-info` — the single read path. It returns the plan hash, the
+    present plan files, and the answered-question count **together**, so no
+    caller re-derives either. The TS approval tool and `/myflow-status` read
+    only this.
+  - `task.py validate` — reports the answered count and the approval state; it
+    is a reporter, `start` is the enforcing gate.
+- **Value/shape**: `approval.json` carries `plan_hash` (`sha256:<hex>`), the
+  ordered list of present plan files, `approved_by` (`ui-confirm` or `cli`),
+  `questions_asked`, a timestamp, and the session id. **`approved_by` is NOT a
+  trustworthy field**: a hand-written file can carry either value, so it must
+  never be used to distinguish a real approval from a forged one. The plan hash is computed
+  by `task.py`'s `_plan_digest` over the `prd.md` / `design.md` / `implement.md`
+  that exist, in that fixed order, as `filename` + NUL + raw bytes + NUL.
+- **Invariant**: **exactly one plan-hash implementation**
+  (`.myflow/scripts/task.py`). The TypeScript side never hashes the plan and
+  never counts `questions.jsonl`; it shells out to `task.py gate-info`. Editing
+  any plan file after approval makes the approval stale and re-opens the gate;
+  deleting `approval.json` revokes it. The gate is a **convention reinforcement
+  against forgetting to ask or approve — it is NOT a security boundary.**
+- **Breaks if**: a second hash implementation or a second "answered" predicate
+  appears (then one side reports "approved" while `start` refuses, with no error
+  naming the root cause); `start` checks only that `approval.json` exists
+  without comparing the hash; or the R2 backstop stops re-checking the answered
+  count at the admitting step.
+- **Honest strength (measured)**: any agent that can run `bash` can write
+  `approval.json` by hand or pass `--allow-unapproved`. `task.py approve`'s
+  `sys.stdin.isatty()` check does **not** stop it in this environment: Pi's bash
+  tool allocates a pty, and `sys.stdin.isatty()` was measured as `True` there.
+  (On Windows the check is weaker still: redirecting `< /dev/null` maps to `NUL`
+  and also reports `isatty() === true`; only a **pipe** counts as non-tty.)
+  A forged `approval.json` — correct `plan_hash`, `approved_by: "ui-confirm"`,
+  plus a fabricated `via:"ui-select"` row — was measured to pass `start`
+  outright; there is **no technical countermeasure**, only after-the-fact
+  inspection.
+  The gate reliably blocks *forgetting* and *skipping*; it does not stop a
+  deliberate bypass. `--allow-unapproved` leaves a trace
+  (`task.json.started_without_approval: true`) and prints a warning, so a
+  bypass is discoverable after the fact.
+
 ## Design Decisions
 
 ### Design Decision: bound the write scope, do not try to exclude writers
@@ -140,4 +199,8 @@ Payload tour and inventory:
       `harness-conventions.md`, and the `myflow-meta` / `myflow-brainstorm`
       skills. A stale rule statement anywhere is a bug.
 - [ ] A new refusal path has a test that fails when the guard is reverted.
+- [ ] The approval gate's contract copies agree: `.myflow/workflow.md`, the
+      `myflow-meta` harness conventions, the `myflow-brainstorm` skill, and
+      `.pi/prompts/myflow-continue.md`. No copy still describes `task.py start`
+      as gated only on the context manifests.
 - [ ] No agent gained `bash` without revisiting the Design Decision above.
