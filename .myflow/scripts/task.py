@@ -714,6 +714,30 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_finish(args: argparse.Namespace) -> int:
+    """Clear the active-task pointer for this session; do not touch the task.
+
+    Distinct from ``archive``: the task stays where it is and keeps its status,
+    so a task can be deactivated without being completed or moved.
+    """
+    session_file, _source = _resolve_session(create=False)
+    if session_file is None or not session_file.is_file():
+        print("no active task")
+        return 0
+    try:
+        data = json.loads(session_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    current = data.get("current_task")
+    if not isinstance(current, str) or not current.strip():
+        print("no active task")
+        return 0
+    data["current_task"] = None
+    session_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"cleared active task (was: {current.replace(chr(92), '/')})")
+    return 0
+
+
 def _collect_tasks() -> list[dict]:
     if not TASKS_DIR.is_dir():
         return []
@@ -789,6 +813,9 @@ def main() -> int:
     p_sub.add_argument("parent_dir")
     p_sub.add_argument("child_dir")
     p_sub.set_defaults(func=cmd_add_subtask)
+
+    p_finish = sub.add_parser("finish", help="clear the active task pointer (does not change status)")
+    p_finish.set_defaults(func=cmd_finish)
 
     p_add = sub.add_parser("add-context", help="append a curated entry to a task's jsonl manifest")
     p_add.add_argument("task_dir")

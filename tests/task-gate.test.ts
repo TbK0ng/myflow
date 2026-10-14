@@ -215,3 +215,34 @@ test("task.py validate fails a seeded empty manifest and a missing referenced fi
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("task.py finish clears the pointer without changing status or location", () => {
+  const root = makeProject();
+  try {
+    run(root, ["create", "Finishable", "--slug", "finishable"], { PI_SESSION_ID: "gate-fin" });
+    run(root, ["start", ".myflow/tasks/finishable", "--allow-empty-context"], { PI_SESSION_ID: "gate-fin" });
+    const taskDir = join(root, ".myflow", "tasks", "finishable");
+
+    const result = runResult(root, ["finish"], { PI_SESSION_ID: "gate-fin" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /cleared active task/);
+    assert.equal(resolveActiveTaskStatus(root, "pi_gate-fin").status, "no_task");
+
+    // The task itself is untouched: same place, still in_progress.
+    assert.ok(existsSync(taskDir), "finish must not move the task");
+    assert.equal(JSON.parse(readFileSync(join(taskDir, "task.json"), "utf-8")).status, "in_progress");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("task.py finish with no active task reports it and exits 0", () => {
+  const root = makeProject();
+  try {
+    const result = runResult(root, ["finish"], { PI_SESSION_ID: "gate-none" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /no active task/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
