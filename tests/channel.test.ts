@@ -314,6 +314,32 @@ async function waitForFile(path: string, timeoutMs = 10_000): Promise<void> {
   }
 }
 
+/** 判定进程是否仍活着：`process.kill(pid, 0)` 不抛 = 活着。 */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 有界等待 pid 消失。
+ *
+ * 终止是异步的：Windows 上一个已终止的进程只要还有句柄未关闭，PID 就仍可被命中，
+ * 所以「杀掉之后立刻探测一次」断言的真实含义是「瞬间已死且已被回收」—— 那是 OS
+ * 对任何实现都不保证的事。改成轮询等待，超时仍活则返回 false（调用方据此变红）。
+ */
+async function waitForPidExit(pid: number, timeoutMs = 5_000, intervalMs = 100): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!isPidAlive(pid)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 test("channel rm --force stops the worker together with its children", async () => {
   const sandbox = makeSandbox();
   channel(sandbox, ["create", "tree"]);
@@ -322,9 +348,6 @@ test("channel rm --force stops the worker together with its children", async () 
   const pidFile = join(store, "tree", "child.pid");
   mkdirSync(dirname(log), { recursive: true });
   writeFileSync(log, "x");
-  // A worker that leaves a child holding its log handle open: the case that used
-  // to keep the channel undeletable, because only the worker itself was stopped.
-  // A real worker leaves MCP servers behind in exactly the same way.
   // A worker that leaves a child holding its log handle open: the case that used
   // to keep the channel undeletable, because only the worker itself was stopped.
   // A real worker leaves MCP servers behind in exactly the same way. The holder is
@@ -366,16 +389,26 @@ test("channel rm --force stops the worker together with its children", async () 
     );
     await waitForFile(pidFile);
     const childPid = Number(readFileSync(pidFile, "utf-8"));
+    // 前置断言（非空性）：子进程此刻必须真的活着。若上面的谓词坏了（永远返回「已死」），
+    // 后置断言会永远绿；这条会立刻变红。这也排除了「子进程自然退出」造成的假绿。
+    assert.equal(
+      isPidAlive(childPid),
+      true,
+      `the worker's child (pid ${childPid}) must be alive before rm --force, or the stop check below is vacuous`,
+    );
 
     assert.match(channel(sandbox, ["rm", "tree", "--force"]), /removed: tree/);
     assert.ok(!existsSync(join(store, "tree")), "the log is deletable, so nothing holds it");
-    let alive = true;
-    try {
-      process.kill(childPid, 0);
-    } catch {
-      alive = false;
-    }
-    assert.equal(alive, false, "the worker process is stopped with its children");
+    // 后置断言：有界等待子进程消失，超时仍活即变红（这才是「连同子进程一起停掉」的原意）。
+    const waitStartedAt = Date.now();
+    const childGone = await waitForPidExit(childPid);
+    const waitedMs = Date.now() - waitStartedAt;
+    assert.equal(
+      childGone,
+      true,
+      `the worker's child is stopped with its children: pid ${childPid} was still alive after waiting ` +
+        `${waitedMs}ms (upper bound 5000ms), so rm --force left a live child behind`,
+    );
   } finally {
     try {
       process.kill(worker.pid!, "SIGKILL");
