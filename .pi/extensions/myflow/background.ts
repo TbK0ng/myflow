@@ -1059,6 +1059,12 @@ function isContinuationByte(byte: number): boolean {
 }
 
 /**
+ * The LF byte. A `tail` window whose preceding byte is LF starts on a line
+ * boundary, so its first line is complete; otherwise the window opened mid-line.
+ */
+const NEWLINE_BYTE = 0x0a;
+
+/**
  * Pull an exclusive delta `end` position back to the nearest UTF-8 character
  * boundary, so a multi-byte character is never split between two reads.
  *
@@ -1334,7 +1340,27 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
         const split = decoded.split("\n");
         const hadTrailingNewline = decoded.endsWith("\n");
         if (hadTrailingNewline) split.pop();
-        const selected = split.slice(-lines);
+
+        // A byte-budget window can open in the middle of a line. Unlike `delta`,
+        // `tail` has no cursor, so a half-line at the front can never be
+        // completed by a later read — the caller has no way to ask for the rest.
+        // Drop that incomplete first line and start from the next complete one.
+        //
+        // The window opened mid-line exactly when the byte before it is not an
+        // LF (and it is not the start of the file, where every line is
+        // complete). When the window begins on an LF byte the decoded text
+        // starts with "", which this also drops.
+        //
+        // Invariant: `tail` never returns a partial line. The one exception is
+        // when dropping the partial first line would leave nothing at all (the
+        // window covers a single line that is itself longer than `maxBytes`).
+        // Returning an empty string would be less useful than the aligned tail
+        // fragment, so in that case the fragment is kept and `truncated` stays
+        // true. `readTailChunk` has already aligned it to a UTF-8 boundary.
+        const partialFirstLine =
+          chunkStart > 0 && readByteAt(logFile, chunkStart - 1) !== NEWLINE_BYTE;
+        const completeLines = partialFirstLine && split.length > 1 ? split.slice(1) : split;
+        const selected = completeLines.slice(-lines);
         let text = selected.join("\n");
         if (hadTrailingNewline && selected.length > 0) text += "\n";
 
