@@ -74,6 +74,10 @@ machine state: put it in `.gitignore`, never commit it.
   channel `reviewer` worker is held the same way (its launcher sets
   `MYFLOW_VERIFY_GATE`), so a peer review cannot skip the gate.
 - Every dispatch prompt starts with `Active task: <path from task.py current>`.
+- Every dispatch is capped (`timeoutMs`, default 15 minutes, `0` disables it) and
+  logs its raw stream under `.myflow/.runtime/subagent-logs/`. A run that hits the
+  cap is stopped, reported with its log path, and leaves its changes in the tree —
+  nothing is reverted, so re-dispatch a bounded next step instead of redoing it.
 - Read order inside a sub-agent: `implement.jsonl` / `check.jsonl` referenced
   files → `prd.md` → `design.md` if present → `implement.md` if present.
 

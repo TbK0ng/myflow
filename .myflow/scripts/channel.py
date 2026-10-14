@@ -532,6 +532,8 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     worker_prompt = "\n".join(
         [
             task_line,
+            "Delegated work order: nobody is watching this session. Do not create or",
+            "manage myflow tasks, and do not ask whether to create one.",
             f"Channel: {args.name} (scope {scope})",
             f"Your handle: {handle}",
             f"Log: {events_path(args.name, scope)}",

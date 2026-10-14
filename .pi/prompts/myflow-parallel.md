@@ -27,7 +27,8 @@ Start an isolated parallel session for: ${@:-describe the task}
    session id (`myflow-<name>-<timestamp>`, printed by `start`, also recorded
    in `.myflow/.runtime/worktrees.json`): parallel sessions must not inherit a
    finished conversation. To continue one on purpose, pass `--session-id <id>`.
-   The initial run is a delegated work order: it carries the `Active task:` line
+   The initial run is a delegated work order (the prompt says so: no task management,
+   nobody is watching): it carries the `Active task:` line
    when `--task` is given, and it skips the per-turn workflow breadcrumb so it
    starts working instead of asking whether to create a task.
 3. Report the name, worktree path, branch, session id, and log path. The last

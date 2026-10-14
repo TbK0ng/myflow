@@ -72,6 +72,8 @@ python3 ./.myflow/scripts/channel.py rm <channel> --force   # stop its live work
 
 ## Rules
 
+- Every worker gets a delegated work order (no myflow task management); a worker that
+  asks for task consent would stall, because nobody reads its question.
 - One reviewer per tree: `reviewer` fixes files, so `spawn` refuses a second live
   reviewer. `architect` (read-mostly outreach) has no such limit.
 - A channel carries messages; task artifacts under `.myflow/tasks/<slug>/` carry

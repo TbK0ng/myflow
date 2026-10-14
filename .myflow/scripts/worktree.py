@@ -409,7 +409,12 @@ def cmd_start(args: argparse.Namespace) -> int:
     # The initial run is a delegated work order, so it carries the task line and
     # suppresses the per-turn workflow breadcrumb: the session would otherwise
     # stop to ask about task creation instead of doing the work.
-    prompt = f"Active task: {args.task}\n\n{args.prompt}" if args.task else args.prompt
+    work_order = (
+        "Delegated work order: nobody is watching this session. Do not create or\n"
+        "manage myflow tasks, and do not ask whether to create one — the task\n"
+        "lifecycle belongs to the dispatcher. Do the work below and report.\n\n"
+    )
+    prompt = f"Active task: {args.task}\n\n{work_order}{args.prompt}" if args.task else work_order + args.prompt
     command = [*_pi_command(), "-p", "--approve", "--session-id", session_id, prompt]
 
     if args.dry_run:

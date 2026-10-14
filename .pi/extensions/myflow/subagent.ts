@@ -15,6 +15,10 @@
  * working tree, so parallel dispatch is for read-only work. This tool never
  * creates git worktrees.
  *
+ * Every run is capped (`timeoutMs`, default 15 minutes, 0 disables it) and its
+ * raw stream is kept under `.myflow/.runtime/subagent-logs/`, so a run that
+ * never converges is reported and inspectable instead of blocking the caller.
+ *
  * Live progress is reported through the tool's `onUpdate` callback and through
  * the `myflow-subagent-progress` event bus channel.
  *
@@ -22,10 +26,10 @@
  * under `node --test` without installing the Pi package.
  */
 
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
 
 export const MYFLOW_AGENT_ENV = "MYFLOW_AGENT_TYPE";
@@ -42,6 +46,38 @@ export const PROGRESS_CHANNEL = "myflow-subagent-progress";
 export const AGENT_PREFIX = "myflow-";
 export const DEFAULT_AGENT = "myflow-implement";
 export const MAX_PARALLEL_PROMPTS = 6;
+
+/**
+ * Per-run wall clock cap. A dispatch that never converges used to block the
+ * caller for as long as it liked (35 minutes, observed); the cap turns that
+ * into a reported, inspectable stop. `timeoutMs: 0` removes it.
+ */
+export const SUBAGENT_TIMEOUT_MS = 900_000;
+
+/** Raw stdout/stderr of each run, kept so a long or failed run can be read back. */
+export const SUBAGENT_LOG_DIR = ".myflow/.runtime/subagent-logs";
+
+/** Stop a child together with anything it started (MCP servers outlive a plain kill). */
+export function killChildTree(pid: number | undefined): void {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    try {
+      execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore" });
+    } catch {
+      /* already gone */
+    }
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      /* already gone */
+    }
+  }
+}
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
@@ -88,6 +124,11 @@ export interface SingleResult {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  /** Durability for a run that outlives the caller's patience: raw child stream. */
+  logPath?: string;
+  /** The run hit its cap and was stopped; whatever it changed stays in the tree. */
+  timedOut?: boolean;
+  durationMs?: number;
 }
 
 export interface SubagentDetails {
@@ -188,6 +229,10 @@ const SUBAGENT_PARAMETERS = {
     },
     model: { type: "string", description: "Optional model override for the child process." },
     thinking: { type: "string", enum: [...THINKING_LEVELS], description: "Optional thinking level override." },
+    timeoutMs: {
+      type: "number",
+      description: `Per-run cap in milliseconds (default ${SUBAGENT_TIMEOUT_MS}); 0 disables it. A stopped run reports the cap, its log path, and leaves any changes in the tree.`,
+    },
   },
 } as const;
 
@@ -207,8 +252,22 @@ export function isFailedResult(result: SingleResult): boolean {
 }
 
 function getResultOutput(result: SingleResult): string {
+  if (result.timedOut) {
+    const seconds = Math.round((result.durationMs ?? 0) / 1000);
+    const partial = getFinalOutput(result.messages);
+    return [
+      `${result.agent} was stopped after ${seconds}s: it hit the dispatch cap (timeoutMs).`,
+      "Changes it already made are still in the working tree; nothing was reverted.",
+      "Inspect its log, then re-dispatch a bounded next step (or raise timeoutMs, 0 = no cap).",
+      result.logPath ? `log: ${result.logPath}` : "",
+      partial ? `\nlast output:\n${partial}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
   if (isFailedResult(result)) {
-    return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+    const detail = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+    return result.logPath ? `${detail}\n\nlog: ${result.logPath}` : detail;
   }
   return getFinalOutput(result.messages) || "(no output)";
 }
@@ -230,6 +289,45 @@ export function getPiInvocation(args: string[]): { command: string; args: string
   return { command: "pi", args };
 }
 
+interface LazyLog {
+  write(chunk: Buffer): void;
+  close(): void;
+  path(): string | null;
+}
+
+/** Append-only log that only touches the disk once there is something to write. */
+function lazyLogStream(target: string, header: string): LazyLog {
+  let stream: ReturnType<typeof createWriteStream> | null = null;
+  let failed = false;
+  const open = () => {
+    if (stream || failed) return stream;
+    try {
+      mkdirSync(dirname(target), { recursive: true });
+      stream = createWriteStream(target, { flags: "a" });
+      stream.write(header);
+    } catch {
+      failed = true;
+      stream = null;
+    }
+    return stream;
+  };
+  return {
+    write(chunk: Buffer) {
+      open()?.write(chunk);
+    },
+    close() {
+      try {
+        stream?.end();
+      } catch {
+        /* the log is best-effort */
+      }
+    },
+    path() {
+      return stream ? target : null;
+    },
+  };
+}
+
 function applyUsage(usage: UsageStats, raw: NonNullable<SubagentMessage["usage"]>): void {
   usage.input += raw.input ?? 0;
   usage.output += raw.output ?? 0;
@@ -246,12 +344,13 @@ interface RunOptions {
   config: RunConfig;
   signal?: AbortSignal;
   contextKey: string | null;
+  timeoutMs: number;
   onUpdate?: (partial: { content: Array<{ type: "text"; text: string }>; details: SubagentDetails }) => void;
   makeDetails: (runs: SingleResult[]) => SubagentDetails;
 }
 
 async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
-  const { agent, prompt, projectRoot, config, contextKey, signal } = options;
+  const { agent, prompt, projectRoot, config, contextKey, signal, timeoutMs } = options;
 
   // The parent process only has this tool because its own project is trusted.
   // `--approve` lets the isolated child load the same project extension so it
@@ -299,6 +398,13 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
     args.push(prompt);
 
     let wasAborted = false;
+    let timedOut = false;
+    const startedAt = Date.now();
+    const logPath = join(projectRoot, SUBAGENT_LOG_DIR, `${agent.name}-${startedAt}.log`);
+    // The file appears with the first byte of output: a run that never produced
+    // anything (a spawn failure, say) should not leave an empty log behind.
+    const logStream = lazyLogStream(logPath, `# ${agent.name} @ ${new Date(startedAt).toISOString()}\n# prompt: ${prompt.slice(0, 400)}\n`);
+
     const invocation = getPiInvocation(args);
     const env: NodeJS.ProcessEnv = { ...process.env, [MYFLOW_AGENT_ENV]: agent.name };
     if (contextKey) env[MYFLOW_CONTEXT_ENV] = contextKey;
@@ -307,10 +413,25 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
       const proc = spawn(invocation.command, invocation.args, {
         cwd: projectRoot,
         shell: false,
+        // POSIX: own process group, so the whole tree can be signalled at once.
+        detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
         env,
       });
       let buffer = "";
+      let settled = false;
+      const finish = (code: number) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolveExit(code);
+      };
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        killChildTree(proc.pid);
+      }, timeoutMs);
+      if (typeof timer.unref === "function") timer.unref();
 
       const processLine = (line: string) => {
         if (!line.trim()) return;
@@ -336,6 +457,7 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
       };
 
       proc.stdout.on("data", (data: Buffer) => {
+        logStream.write(data);
         buffer += data.toString();
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
@@ -343,23 +465,29 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
       });
 
       proc.stderr.on("data", (data: Buffer) => {
+        logStream.write(data);
         currentResult.stderr += data.toString();
       });
 
       proc.on("close", (code) => {
         if (buffer.trim()) processLine(buffer);
-        resolveExit(code ?? 0);
+        if (timedOut) {
+          // 124 mirrors timeout(1): the run was stopped by its own cap.
+          finish(124);
+          return;
+        }
+        finish(code ?? 0);
       });
 
       proc.on("error", (error) => {
         currentResult.stderr += String(error);
-        resolveExit(1);
+        finish(1);
       });
 
       if (signal) {
         const killProc = () => {
           wasAborted = true;
-          proc.kill("SIGTERM");
+          killChildTree(proc.pid);
         };
         if (signal.aborted) killProc();
         else signal.addEventListener("abort", killProc, { once: true });
@@ -367,6 +495,10 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
     });
 
     currentResult.exitCode = exitCode;
+    currentResult.timedOut = timedOut;
+    currentResult.durationMs = Date.now() - startedAt;
+    logStream.close();
+    currentResult.logPath = logStream.path() ?? undefined;
     if (wasAborted) throw new Error("Subagent was aborted");
     return currentResult;
   } finally {
@@ -403,6 +535,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       `Modes: single (prompt), parallel (prompts, max ${MAX_PARALLEL_PROMPTS}), chain (sequential prompts with "Previous output:").`,
       "The agent must have a definition file in .pi/agents/; `implement` expands to `myflow-implement`.",
       "Sub-agents share the caller's working tree, so at most one writer (implement, check) may run there at a time: parallel mode is rejected for write-capable agents. Parallelize read-only research instead.",
+      `Every run is capped (timeoutMs, default ${SUBAGENT_TIMEOUT_MS} ms; 0 disables the cap) and logs its stream under ${SUBAGENT_LOG_DIR}/; a stopped run reports its log path.`,
     ].join(" "),
     promptSnippet: "Run a myflow-implement / myflow-check / myflow-research sub-agent",
     parameters: SUBAGENT_PARAMETERS,
@@ -416,6 +549,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         prompts?: string[];
         model?: string;
         thinking?: string;
+        timeoutMs?: number;
       },
       signal: AbortSignal | undefined,
       onUpdate: ((partial: unknown) => void) | undefined,
@@ -470,6 +604,8 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         thinking: ctx.thinkingLevel,
       });
       const contextKey = registration.deriveContextKey?.(ctx) ?? null;
+      const timeoutMs =
+        typeof params.timeoutMs === "number" && params.timeoutMs >= 0 ? params.timeoutMs : SUBAGENT_TIMEOUT_MS;
       const makeDetails = (runs: SingleResult[]): SubagentDetails => ({ mode, agent: agentName, runs });
       const runOptions = (runPrompt: string, update: RunOptions["onUpdate"]): RunOptions => ({
         projectRoot: ctx.cwd,
@@ -478,6 +614,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         config,
         signal,
         contextKey,
+        timeoutMs,
         onUpdate: update,
         makeDetails,
       });
