@@ -16,17 +16,51 @@
  *
  *   node bg_runner.mjs --id <taskId> --log <logPath> --exit <exitPath> -- <command...>
  *
- *   - `<command...>` is reassembled into one string and handed to the platform
- *     shell verbatim (`shell: true`), so pipes, `&&`, and redirection work.
- *   - The command's stdout and stderr are pointed at the log file's descriptor
- *     directly, so the kernel writes them; nothing is buffered in this process
- *     (`design.md` §2). Appended bytes are visible to another process that
- *     reads the file while the command is still running.
+ *   - `<command...>` is reassembled into one string and handed to the resolved
+ *     shell as a *single* argv element. It is deliberately **not** passed
+ *     through Node's `shell: true`: on Windows that hardcodes `%ComSpec%`
+ *     (`cmd.exe`) and rebuilds the command as `cmd.exe /d /s /c "<command>"`,
+ *     a second round of quote parsing the caller never asked for. Spawning the
+ *     shell ourselves keeps pipes, `&&`, and redirection working while passing
+ *     the command through verbatim.
+ *   - The shell is resolved by `resolveShellPath`, in this fixed order:
+ *     `MYFLOW_BG_SHELL` -> `~/.pi/agent/settings.json`'s `shellPath` -> the Git
+ *     for Windows bash -> `bash` on `PATH` -> an explicit `cmd.exe /d /s /c`
+ *     fallback. The resolved absolute path is recorded in `<exitPath>` under
+ *     `shell`, on both the success and failure records, so "which shell ran
+ *     this?" is always answerable after the fact.
+ *   - The shell itself performs the redirection into the log (`>>`, append), so
+ *     the command's stdout and stderr are written by the kernel and nothing is
+ *     buffered in this process (`design.md` §2). Appended bytes are visible to
+ *     another process that reads the file while the command is still running.
+ *   - The child is started with `stdio: "ignore"` and **no descriptor of any
+ *     kind is handed to it**. Passing an inherited descriptor as a standard
+ *     handle makes libuv restrict the child's inherited handles, and on Windows
+ *     that `CreateProcess` path can fail with `ERROR_NO_SYSTEM_RESOURCES` (232).
+ *     Letting the shell open the log removes that path entirely. The log path is
+ *     quoted for the shell that receives it (`quoteForBash` / `quoteForCmd`), so
+ *     a path containing spaces or quotes cannot break out of the redirection.
+ *   - On Windows the shell is also started **detached**, so libuv asks for
+ *     `DETACHED_PROCESS` and the shell is created **without a console**. This
+ *     wrapper is console-less, so without the flag Windows would build a fresh
+ *     console — and a console window — for every background task; that is both
+ *     a visible flash and an allocation out of the interactive desktop heap,
+ *     whose exhaustion is reported as `ERROR_NO_SYSTEM_RESOURCES` (232).
+ *     Whether that heap is what refuses these spawns is **unmeasured**, so the
+ *     flag is not claimed as the fix. Off Windows the shell deliberately stays
+ *     in this process's group, because that group is what `myflow_bg_stop`
+ *     signals (`design.md` §4.4).
+ *     The flag does not change how the command runs or how its result is
+ *     observed: this process still waits for the child's `exit` event.
+ *   - Creating that shell is retried on a *bounded* backoff when the OS
+ *     refuses transiently (see the retry policy below).
  *   - When the command exits this script writes `<exitPath>`:
- *       `{"exit_code":N,"signal":S,"at":"<ISO>"}` on a normal exit,
- *       `{"exit_code":null,"error":"...","at":"<ISO>"}` when it could not be
- *       spawned. The write is atomic (temp file + rename) so a concurrent
- *       reader never observes a half-written record (`design.md` §3.2).
+ *       `{"exit_code":N,"signal":S,"at":"<ISO>","shell":"<path>"}` on a
+ *       normal exit,
+ *       `{"exit_code":null,"error":"...","at":"<ISO>","shell":"<path>"}`
+ *       when it could not be spawned. The write is atomic (temp file + rename)
+ *       so a concurrent reader never observes a half-written record
+ *       (`design.md` §3.2).
  *
  * Contract, not a local choice:
  *
@@ -43,8 +77,16 @@
  */
 
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** Synthetic exit codes for failures that happen before the command runs. */
@@ -62,6 +104,251 @@ const EXIT_SPAWN_FAILED = 1;
 const RENAME_RETRY_MS = 20;
 const RENAME_RETRIES = 50;
 const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/**
+ * Bounded backoff for a *transient* process-creation failure.
+ *
+ * Windows occasionally refuses to create a process with ERROR_NO_SYSTEM_RESOURCES
+ * (232) while the machine is momentarily short of some resource (paged pool,
+ * desktop heap, handles). The refusal is a *snapshot* of a transient condition:
+ * the same command usually starts if it is attempted again a moment later, so
+ * retrying turns "the task never started" into "the task started a little late".
+ *
+ * The schedule is deliberately finite. A retry that waited forever would turn
+ * "the command genuinely cannot start" into a hung task, which is worse than a
+ * clear failure, so the budget is capped: at most `MAX_SPAWN_RETRIES` retries
+ * (8 attempts in total) with a growing delay, `250ms * 1.5^n` capped at `2s`,
+ * for a total wait well under `SPAWN_RETRY_TOTAL_BUDGET_MS`.
+ *
+ * Only *transient/unknown* failures are retried. A missing program (`ENOENT`),
+ * a bad argument (`EINVAL`), or a permission problem (`EACCES` / `EPERM`) will
+ * fail identically no matter how many times it is attempted, so retrying those
+ * just wastes time and hides the real error.
+ */
+const MAX_SPAWN_RETRIES = 7;
+const SPAWN_RETRY_BASE_DELAY_MS = 250;
+const SPAWN_RETRY_BACKOFF_FACTOR = 1.5;
+const SPAWN_RETRY_MAX_DELAY_MS = 2000;
+
+/**
+ * The delay before retrying after attempt number `attempts` (1-based) failed.
+ *
+ * Exported so a test can assert the whole backoff schedule — and its total —
+ * without actually sleeping through it. The caller passes the number of
+ * attempts *already made*, so the first retry gets the base delay.
+ *
+ * @param {number} attempts how many attempts have been made so far (>= 1)
+ * @returns {number} milliseconds to wait before the next attempt
+ */
+export function spawnRetryDelayMs(attempts) {
+  const index = Math.max(0, attempts - 1);
+  const grown = SPAWN_RETRY_BASE_DELAY_MS * SPAWN_RETRY_BACKOFF_FACTOR ** index;
+  return Math.min(grown, SPAWN_RETRY_MAX_DELAY_MS);
+}
+
+/**
+ * The documented ceiling for the whole retry schedule. The default schedule
+ * sums to about 7.2s (250 + 375 + 562.5 + 843.75 + 1265.625 + 1898.4375 +
+ * 2000); this constant is the number a caller can rely on and a test asserts
+ * against, with headroom for the attempts themselves.
+ */
+export const SPAWN_RETRY_TOTAL_BUDGET_MS = 10_000;
+const RETRYABLE_SPAWN_CODES = new Set(["EAGAIN", "ENOMEM", "EMFILE", "ENFILE"]);
+const NON_RETRYABLE_SPAWN_CODES = new Set(["ENOENT", "EINVAL", "EACCES", "EPERM"]);
+
+/**
+ * Whether a failed process creation is worth one more attempt.
+ *
+ * `EAGAIN`, `ENOMEM`, `EMFILE` and `ENFILE` are the resource-exhaustion codes
+ * the OS reports. A code we do not recognize is treated as transient too:
+ * Windows errors with no POSIX mapping surface as `UNKNOWN`, and an error with
+ * no `code` at all cannot be classified, so the user's 232 lands here. The four
+ * codes known to be deterministic are never retried.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isRetryableSpawnError(error) {
+  const code =
+    error && typeof error === "object"
+      ? /** @type {{ code?: unknown }} */ (error).code
+      : undefined;
+  if (typeof code !== "string" || code.trim() === "") return true;
+  if (RETRYABLE_SPAWN_CODES.has(code)) return true;
+  if (NON_RETRYABLE_SPAWN_CODES.has(code)) return false;
+  return true;
+}
+
+/**
+ * Where the shell that runs a background command is configured.
+ *
+ * `MYFLOW_BG_SHELL` is an explicit override (tests and users), so it is taken
+ * **verbatim** — deliberately without an existence check. That is what makes an
+ * unspawnable shell observable: the caller asks for a path, `spawn` then fails
+ * with `ENOENT`, and the wrapper records that failure with the requested path
+ * in `shell`. Every later candidate is a real location, so a stale entry is
+ * skipped instead of poisoning the start.
+ */
+const SETTINGS_REL = [".pi", "agent", "settings.json"];
+const GIT_BASH_REL = ["Program Files", "Git", "bin", "bash.exe"];
+
+/**
+ * Read `shellPath` out of `~/.pi/agent/settings.json`, or null.
+ *
+ * A missing file, unparseable JSON, a non-string `shellPath`, or a value that
+ * does not exist on disk all yield null: the caller moves on to the next
+ * candidate rather than spawning a shell that is not there. The settings file
+ * is the same source Pi itself reads, so a background command uses the shell
+ * the user already chose for their tools.
+ */
+function readSettingsShellPath(settingsPath, exists, readFile) {
+  try {
+    if (!exists(settingsPath)) return null;
+    const parsed = JSON.parse(readFile(settingsPath));
+    const value =
+      parsed && typeof parsed === "object" && typeof parsed.shellPath === "string"
+        ? parsed.shellPath.trim()
+        : "";
+    return value && exists(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Find a bare `name` on `PATH` and return its absolute path, or null. */
+function findOnPath(name, platform, pathValue, exists) {
+  const candidates = platform === "win32" ? [`${name}.exe`, name] : [name];
+  // The separator follows the *resolved* platform, not the host, so an injected
+  // `platform` (tests) behaves like the machine it stands in for.
+  const separator = platform === "win32" ? ";" : ":";
+  for (const directory of String(pathValue).split(separator)) {
+    if (!directory) continue;
+    // Never fall back to the WSL launcher. On Windows `%SystemRoot%\System32\bash.exe`
+    // is the WSL entry point, which this project forbids invoking; a Git Bash
+    // lives elsewhere on PATH (and its standard location is tried before this).
+    // `Sysnative` is the same thing seen by a 32-bit process.
+    if (platform === "win32") {
+      const base = basename(directory).toLowerCase();
+      if (base === "system32" || base === "sysnative") continue;
+    }
+    for (const candidate of candidates) {
+      const full = join(directory, candidate);
+      if (exists(full)) return full;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve the absolute path of the shell that runs the command.
+ *
+ * Order (fixed; this is the only implementation of it):
+ *   1. `MYFLOW_BG_SHELL` — explicit override, used verbatim.
+ *   2. `~/.pi/agent/settings.json` `shellPath` — the user's own choice.
+ *   3. The Git for Windows bash, at its standard install location.
+ *   4. `bash` on `PATH`.
+ *   5. An explicit `cmd.exe` from `%ComSpec%` (POSIX: `/bin/sh`) — the last
+ *      resort, still spawned with argv so there is no nested-quote problem.
+ *
+ * Injectable (`env`, `platform`, `exists`, `readFile`, `homeDir`, `pathValue`)
+ * so the order can be tested without touching the machine's real settings.
+ *
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   platform?: NodeJS.Platform,
+ *   exists?: (path: string) => boolean,
+ *   readFile?: (path: string) => string,
+ *   homeDir?: string,
+ *   pathValue?: string,
+ * }} [options]
+ * @returns {string}
+ */
+export function resolveShellPath(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const exists = options.exists ?? existsSync;
+  const readFile = options.readFile ?? ((path) => readFileSync(path, "utf-8"));
+  const homeDir = options.homeDir ?? homedir();
+  const pathValue = options.pathValue ?? env.PATH ?? env.Path ?? env.path ?? "";
+
+  // 1. Explicit override, taken verbatim (see SETTINGS_REL docs above).
+  const override = typeof env.MYFLOW_BG_SHELL === "string" ? env.MYFLOW_BG_SHELL.trim() : "";
+  if (override) return override;
+
+  // 2. The user's configured shell path.
+  const fromSettings = readSettingsShellPath(join(homeDir, ...SETTINGS_REL), exists, readFile);
+  if (fromSettings) return fromSettings;
+
+  // 3. Git for Windows' standard install location.
+  if (platform === "win32") {
+    const gitBash = join("C:\\", ...GIT_BASH_REL);
+    if (exists(gitBash)) return gitBash;
+  }
+
+  // 4. `bash` on PATH.
+  const onPath = findOnPath("bash", platform, pathValue, exists);
+  if (onPath) return onPath;
+
+  // 5. Explicit fallback: `%ComSpec%` on Windows, `/bin/sh` elsewhere.
+  const comspec = (env.ComSpec ?? env.COMSPEC ?? "").trim();
+  if (comspec) return comspec;
+  return platform === "win32" ? "cmd.exe" : "/bin/sh";
+}
+
+/** Whether a resolved shell should be driven as `cmd.exe` (`/d /s /c`). */
+export function isCmdShell(shellPath) {
+  const base = basename(shellPath).toLowerCase();
+  return base === "cmd" || base === "cmd.exe";
+}
+
+/**
+ * Quote a path for POSIX shell use with single quotes.
+ *
+ * A single-quoted string is literal in every POSIX shell, so spaces, `&`, `>`
+ * and `$` cannot escape it. The one character it cannot contain is a single
+ * quote itself, which is emitted as `'\''` (close quote, escaped quote, reopen
+ * quote). The log path is project-relative, but a test temp directory — or a
+ * user's checkout — can contain spaces or quotes, so this must not assume
+ * otherwise.
+ */
+export function quoteForBash(value) {
+  return `'${value.split("'").join("'\\''")}'`;
+}
+
+/**
+ * Quote a path for `cmd.exe` use with double quotes.
+ *
+ * A Windows file path cannot contain a double quote, so wrapping is normally
+ * enough; an embedded quote (which the filesystem would have rejected anyway)
+ * is doubled, cmd's own escape for a literal quote inside a quoted string.
+ */
+export function quoteForCmd(value) {
+  return `"${value.split('"').join('""')}"`;
+}
+
+/**
+ * The argv a resolved shell needs to run one command and append its output to
+ * `logPath`.
+ *
+ * The command is always a **single** element: that is the whole point of
+ * spawning the shell ourselves. bash receives `-lc` (a login shell, matching
+ * how the user's Git Bash runs) with an `exec` redirection, so every command the
+ * shell runs inherits the log; anything that is not `cmd.exe` is treated as a
+ * POSIX shell, which is what the resolution order guarantees here.
+ *
+ * The redirection is performed by the **shell**, not by this process handing it
+ * an open descriptor. A descriptor passed through `stdio` is a *standard
+ * handle*, and libuv restricts the child's inherited handles when one is set;
+ * on Windows that `CreateProcess` path can fail with
+ * `ERROR_NO_SYSTEM_RESOURCES`. `>>` also gives append semantics without an
+ * `O_APPEND` descriptor.
+ */
+export function shellArgsFor(shellPath, command, logPath) {
+  if (isCmdShell(shellPath)) {
+    return ["/d", "/s", "/c", `${command} >> ${quoteForCmd(logPath)} 2>&1`];
+  }
+  return ["-lc", `exec >> ${quoteForBash(logPath)} 2>&1; ${command}`];
+}
 
 function sleepSync(milliseconds) {
   // `Atomics.wait` on a throwaway buffer is the only portable synchronous
@@ -163,6 +450,202 @@ function messageOf(error) {
     : String(error);
 }
 
+/** `{ retries: n }` when the command needed more than one attempt, else `{}`. */
+function retriesField(attempts) {
+  return attempts > 1 ? { retries: attempts - 1 } : {};
+}
+
+/** The error code (`ENOENT`, `EAGAIN`, `UNKNOWN`, ...) if the error carries one. */
+function errorCodeOf(error) {
+  return error && typeof error === "object" && "code" in error
+    ? String(/** @type {{ code: unknown }} */ (error).code)
+    : "";
+}
+
+/**
+ * A readable description of a creation failure: the OS message plus the raw
+ * `code` and numeric `errno` when they are not already part of it. Windows
+ * errors with no POSIX mapping surface as `spawn UNKNOWN`; the numeric errno is
+ * then the only place the original NTSTATUS/Win32 value is preserved, so it has
+ * to travel with the message.
+ */
+function describeSpawnError(error) {
+  const message = messageOf(error);
+  const code = errorCodeOf(error);
+  const errno =
+    error && typeof error === "object" && "errno" in error
+      ? /** @type {{ errno: unknown }} */ (error).errno
+      : undefined;
+  const extras = [];
+  if (code && !message.includes(code)) extras.push(`code ${code}`);
+  if (typeof errno === "number" && !message.includes(String(errno))) extras.push(`errno ${errno}`);
+  return extras.length > 0 ? `${message} (${extras.join(", ")})` : message;
+}
+
+/**
+ * The `.exit` payload for a creation that never produced a process.
+ *
+ * When the creation was retried and every attempt was refused, the message has
+ * to say plainly that the *environment* refused to create a process — not that
+ * the command was mistyped — and it has to carry the raw code/errno, so a
+ * reader is not left debugging a command that was never the problem. A
+ * single-attempt deterministic failure (`ENOENT` and friends) keeps the raw OS
+ * message, which already names the cause.
+ */
+function spawnFailureRecord(error, attempts, shellPath) {
+  const detail = describeSpawnError(error);
+  const errorText =
+    attempts > 1
+      ? [
+          `the operating system refused to create the process after ${attempts} attempts: ${detail}.`,
+          "This is an environment condition — the OS was momentarily out of a resource",
+          "such as memory, handles, or desktop heap — not a mistyped command.",
+          "Retry later; to confirm the command itself is fine, run it in the foreground.",
+        ].join(" ")
+      : detail;
+  return {
+    exit_code: null,
+    error: errorText,
+    at: isoTimestamp(),
+    shell: shellPath,
+    ...retriesField(attempts),
+  };
+}
+
+/**
+ * Create the command's process, retrying a transient creation failure a bounded
+ * number of times, and report how the command ended through `onOutcome`.
+ *
+ * SAFETY INVARIANT — retrying here cannot run the command twice. The `'error'`
+ * event fires **only when the process was never created at all**; a command
+ * that did start reports its failure through `'exit'` (a non-zero exit code),
+ * which is not retried. So an attempt that fails with `'error'` is guaranteed
+ * to have had no effect, and a fresh attempt cannot duplicate prior work. That
+ * is exactly why the retry lives in this detached wrapper and not in
+ * `myflow_bg_start`: the tool must return immediately (R1), while a retry has
+ * to wait for the outcome.
+ *
+ * Injectable for tests: `spawnImpl` replaces `node:child_process.spawn`,
+ * `wait` replaces the synchronous sleep, and `isRetryable` replaces the retry
+ * predicate, so a test can simulate an OS refusal without provoking a real one.
+ *
+ * @param {{
+ *   command: string,
+ *   logPath: string,
+ *   cwd: string,
+ *   onOutcome: (payload: Record<string, unknown>, runnerCode: number) => void,
+ *   shellPath?: string,
+ *   spawnImpl?: typeof spawn,
+ *   wait?: (milliseconds: number) => void,
+ *   maxRetries?: number,
+ *   isRetryable?: (error: unknown) => boolean,
+ * }} options
+ * @returns {Promise<{ attempts: number }>}
+ */
+export function runCommand(options) {
+  const {
+    command,
+    logPath,
+    cwd,
+    onOutcome,
+    shellPath = resolveShellPath(),
+    spawnImpl = spawn,
+    wait = sleepSync,
+    maxRetries = MAX_SPAWN_RETRIES,
+    isRetryable = isRetryableSpawnError,
+  } = options;
+
+  // The command is the final element of the shell's argv — never re-quoted into
+  // a command string of our own (that is what `shell: true` does wrong on
+  // Windows).
+  const shellArgs = shellArgsFor(shellPath, command, logPath);
+
+  return new Promise((resolve) => {
+    let attempts = 0;
+
+    const report = (payload, runnerCode) => {
+      try {
+        onOutcome(payload, runnerCode);
+      } catch {
+        // A reporting failure must not become an uncaught exception in an
+        // event handler; the exit code is the only signal left to report.
+      }
+      resolve({ attempts });
+    };
+
+    const attempt = () => {
+      attempts += 1;
+      let child;
+      try {
+        // The shell opens the log itself (`>>`) and the command inherits that
+        // redirection. Using "pipe" and forwarding by hand would buffer output
+        // and break the "read new bytes while it still runs" guarantee; handing
+        // a descriptor over as a standard handle would push libuv onto the
+        // Windows handle-list path that can fail with ERROR_NO_SYSTEM_RESOURCES.
+        //
+        // On Windows the shell is started detached, i.e. with
+        // `DETACHED_PROCESS`, so it gets no console. This wrapper has none
+        // either, so without the flag Windows would build a fresh console --
+        // and a console window -- for every background task: a visible flash,
+        // and an allocation from the interactive desktop heap, the resource
+        // whose exhaustion is reported as ERROR_NO_SYSTEM_RESOURCES (232).
+        // Whether that heap is what refuses these spawns is unmeasured, so this
+        // is not claimed as the fix.
+        //
+        // Windows only. `detached` also moves the child into a new process
+        // group, and off Windows `myflow_bg_stop` signals this process's group
+        // (`process.kill(-pid)`, design.md §4.4); a detached shell would sit
+        // outside that group and survive the stop.
+        const detachShell = process.platform === "win32";
+        child = spawnImpl(shellPath, shellArgs, { cwd, stdio: "ignore", detached: detachShell });
+      } catch (error) {
+        // A synchronous throw from `spawn` means the process was never created,
+        // so it is as safe to retry as an asynchronous `'error'`.
+        if (attempts <= maxRetries && isRetryable(error)) {
+          wait(spawnRetryDelayMs(attempts));
+          attempt();
+          return;
+        }
+        report(spawnFailureRecord(error, attempts, shellPath), EXIT_SPAWN_FAILED);
+        return;
+      }
+
+      let settled = false;
+      child.once("error", (error) => {
+        if (settled) return;
+        settled = true;
+        if (attempts <= maxRetries && isRetryable(error)) {
+          wait(spawnRetryDelayMs(attempts));
+          attempt();
+          return;
+        }
+        report(spawnFailureRecord(error, attempts, shellPath), EXIT_SPAWN_FAILED);
+      });
+      child.once("spawn", () => {
+        if (settled) return;
+        settled = true;
+        // The process was created, so this attempt is final: a later `'error'`
+        // is ignored (`settled`), and only `'exit'` reports the outcome.
+        child.once("exit", (code, signal) => {
+          const exitCode = typeof code === "number" ? code : null;
+          report(
+            {
+              exit_code: exitCode,
+              signal: signal ?? null,
+              at: isoTimestamp(),
+              shell: shellPath,
+              ...retriesField(attempts),
+            },
+            exitCode === null ? EXIT_SPAWN_FAILED : exitCode,
+          );
+        });
+      });
+    };
+
+    attempt();
+  });
+}
+
 /**
  * Run one command and record its outcome. Never throws and never writes to
  * stdio; the process exit code carries the result.
@@ -184,6 +667,11 @@ function main() {
   }
 
   const exitPath = options.exit;
+  // Resolve the shell once, up front: every `.exit` record (including the
+  // no-command and log-directory failures below) then says which shell this
+  // task would have used. A failure to *create* that shell is retried and
+  // reported by `runCommand`, not here.
+  const shellPath = resolveShellPath();
   const record = (payload, runnerCode) => {
     try {
       writeExitRecord(exitPath, payload);
@@ -196,60 +684,35 @@ function main() {
 
   if (!options.log || !options.command) {
     record(
-      { exit_code: null, error: "no command provided", at: isoTimestamp() },
+      { exit_code: null, error: "no command provided", at: isoTimestamp(), shell: shellPath },
       EXIT_BAD_ARGS,
     );
     return;
   }
 
-  let logFd;
+  // The shell creates the log file with its own `>>` redirection, so this
+  // process hands no descriptor to the child at all. The directory still has to
+  // exist: `>>` creates the file, not the folders leading to it.
   try {
     mkdirSync(dirname(options.log), { recursive: true });
-    logFd = openSync(options.log, "a");
   } catch (error) {
-    record({ exit_code: null, error: messageOf(error), at: isoTimestamp() }, EXIT_SPAWN_FAILED);
-    return;
-  }
-
-  let child;
-  try {
-    child = spawn(options.command, {
-      shell: true,
-      cwd: process.cwd(),
-      // The command writes straight to the log's descriptor. Using "pipe" and
-      // forwarding by hand would buffer output and break the "read new bytes
-      // while it still runs" guarantee.
-      stdio: ["ignore", logFd, logFd],
-    });
-  } catch (error) {
-    closeSync(logFd);
-    record({ exit_code: null, error: messageOf(error), at: isoTimestamp() }, EXIT_SPAWN_FAILED);
-    return;
-  }
-
-  let recorded = false;
-  const settle = (payload, runnerCode) => {
-    if (recorded) return;
-    recorded = true;
-    try {
-      closeSync(logFd);
-    } catch {
-      /* already closed or never opened */
-    }
-    record(payload, runnerCode);
-  };
-
-  // `error` fires when the command (or the shell) could not be started at all.
-  child.on("error", (error) => {
-    settle({ exit_code: null, error: messageOf(error), at: isoTimestamp() }, EXIT_SPAWN_FAILED);
-  });
-
-  child.on("exit", (code, signal) => {
-    const exitCode = typeof code === "number" ? code : null;
-    settle(
-      { exit_code: exitCode, signal: signal ?? null, at: isoTimestamp() },
-      exitCode === null ? EXIT_SPAWN_FAILED : exitCode,
+    record(
+      { exit_code: null, error: messageOf(error), at: isoTimestamp(), shell: shellPath },
+      EXIT_SPAWN_FAILED,
     );
+    return;
+  }
+
+  // `runCommand` owns process creation (through the resolved shell, which
+  // performs the redirection into the log), the argv it is spawned with, and
+  // the bounded retry policy. `record` writes the `.exit` outcome; the wrapper
+  // never sees the child directly.
+  runCommand({
+    command: options.command,
+    cwd: process.cwd(),
+    logPath: options.log,
+    shellPath,
+    onOutcome: (payload, runnerCode) => record(payload, runnerCode),
   });
 }
 

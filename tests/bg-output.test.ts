@@ -480,3 +480,61 @@ test("F4 -12 tail 起点对齐：max_bytes 落在字符中间时首字符不被�
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("H1a output 展示启动失败/异常退出原因：.exit.error 与 .exit.signal", async () => {
+  // 回退点：resolveStatus 只带出 exit_code（丢掉 error/signal）→ ①failure 为 undefined、
+  //        ②signal 为 undefined，断言变红；或 outputHumanText 不写出来 → 文本断言变红。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+
+    // ① 预置一个「创建失败」的 .exit：exit_code 为 null，但 error 说明原因。
+    //    没有 H1a 时它和「正常退出但退出码未知」长得一模一样。
+    const errId = "bg-test-h1a-err";
+    writeEntry(dir, makeEntry(dir, errId, { status: "running", pid: process.pid }));
+    writeFileSync(logPath(dir, errId), "");
+    writeFileSync(
+      exitPath(dir, errId),
+      JSON.stringify({
+        exit_code: null,
+        error: "EAGAIN: resource temporarily unavailable",
+        at: new Date().toISOString(),
+      }),
+    );
+    const errResult = await run(root, { task_id: errId });
+    assert.equal(errResult.details.status, "exited");
+    assert.equal(errResult.details.exit_code, null);
+    assert.match(String(errResult.details.failure), /EAGAIN/);
+    assert.match(errResult.content[0].text, /EAGAIN/, "原因必须出现在人读文本里");
+
+    // ② 被信号杀死：exit_code 为 null，仅 signal 可用（不得只认 exit_code）。
+    const sigId = "bg-test-h1a-sig";
+    writeEntry(dir, makeEntry(dir, sigId, { status: "running", pid: process.pid }));
+    writeFileSync(logPath(dir, sigId), "");
+    writeFileSync(
+      exitPath(dir, sigId),
+      JSON.stringify({ exit_code: null, signal: "SIGKILL", at: new Date().toISOString() }),
+    );
+    const sigResult = await run(root, { task_id: sigId });
+    assert.equal(sigResult.details.status, "exited");
+    assert.equal(sigResult.details.exit_code, null);
+    assert.equal(sigResult.details.signal, "SIGKILL");
+    assert.match(sigResult.content[0].text, /SIGKILL/);
+
+    // ③ 扩展侧记录的原因（entry.spawn_error，无 .exit）也要通过 failure 看到。
+    const spawnErrId = "bg-test-h1a-spawn";
+    writeEntry(
+      dir,
+      makeEntry(dir, spawnErrId, {
+        status: "running",
+        pid: 999_999_999,
+        spawn_error: "spawn UNKNOWN (232)",
+      }),
+    );
+    writeFileSync(logPath(dir, spawnErrId), "");
+    const spawnErrResult = await run(root, { task_id: spawnErrId });
+    assert.match(String(spawnErrResult.details.failure), /232/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

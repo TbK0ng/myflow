@@ -119,6 +119,15 @@ export interface ExitRecord {
 export interface ResolvedStatus {
   status: BackgroundTaskStatus;
   exit_code: number | null;
+  /**
+   * Why the command could not be started, or why it ended abnormally, taken
+   * from the `.exit` record's `error` field. Omitted when there is no such
+   * reason. This is what keeps a failed start (e.g. the OS refusing to create
+   * the process) from looking identical to a normal exit with an unknown code.
+   */
+  failure?: string;
+  /** The signal that terminated the command, from the `.exit` record. Omitted when absent. */
+  signal?: string;
 }
 
 /** A registry file that could not be read as an entry. Reported, never thrown. */
@@ -355,6 +364,15 @@ function normalizeExitCode(value: unknown): number | null {
 }
 
 /**
+ * Normalize a reason string (`error` / `signal` from a `.exit` record). A blank
+ * value is dropped so a present-but-empty field does not render as an empty
+ * `failure:` line.
+ */
+function normalizeReason(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/**
  * Decide a task's state. The precedence is fixed and must not be reordered
  * (`design.md` §3.2, R9):
  *
@@ -373,7 +391,15 @@ function normalizeExitCode(value: unknown): number | null {
 export function resolveStatus(dir: string, entry: BackgroundEntry): ResolvedStatus {
   const record = readExitRecord(dir, entry);
   if (record) {
-    return { status: "exited", exit_code: normalizeExitCode(record.exit_code) };
+    const resolved: ResolvedStatus = {
+      status: "exited",
+      exit_code: normalizeExitCode(record.exit_code),
+    };
+    const failure = normalizeReason(record.error);
+    if (failure) resolved.failure = failure;
+    const signal = normalizeReason(record.signal);
+    if (signal) resolved.signal = signal;
+    return resolved;
   }
   if (entry.status === "stopped") {
     return { status: "stopped", exit_code: normalizeExitCode(entry.exit_code) };
@@ -622,9 +648,11 @@ const BG_START_PARAMETERS = {
     command: {
       type: "string",
       description:
-        "The command to run in the background. Must be non-empty. It is executed by the " +
-        "platform default shell (cmd.exe on Windows) — not Git Bash — so pipes, && and " +
-        "redirection are interpreted by that shell.",
+        "The command to run in the background. Must be non-empty. It is executed by Git Bash " +
+        "(`bash -lc`) — the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's " +
+        "shellPath, then the Git for Windows bash, then `bash` on PATH, then an explicit " +
+        "cmd.exe /d /s /c fallback. It is spawned directly with argv, NOT through Node's shell " +
+        "option, so quotes are parsed by bash semantics.",
     },
     description: {
       type: "string",
@@ -690,7 +718,8 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
     description: [
       "Start a command in the background and return immediately with a task id.",
       "A background task outlives the session; read it with myflow_bg_output, list it with myflow_bg_list, and stop it with myflow_bg_stop.",
-      "The command runs under the platform default shell (cmd.exe on Windows), not Git Bash.",
+      "The command runs under Git Bash (`bash -lc`): the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's shellPath, then the Git for Windows bash, then `bash` on PATH, then an explicit cmd.exe /d /s /c fallback.",
+      "It is spawned directly with argv rather than through Node's shell option, so the command's quotes are parsed by bash semantics.",
       "Requires the user's confirmation; without an interactive UI it refuses unless `unattended: true` is passed, which is recorded as unconfirmed.",
     ].join(" "),
     promptSnippet: "Start a long-running command in the background",
@@ -910,6 +939,15 @@ export interface BgOutputResult {
    * so a caller is told about the re-read instead of silently seeing nothing.
    */
   reset?: boolean;
+  /**
+   * Why the task could not be started, or ended abnormally: the `.exit` record's
+   * `error`, falling back to the entry's `spawn_error`. Omitted when neither is
+   * present. Makes a failed start diagnosable instead of looking like a normal
+   * exit whose code happens to be unknown (F8/H1a).
+   */
+  failure?: string;
+  /** The signal that terminated the task, from the `.exit` record. Omitted when absent. */
+  signal?: string;
   /** Present only on a refusal/error result. */
   error?: string;
 }
@@ -1178,7 +1216,11 @@ const BG_OUTPUT_PARAMETERS = {
  */
 function outputHumanText(result: BgOutputResult): string {
   const code = result.exit_code === null ? "" : ` (exit_code ${result.exit_code})`;
-  const parts = [`Task ${result.task_id ?? "?"} — ${result.status}${code}`];
+  const signal = result.signal ? ` (signal ${result.signal})` : "";
+  const parts = [`Task ${result.task_id ?? "?"} — ${result.status}${code}${signal}`];
+  if (result.failure) {
+    parts.push(`FAILURE: ${result.failure}`);
+  }
   if (result.reset) {
     parts.push(
       "NOTE: the log is shorter than the read cursor (rotated or recreated); the cursor was " +
@@ -1275,7 +1317,16 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
 
       // Resolve after the wait so a task that ended while waiting is reported as
       // ended. Reading the status does not write it back (F5 owns persistence).
-      const { status, exit_code } = resolveStatus(dir, entry);
+      const resolved = resolveStatus(dir, entry);
+      const { status, exit_code } = resolved;
+      // `failure` unifies the two ways a start can fail so a caller does not
+      // have to know which layer noticed: the runner's `.exit.error` (the
+      // command was never created, or its log could not be opened) and the
+      // entry's `spawn_error` (the extension's own `'error'` listener). The
+      // `.exit` record wins when both exist, because it is written by the
+      // process that actually attempted the creation.
+      const failure = resolved.failure ?? normalizeReason(entry.spawn_error) ?? undefined;
+      const signal = resolved.signal;
 
       if (mode === "tail") {
         const { buffer, chunkStart } = readTailChunk(logFile, maxBytes);
@@ -1300,6 +1351,8 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
           // to satisfy `lines` is the requested behavior, not a loss of output.
           truncated: chunkStart > 0,
           text,
+          ...(failure ? { failure } : {}),
+          ...(signal ? { signal } : {}),
         };
         return textResult(result as unknown as Record<string, unknown>, outputHumanText(result));
       }
@@ -1341,6 +1394,8 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
         truncated,
         text,
         ...(reset ? { reset: true } : {}),
+        ...(failure ? { failure } : {}),
+        ...(signal ? { signal } : {}),
       };
       return textResult(result as unknown as Record<string, unknown>, outputHumanText(result));
     },
@@ -1392,6 +1447,15 @@ export interface BgListRow {
   unconfirmed: boolean;
   /** Present when the OS could not create the process (F3b). */
   spawn_error?: string;
+  /**
+   * The `.exit` record's `error`, i.e. why the runner could not start or run
+   * the command. Distinct from `spawn_error`: `spawn_error` is the extension
+   * observing the failure, this is the detached wrapper recording it. Either
+   * one is a reason, and both may be absent on a normal exit (F8/H1a).
+   */
+  failure?: string;
+  /** The signal that terminated the command, from the `.exit` record. Omitted when absent. */
+  signal?: string;
 }
 
 /** The structured payload returned by `myflow_bg_list`. */
@@ -1499,6 +1563,8 @@ function toListRow(
     confirmed_by: entry.confirmed_by,
     unconfirmed: entry.confirmed_by === "no-ui-explicit",
     ...(hasSpawnError(entry) ? { spawn_error: entry.spawn_error } : {}),
+    ...(resolved.failure ? { failure: resolved.failure } : {}),
+    ...(resolved.signal ? { signal: resolved.signal } : {}),
   };
   return row;
 }
@@ -1524,11 +1590,15 @@ function listHumanText(result: BgListResult): string {
   }
   for (const row of result.tasks) {
     const code = row.exit_code === null ? "" : ` exit_code=${row.exit_code}`;
+    const signal = row.signal ? ` signal=${row.signal}` : "";
     const session = row.current_session ? " [this session]" : "";
-    lines.push(`${row.id}  ${row.status}${code}  pid=${row.pid}${session}  confirmed_by=${row.confirmed_by}`);
+    lines.push(
+      `${row.id}  ${row.status}${code}${signal}  pid=${row.pid}${session}  confirmed_by=${row.confirmed_by}`,
+    );
     if (row.description) lines.push(`  description: ${row.description}`);
     lines.push(`  command: ${row.command}${row.command_truncated ? " (truncated)" : ""}`);
     lines.push(`  started_at: ${row.started_at}  ended_at: ${row.ended_at ?? "-"}`);
+    if (row.failure) lines.push(`  failure: ${row.failure}`);
     if (row.spawn_error) lines.push(`  spawn_error: ${row.spawn_error}`);
     if (row.unconfirmed) lines.push("  WARNING: the user did NOT confirm this command (no-ui-explicit).");
   }
