@@ -1,0 +1,3 @@
+{"file": ".pi/extensions/myflow/index.ts", "reason": "校验基准：四个守卫是否都在且未被削弱"}
+{"file": ".pi/extensions/myflow/ask.ts", "reason": "校验基准：注入形态与子代理守卫的一致参照"}
+{"file": ".myflow/spec/harness/index.md", "reason": "校验基准：F8 的契约是否与实现一致"}
