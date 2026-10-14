@@ -44,6 +44,52 @@ Payload tour and inventory:
   `researchX` would match `research`); `..` is not collapsed before the prefix
   comparison; or the comparison is not case-insensitive on Windows.
 
+### Task context gate: empty `implement.jsonl` / `check.jsonl`
+
+- **Producer**: `.myflow/scripts/task.py create` seeds empty `implement.jsonl`
+  and `check.jsonl` in every task it creates.
+- **Consumers**:
+  - `task.py start` — refuses a task whose manifest exists but has 0 curated
+    entries, unless `--allow-empty-context` is passed. The manifest gate is a
+    second line of defense after the phase-1 review gate in `workflow.md`.
+  - `task.py validate <task>` — reports the same condition (and invalid rows,
+    missing referenced files) with a non-zero exit.
+  - `task.py add-context <task> <implement|check> <path> [reason]` — the write
+    side; appends `{file, reason}` (or `{file, type:"directory", reason}` for a
+    directory) and refuses a duplicated path.
+- **Value/shape**: a curated entry is a JSON object line carrying a truthy
+  `file` (or legacy `path`) string. `create` seeds the file **empty** — a
+  placeholder `_example` row is a hard validation error, not scaffolding.
+- **Invariant**: an **absent** manifest is not gated; only a seeded-but-empty
+  one is. Gating absence would strand every task created before seeding landed.
+- **Breaks if**: the gate reads a missing file as 0 entries; `create` stops
+  seeding (the gate then never fires); or a gate ships without `add-context` as
+  its write side (an unsatisfiable gate).
+
+### Task context: what the extension injects
+
+- **Producer**: `.pi/extensions/myflow/context-injection.ts` `buildTaskContext`.
+- **Consumers**: the `<task-context>` block `myflow_subagent` injects into
+  every dispatched child, and `session_before_compact` re-injects.
+- **Value/shape**: task artifacts in a fixed order — `prd.md` → `design.md` →
+  `implement.md` → `info.md` — each materialized as an `artifact` and bounded
+  by `context_injection.max_artifact_bytes`; then the files referenced by
+  `implement.jsonl` / `check.jsonl`, each bounded by `max_file_bytes`; every
+  block scored against `max_total_bytes`.
+- **Invariant**: `design.md` and `implement.md` get exactly the treatment
+  `prd.md` does — same `max_artifact_bytes` cap, same truncation/omitted
+  fallback under `max_total_bytes`. A missing artifact is skipped silently,
+  never an error. `info.md` is myflow's own artifact and stays in the list.
+- **Ordering caveat**: artifacts are emitted **before** the curated jsonl
+  files, so under total-budget pressure the jsonl context is dropped or
+  degraded first. That inversion is known and
+  deliberately **not** changed here (a budget-priority
+  reorder is a separate change); if it is revisited, update the Dispatch
+  Protocol read order in `.myflow/workflow.md` and this entry together.
+- **Breaks if**: `design.md` / `implement.md` drop out of the injection list
+  (the Dispatch Protocol promises sub-agents see them), or a missing artifact
+  starts emitting an error instead of being skipped.
+
 ## Design Decisions
 
 ### Design Decision: bound the write scope, do not try to exclude writers

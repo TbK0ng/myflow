@@ -39,12 +39,12 @@ function makeScopedProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-guard-"));
   mkdirSync(join(root, ".myflow", ".runtime", "sessions"), { recursive: true });
   writeFileSync(join(root, ".myflow", "workflow.md"), "[workflow-state:in_progress]\nWork.\n[/workflow-state:in_progress]\n");
-  const taskDir = join(root, "tasks", "demo");
+  const taskDir = join(root, ".myflow", "tasks", "demo");
   mkdirSync(taskDir, { recursive: true });
   writeFileSync(join(taskDir, "task.json"), JSON.stringify({ title: "Demo", status: "in_progress" }));
   writeFileSync(
     join(root, ".myflow", ".runtime", "sessions", "pi_guard.json"),
-    JSON.stringify({ current_task: "tasks/demo" }),
+    JSON.stringify({ current_task: ".myflow/tasks/demo" }),
   );
   return root;
 }
@@ -473,14 +473,14 @@ test("tool_call: a scoped sub-agent may only write inside <active task>/<writesU
 
     // Inside the scope: allowed through `/`, `\`, and nested directories, for
     // both tools the guard covers.
-    for (const path of ["tasks/demo/research/note.md", "tasks\\demo\\research\\sub\\note.md"]) {
+    for (const path of [".myflow/tasks/demo/research/note.md", ".myflow\\tasks\\demo\\research\\sub\\note.md"]) {
       assert.equal(await call("write", path), undefined, `write ${path} must be allowed`);
       assert.equal(await call("edit", path), undefined, `edit ${path} must be allowed`);
     }
 
     // Case: Windows folds case, so a case-varied scope directory is the same
     // directory; a case-sensitive filesystem treats it as outside.
-    const caseVariant = await call("write", "tasks/demo/RESEARCH/note.md");
+    const caseVariant = await call("write", ".myflow/tasks/demo/RESEARCH/note.md");
     if (process.platform === "win32") {
       assert.equal(caseVariant, undefined, "Windows is case-insensitive: RESEARCH is research");
     } else {
@@ -489,15 +489,15 @@ test("tool_call: a scoped sub-agent may only write inside <active task>/<writesU
 
     // Outside the scope: blocked, with a reason naming the scope.
     for (const path of [
-      "tasks/demo/other/note.md",
-      "tasks/demo/research/../escape.md",
-      "tasks/demo/research/../../prd.md",
+      ".myflow/tasks/demo/other/note.md",
+      ".myflow/tasks/demo/research/../escape.md",
+      ".myflow/tasks/demo/research/../../prd.md",
       // A sibling that only shares the scope's prefix must not match it: the
       // containment test appends a separator, so `researchX` != `research/`.
-      "tasks/demo/researchX/note.md",
-      "tasks/demo/researchevil.md",
-      "tasks/demo/research-notes/note.md",
-      "tasks/demo/RESEARCH-NOTES/note.md",
+      ".myflow/tasks/demo/researchX/note.md",
+      ".myflow/tasks/demo/researchevil.md",
+      ".myflow/tasks/demo/research-notes/note.md",
+      ".myflow/tasks/demo/RESEARCH-NOTES/note.md",
       "../outside.md",
       resolve(root, "..", "outside.md"),
       "/etc/passwd",
@@ -538,7 +538,7 @@ test("tool_call: a scoped sub-agent fails closed when no active task resolves", 
     const ctx = { cwd: root } as HookContext;
     await handlers.session_start({}, ctx);
     const result = (await handlers.tool_call(
-      { toolName: "write", input: { path: "tasks/demo/research/note.md" } },
+      { toolName: "write", input: { path: ".myflow/tasks/demo/research/note.md" } },
       ctx,
     )) as { block?: boolean; reason?: string } | undefined;
     assert.equal(result?.block, true, "no active task must fail closed");
@@ -565,7 +565,7 @@ test("tool_call: a blank writesUnder declaration fails closed", async () => {
     const ctx = { cwd: root } as HookContext;
     await handlers.session_start({}, ctx);
     const result = (await handlers.tool_call(
-      { toolName: "write", input: { path: "tasks/demo/research/note.md" } },
+      { toolName: "write", input: { path: ".myflow/tasks/demo/research/note.md" } },
       ctx,
     )) as { block?: boolean; reason?: string } | undefined;
     assert.equal(result?.block, true);
@@ -595,7 +595,7 @@ test("tool_call: an escaping writesUnder scope fails closed", async () => {
     for (const scope of ["../..", "..", "research/../../..", "/tmp", "C:\\Windows"]) {
       process.env[MYFLOW_WRITES_UNDER_ENV] = scope;
       const result = (await handlers.tool_call(
-        { toolName: "write", input: { path: "tasks/demo/research/note.md" } },
+        { toolName: "write", input: { path: ".myflow/tasks/demo/research/note.md" } },
         ctx,
       )) as { block?: boolean; reason?: string } | undefined;
       assert.equal(result?.block, true, `scope ${scope} must fail closed`);

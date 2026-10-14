@@ -145,7 +145,7 @@ Keep these consistent across files; change them together or not at all:
 | --- | --- | --- |
 | `prompt_injection.skip_keyword` | `no-myflow` | Word that suppresses the per-turn workflow breadcrumb |
 | `context_injection.max_file_bytes` | 32768 | Per-file task-context budget |
-| `context_injection.max_artifact_bytes` | 65536 | Per-artifact (prd/info) budget |
+| `context_injection.max_artifact_bytes` | 65536 | Per-artifact (prd/design/implement/info) budget |
 | `context_injection.max_total_bytes` | 131072 | Total task-context budget |
 | `channel.trusted_context_dirs` | `[]` | Extra roots JSONL-referenced files may live in |
 | `channel.auto_trust_myflow_symlinks` | `true` | Auto-trust a symlinked `.myflow/tasks` directory |

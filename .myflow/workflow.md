@@ -16,7 +16,7 @@ Phase 3: Finish  → verify, capture spec, commit, archive
 | --- | --- | --- |
 | 1.1 | Requirement exploration | `[required · once]` `myflow-brainstorm` → `prd.md` (complex work also `design.md` + `implement.md`) |
 | 1.2 | Research | `[optional · repeatable]` `myflow_subagent` with `myflow-research` → `research/<topic>.md` |
-| 1.3 | Configure context | `[required · once]` curate `implement.jsonl` / `check.jsonl` (sub-agent platforms) |
+| 1.3 | Configure context | `[required · once]` curate `implement.jsonl` / `check.jsonl` with `task.py add-context`; a seeded-but-empty manifest blocks `start` |
 | 1.4 | Activate | `[required · once]` review gate, then `task.py start` → status `in_progress` |
 | 2.1 | Implement | `[required · repeatable]` `myflow_subagent` with `myflow-implement` |
 | 2.2 | Check | `[required · repeatable]` `myflow-check`; fix findings |
@@ -82,8 +82,12 @@ machine state: put it in `.gitignore`, never commit it.
   logs its raw stream under `.myflow/.runtime/subagent-logs/`. A run that hits the
   cap is stopped, reported with its log path, and leaves its changes in the tree —
   nothing is reverted, so re-dispatch a bounded next step instead of redoing it.
-- Read order inside a sub-agent: `implement.jsonl` / `check.jsonl` referenced
-  files → `prd.md` → `design.md` if present → `implement.md` if present.
+- Injected read order inside a sub-agent: `prd.md` → `design.md` if present →
+  `implement.md` if present → `info.md` → `implement.jsonl` / `check.jsonl`
+  referenced files. The extension materializes each into `<task-context>` —
+  artifacts bounded by `context_injection.max_artifact_bytes`, jsonl files by
+  `max_file_bytes` — so they are read, not merely named; a missing artifact is
+  skipped silently.
 
 ## Escape Hatch
 
@@ -102,14 +106,15 @@ Complex task: ask the user if you can create a myflow task and enter the plannin
 Load `myflow-brainstorm`; stay in planning.
 Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
-Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research manifests before start.
+Sub-agent mode: curate `implement.jsonl` and `check.jsonl` with `task.py add-context <task> <implement|check> <path> "<why>"` before `task.py start`.
+Seeded-but-empty guard: `task.py start` refuses a task whose manifest was seeded by `create` but has no curated entry, because its sub-agents would run with zero spec context. Curate one, or pass `--allow-empty-context` to bypass it knowingly.
 [/workflow-state:planning]
 
 [workflow-state:in_progress]
 Tools: `myflow-implement` / `myflow-check` / `myflow-research` are sub-agent types dispatched with `myflow_subagent` (not skills). `myflow-before-dev`, `myflow-check`, `myflow-update-spec`, and `myflow-break-loop` are skills.
 Flow: `myflow-implement` -> `myflow-check` -> `myflow-update-spec` -> commit (3.2) -> `/myflow-finish-work`.
 Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `myflow-implement`, do NOT dispatch another `myflow-implement` or `myflow-check`; if already running as `myflow-check`, do NOT dispatch another `myflow-check` or `myflow-implement`. Dispatch is main session only.
-Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
+Dispatch prompt starts with `Active task: <task path from task.py current>`. Injected context: `prd.md` -> `design.md if present` -> `implement.md if present` -> `info.md` -> jsonl-referenced files.
 [/workflow-state:in_progress]
 
 [workflow-state:completed]

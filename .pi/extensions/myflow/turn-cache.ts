@@ -1,11 +1,34 @@
-import { readFileSync, existsSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
+import { join, resolve, relative, isAbsolute } from "node:path";
 import { parseWorkflowStateBlocks } from "./parse-workflow-state.ts";
 
 /** Session overview text injected into every turn. */
 export const SESSION_OVERVIEW_TEXT =
   "You are operating inside the myflow harness. " +
   "Follow the active workflow state block for the current step.";
+
+/**
+ * True when `candidate` resolves to a real directory strictly inside the
+ * project's `.myflow/tasks/`.
+ *
+ * A session pointer is not always something the user typed: a stale or
+ * poisoned `current_task` can name an absolute path, a `..` escape, or a
+ * symlink that leaves the tasks tree. Both sides are resolved so a task
+ * directory symlinked outside is refused too. The caller keeps its own
+ * (unresolved) candidate on success, because the returned task dir is later
+ * turned back into a display path with `relative()`; handing it a realpath
+ * would misreport a project root that itself sits behind a symlink.
+ */
+function isTaskDirWithinTasks(projectRoot: string, candidate: string): boolean {
+  try {
+    const tasksRoot = realpathSync(join(projectRoot, ".myflow", "tasks"));
+    const target = realpathSync(candidate);
+    const rel = relative(tasksRoot, target);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  } catch {
+    return false;
+  }
+}
 
 /** Resolve the active task status for a project and context key. */
 export function resolveActiveTaskStatus(
@@ -53,6 +76,11 @@ export function resolveActiveTaskStatus(
   }
 
   const taskDir = resolve(projectRoot, currentTask);
+  if (!isTaskDirWithinTasks(projectRoot, taskDir)) {
+    // A ref that leaves .myflow/tasks/ is not an active task: treat it as
+    // no_task rather than resolving it and reporting it as stale.
+    return { status: "no_task", taskDir: null, taskTitle: null };
+  }
   const taskJsonPath = join(taskDir, "task.json");
   if (!existsSync(taskJsonPath)) {
     return { status: "no_task", taskDir: null, taskTitle: null };

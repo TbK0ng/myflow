@@ -104,8 +104,9 @@ task, the workflow phase, and git state.
 ## Runtime: context injection
 
 `buildTaskContext` (`.pi/extensions/myflow/context-injection.ts`) materializes `prd.md`,
-`info.md`, and the files referenced by `implement.jsonl` / `check.jsonl`,
-bounded by `context_injection.*` in `.myflow/config.yaml`. Files outside the
+`design.md` / `implement.md` when present, `info.md`, and the files referenced
+by `implement.jsonl` / `check.jsonl`, bounded by `context_injection.*` in
+`.myflow/config.yaml`. Files outside the
 project are only read when under a trusted root (`channel.*`). Omitted or
 truncated entries remain authoritative on disk; the model must read them.
 
