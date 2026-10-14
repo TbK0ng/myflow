@@ -648,9 +648,11 @@ const BG_START_PARAMETERS = {
     command: {
       type: "string",
       description:
-        "The command to run in the background. Must be non-empty. It is executed by the " +
-        "platform default shell (cmd.exe on Windows) — not Git Bash — so pipes, && and " +
-        "redirection are interpreted by that shell.",
+        "The command to run in the background. Must be non-empty. It is executed by Git Bash " +
+        "(`bash -lc`) — the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's " +
+        "shellPath, then the Git for Windows bash, then `bash` on PATH, then an explicit " +
+        "cmd.exe /d /s /c fallback. It is spawned directly with argv, NOT through Node's shell " +
+        "option, so quotes are parsed by bash semantics.",
     },
     description: {
       type: "string",
@@ -716,7 +718,8 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
     description: [
       "Start a command in the background and return immediately with a task id.",
       "A background task outlives the session; read it with myflow_bg_output, list it with myflow_bg_list, and stop it with myflow_bg_stop.",
-      "The command runs under the platform default shell (cmd.exe on Windows), not Git Bash.",
+      "The command runs under Git Bash (`bash -lc`): the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's shellPath, then the Git for Windows bash, then `bash` on PATH, then an explicit cmd.exe /d /s /c fallback.",
+      "It is spawned directly with argv rather than through Node's shell option, so the command's quotes are parsed by bash semantics.",
       "Requires the user's confirmation; without an interactive UI it refuses unless `unattended: true` is passed, which is recorded as unconfirmed.",
     ].join(" "),
     promptSnippet: "Start a long-running command in the background",

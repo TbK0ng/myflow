@@ -14,7 +14,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { runCommand } from "../.myflow/scripts/bg_runner.mjs";
+import {
+  isCmdShell,
+  resolveShellPath,
+  runCommand,
+  shellArgsFor,
+} from "../.myflow/scripts/bg_runner.mjs";
 
 // F1 — the background-task wrapper (`.myflow/scripts/bg_runner.mjs`).
 //
@@ -42,9 +47,16 @@ function runRunner(
   args: string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): RunResult {
+  // Hermetic shell resolution: the developer's own `MYFLOW_BG_SHELL` must not
+  // change what these cases exercise. A case that wants an override opts in
+  // explicitly through `options.env`.
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.MYFLOW_BG_SHELL;
+  Object.assign(env, options.env ?? {});
+
   const result = spawnSync(process.execPath, [RUNNER, ...args], {
     cwd: options.cwd,
-    env: options.env ?? process.env,
+    env,
     encoding: "utf-8",
     timeout: 30_000,
   });
@@ -87,6 +99,11 @@ test("bg runner -1: command output lands in the log and exit_code 0 is recorded"
     assert.equal(record.signal, null);
     assert.equal(typeof record.at, "string");
     assert.ok(!Number.isNaN(Date.parse(record.at)), "`at` must be a valid ISO timestamp");
+    // Which shell ran it is recorded on the success path too (not just on
+    // failure), so "was this cmd or bash?" is always answerable afterwards.
+    assert.equal(typeof record.shell, "string");
+    assert.ok(record.shell.length > 0, ".exit 必须记录外壳路径");
+    assert.match(record.shell, /bash(\.exe)?$/i, "默认必须解析到 Git Bash / PATH 上的 bash");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -167,7 +184,7 @@ test("bg runner -3: the .exit record is written atomically", async () => {
   }
 });
 
-test("bg runner -4: an unstartable command is recorded as exit_code null plus error", () => {
+test("bg runner -4: an unstartable shell is recorded as exit_code null plus error", () => {
   const dir = makeDir();
   try {
     const log = join(dir, "task.log");
@@ -183,39 +200,45 @@ test("bg runner -4: an unstartable command is recorded as exit_code null plus er
     assert.equal(typeof missingRecord.error, "string");
     assert.ok(missingRecord.error.length > 0);
 
-    // (b) A genuinely unspawnable command. With `shell: true` a *missing*
-    // program is reported by the shell as its own exit code, so the only way
-    // spawn itself fails is when the shell cannot be started. On Windows Node
-    // resolves the shell from `ComSpec`; pointing it at a missing file makes
-    // `spawn` raise ENOENT. Other platforms hardcode `/bin/sh`, so skip there.
-    if (process.platform === "win32") {
-      const spawnExit = join(dir, "spawn.exit");
-      // Windows env var names are case-insensitive but the object is not: the
-      // live `COMSPEC` key must be dropped before setting `ComSpec`, or the
-      // child keeps the original value and the shell starts normally.
-      const env: NodeJS.ProcessEnv = { ...process.env };
-      for (const key of Object.keys(env)) {
-        if (key.toLowerCase() === "comspec") delete env[key];
-      }
-      env.ComSpec = join(dir, "no-such-shell.exe");
-      const result = runRunner(
-        ["--id", "bg-test", "--log", log, "--exit", spawnExit, "--", "definitely_not_a_real_command_xyz"],
-        { env },
-      );
-      assert.notEqual(result.status, 0, "a spawn failure must make the wrapper exit non-zero");
-      assert.equal(result.stdout, "");
-      assert.equal(result.stderr, "");
-      const record = JSON.parse(readFileSync(spawnExit, "utf-8"));
-      assert.equal(record.exit_code, null);
-      assert.equal(typeof record.error, "string");
-      assert.ok(record.error.length > 0);
-    }
+    // (b) The *shell itself* cannot be started. The wrapper now spawns the shell
+    // with argv, so the only way `spawn` fails is when that shell is missing.
+    // `MYFLOW_BG_SHELL` is taken verbatim (no existence check, by design), so
+    // pointing it at a missing file makes `spawn` raise ENOENT.
+    const bogusShell = join(dir, "no-such-shell.exe");
+    const spawnExit = join(dir, "spawn.exit");
+    const spawnResult = runRunner(
+      ["--id", "bg-test", "--log", log, "--exit", spawnExit, "--", "echo hi"],
+      { env: { ...process.env, MYFLOW_BG_SHELL: bogusShell } },
+    );
+    assert.notEqual(spawnResult.status, 0, "a spawn failure must make the wrapper exit non-zero");
+    assert.equal(spawnResult.stdout, "");
+    assert.equal(spawnResult.stderr, "");
+    const spawnRecord = JSON.parse(readFileSync(spawnExit, "utf-8"));
+    assert.equal(spawnRecord.exit_code, null);
+    assert.equal(typeof spawnRecord.error, "string");
+    assert.ok(spawnRecord.error.length > 0);
+    assert.equal(spawnRecord.shell, bogusShell, ".exit 必须记录被请求的外壳路径");
+
+    // (c) A *missing command* is NOT a spawn failure any more. The shell starts
+    // fine and reports the unknown command itself, which bash does as exit code
+    // 127. Asserting this keeps the runner from ever regressing to treating a
+    // shell-level failure as a failed process creation.
+    const noCommandExit = join(dir, "no-command.exit");
+    const noCommand = runRunner(
+      ["--id", "bg-test", "--log", log, "--exit", noCommandExit, "--", "definitely_not_a_real_command_xyz"],
+      { env: { ...process.env, MYFLOW_BG_SHELL: resolveShellPath() } },
+    );
+    assert.equal(noCommand.status, 127, "bash 把不存在的命令报为退出码 127（不是 spawn 失败）");
+    const noCommandRecord = JSON.parse(readFileSync(noCommandExit, "utf-8"));
+    assert.equal(noCommandRecord.exit_code, 127);
+    assert.equal(noCommandRecord.signal, null);
+    assert.equal(noCommandRecord.error, undefined, "命令不存在不得被记成创建失败");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("bg runner -5: the command runs through the platform shell", () => {
+test("bg runner -5: the command runs through the resolved shell", () => {
   const dir = makeDir();
   try {
     const log = join(dir, "task.log");
@@ -229,6 +252,17 @@ test("bg runner -5: the command runs through the platform shell", () => {
     const text = readFileSync(log, "utf-8");
     assert.match(text, /one/);
     assert.match(text, /two/);
+
+    // A pipe is interpreted by the shell, not by us: the command is one argv
+    // element, so `|` must survive to bash. (This is the case `shell: "..."`
+    // could not express on Windows.)
+    const pipeExit = join(dir, "pipe.exit");
+    const piped = runRunner(
+      ["--id", "bg-test", "--log", log, "--exit", pipeExit, "--", "echo pipe-me | tr a-z A-Z"],
+      { cwd: dir },
+    );
+    assert.equal(piped.status, 0);
+    assert.match(readFileSync(log, "utf-8"), /PIPE-ME/);
 
     // Redirection is interpreted by the shell too, relative to the wrapper's
     // working directory (which the caller sets).
@@ -251,11 +285,18 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
   let logFd = -1;
   try {
     const log = join(dir, "retry.log");
-    logFd = openSync(log, "a");
+    // 与 bg_runner 一致用 "w"：MSYS bash 无法使用以 "a"（O_APPEND）打开并
+    // 经 stdio 传入的描述符（会报 Bad file descriptor），"w" 可以。
+    logFd = openSync(log, "w");
 
     // 桩：前两次以 EAGAIN 失败（进程从未创建），第三次交给真实 spawn。
+    // 注意新的 spawn 形态：外壳与参数是分开的 argv，命令是 args 的最后一个元素。
     let calls = 0;
-    const spawnImpl = (command: string, options: Parameters<typeof spawn>[1]) => {
+    const spawnImpl = (
+      shell: string,
+      args: readonly string[],
+      options: Parameters<typeof spawn>[2],
+    ) => {
       calls += 1;
       if (calls <= 2) {
         const fake = new EventEmitter();
@@ -266,7 +307,7 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
         });
         return fake as unknown as ChildProcess;
       }
-      return spawn(command, options);
+      return spawn(shell, args, options);
     };
 
     let record: Record<string, unknown> | undefined;
@@ -303,7 +344,7 @@ test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记�
   let logFd = -1;
   try {
     const log = join(dir, "no-retry.log");
-    logFd = openSync(log, "a");
+    logFd = openSync(log, "w");
 
     let calls = 0;
     const spawnImpl = () => {
@@ -340,4 +381,154 @@ test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记�
     if (logFd >= 0) closeSync(logFd);
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("bg runner -6: MYFLOW_BG_SHELL 覆盖被采用，并原样记进 .exit.shell", () => {
+  // 回退点：resolveShellPath 不再读 MYFLOW_BG_SHELL → shell 字段不等于注入值；
+  //         runCommand 忘了把 shell 写进成功记录 → shell 断言变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "override.log");
+    const exit = join(dir, "override.exit");
+    const shell = resolveShellPath(); // 本机真实 bash（Git Bash 或 PATH 上的 bash）
+    const result = runRunner(
+      ["--id", "bg-test", "--log", log, "--exit", exit, "--", "echo override-marker"],
+      { env: { ...process.env, MYFLOW_BG_SHELL: shell } },
+    );
+    assert.equal(result.status, 0);
+    const record = JSON.parse(readFileSync(exit, "utf-8"));
+    assert.equal(record.shell, shell, "注入的 MYFLOW_BG_SHELL 必须原样进入 .exit.shell");
+    assert.match(readFileSync(log, "utf-8"), /override-marker/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bg runner -7: resolveShellPath 顺序固定（override -> settings -> Git -> PATH -> cmd）", () => {
+  // 回退点：任一候选顺序被调换、多写一套解析、或丢掉存在性检查 → 对应断言变红。
+  const gitBash = join("C:\\", "Program Files", "Git", "bin", "bash.exe");
+  const noExists = () => false;
+  const settingsFile = join("H:/home", ".pi", "agent", "settings.json");
+
+  // 1. MYFLOW_BG_SHELL 优先，且原样返回（不做存在性检查）。
+  assert.equal(
+    resolveShellPath({
+      env: { MYFLOW_BG_SHELL: "X:/nowhere/bash.exe" },
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "",
+      exists: noExists,
+      readFile: () => "",
+    }),
+    "X:/nowhere/bash.exe",
+  );
+
+  // 2. settings.json 的 shellPath。
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "",
+      exists: (p) => p === "H:/home/custom/shell.exe" || p === settingsFile,
+      readFile: () => JSON.stringify({ shellPath: "H:/home/custom/shell.exe" }),
+    }),
+    "H:/home/custom/shell.exe",
+    "settings 的 shellPath 存在时必须采用",
+  );
+
+  // 2b. shellPath 指向不存在的文件 → 继续向下解析，不得采用不存在的外壳。
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "",
+      exists: (p) => p === settingsFile,
+      readFile: () => JSON.stringify({ shellPath: "H:/gone/shell.exe" }),
+    }),
+    "cmd.exe",
+    "settings 的 shellPath 不存在时必须继续向下解析",
+  );
+
+  // 3. Git for Windows 标准路径。
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "",
+      exists: (p) => p === gitBash,
+      readFile: () => "",
+    }),
+    gitBash,
+  );
+
+  // 4. PATH 上的 bash。
+  const pathBash = join("D:\\bin", "bash.exe");
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "C:\\tools;D:\\bin",
+      exists: (p) => p === pathBash,
+      readFile: () => "",
+    }),
+    pathBash,
+  );
+
+  // 4b. PATH 搜索必须跳过 Windows 系统目录里的 bash.exe（那是 WSL 启动器，
+  //     本项目禁止调用）：即使它存在、而真正的 git bash 在后面，也必须取后者。
+  const wslLauncher = join("C:\\Windows\\System32", "bash.exe");
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "C:\\Windows\\System32;D:\\bin",
+      exists: (p) => p === wslLauncher || p === pathBash,
+      readFile: () => "",
+    }),
+    pathBash,
+    "System32 下的 bash.exe 是 WSL 启动器，必须跳过",
+  );
+
+  // 4c. 只有 System32 里有 bash.exe → 不得采用，退回 %ComSpec% 兜底。
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "C:\\Windows\\System32",
+      exists: (p) => p === wslLauncher,
+      readFile: () => "",
+    }),
+    "cmd.exe",
+  );
+
+  // 5. 兜底：%ComSpec% 的 cmd.exe。
+  assert.equal(
+    resolveShellPath({
+      env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "",
+      exists: noExists,
+      readFile: () => "",
+    }),
+    "C:\\Windows\\System32\\cmd.exe",
+  );
+
+  // 6. 参数形态：命令必须作为单个 argv 元素（这正是消灭二次解析的关键）。
+  assert.deepEqual(shellArgsFor(gitBash, "echo hi"), ["-lc", "echo hi"]);
+  assert.deepEqual(shellArgsFor("C:\\Windows\\System32\\cmd.exe", "echo hi"), [
+    "/d",
+    "/s",
+    "/c",
+    "echo hi",
+  ]);
+  assert.equal(isCmdShell("cmd.exe"), true);
+  assert.equal(isCmdShell("/bin/sh"), false);
+  assert.equal(isCmdShell(gitBash), false);
 });
