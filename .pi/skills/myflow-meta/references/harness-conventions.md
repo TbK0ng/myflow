@@ -62,6 +62,14 @@ Keep these consistent across files; change them together or not at all:
   `myflow-implement` and `myflow-check` both write, so they run one at a time in
   the shared tree; research is the parallel agent. True concurrency uses
   worktrees, one session each.
+- **Dispatch cap and log**: every `myflow_subagent` run is capped (default
+  `SUBAGENT_TIMEOUT_MS`, override with `timeoutMs`, `0` disables) and tees its raw
+  stream to `.myflow/.runtime/subagent-logs/`. Stopping is a tree kill
+  (`taskkill /T /F`, `killpg`): a plain kill leaves the MCP servers the child
+  started holding its handles.
+- **Delegated work orders**: `worktree.py start` and `channel.py spawn` prefix the
+  prompt with "do not create or manage myflow tasks". Without it a detached
+  session reads the `no_task` block at session start and stalls asking for consent.
 - **Verify gate scope**: the gate holds a dispatched `myflow-check` sub-agent
   (agent type) or any process with `MYFLOW_VERIFY_GATE=1`, which is how
   `channel.py spawn --agent reviewer` covers a peer review that carries no
@@ -118,6 +126,11 @@ Keep these consistent across files; change them together or not at all:
 - **Git Bash rewrites `/`-prefixed arguments** (MSYS path conversion), so
   running `pi "/myflow-status"` from Git Bash sends a filesystem path, not the
   command. Verify commands from Node/RPC or use the TUI.
+
+- **Testing a launch on Windows**: a `.cmd` shim cannot observe a multi-line argv
+  (cmd splits on the newline), so a test that inspects what was handed to `pi`
+  breaks as soon as the prompt grows a newline. Assert the recorded state
+  (registry/plan) instead of the shim's view of argv.
 
 ## Config Keys (`.myflow/config.yaml`, all optional)
 

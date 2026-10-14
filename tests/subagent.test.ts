@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import extension from "../.pi/extensions/myflow/index.ts";
@@ -180,6 +180,106 @@ test("myflow_subagent: missing prompt for single mode is rejected", async () => 
     () => tool.execute("id", { agent: "myflow-implement", mode: "single" }, undefined, undefined, { cwd: ROOT }),
     /prompt is required/,
   );
+});
+
+test("myflow_subagent: a run past its cap is stopped, reported, and logged", async () => {
+  const root = makeProject();
+  mkdirSync(join(root, ".pi", "agents"), { recursive: true });
+  for (const name of ["myflow-research", "myflow-implement", "myflow-check"]) {
+    cpSync(join(ROOT, ".pi", "agents", `${name}.md`), join(root, ".pi", "agents", `${name}.md`));
+  }
+  // A child that never finishes, with a known pid, so the cap and the tree
+  // kill can both be checked without a model call.
+  const childScript = join(root, "slow-child.js");
+  const pidFile = join(root, "child.pid");
+  writeFileSync(
+    childScript,
+    [
+      'const fs = require("fs");',
+      'process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "working" }] } }) + String.fromCharCode(10));',
+      `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      "setTimeout(() => {}, 60000);",
+    ].join(String.fromCharCode(10)),
+    "utf-8",
+  );
+
+  const argv1 = process.argv[1];
+  process.argv[1] = childScript;
+  try {
+    const { api, tools } = makeMockAPI();
+    registerMyflowSubagent(api as any);
+    const tool = tools.find((candidate) => candidate.name === "myflow_subagent")!;
+    const result = (await tool.execute(
+      "id",
+      { agent: "myflow-research", prompt: "probe", timeoutMs: 1200 },
+      undefined,
+      undefined,
+      { cwd: root },
+    )) as { content: Array<{ text: string }>; details: { runs: Array<Record<string, unknown>> }; isError?: boolean };
+
+    const run = result.details.runs[0];
+    assert.equal(result.isError, true, "a stopped run is an error result");
+    assert.equal(run.timedOut, true);
+    assert.equal(run.exitCode, 124, "124 mirrors timeout(1)");
+    assert.match(result.content[0].text, /was stopped after \d+s/);
+    assert.match(result.content[0].text, /timeoutMs/);
+
+    const logPath = String(run.logPath);
+    assert.ok(existsSync(logPath), "the raw stream must be kept");
+    assert.match(readFileSync(logPath, "utf-8"), /"working"/, "the log holds what the run produced");
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const childPid = Number(readFileSync(pidFile, "utf-8"));
+    let alive = true;
+    try {
+      process.kill(childPid, 0);
+    } catch {
+      alive = false;
+    }
+    assert.equal(alive, false, "the stopped run is killed, not orphaned");
+  } finally {
+    process.argv[1] = argv1;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("myflow_subagent: a run inside its cap is unaffected", async () => {
+  const root = makeProject();
+  mkdirSync(join(root, ".pi", "agents"), { recursive: true });
+  cpSync(join(ROOT, ".pi", "agents", "myflow-research.md"), join(root, ".pi", "agents", "myflow-research.md"));
+
+  const childScript = join(root, "fast-child.js");
+  writeFileSync(
+    childScript,
+    [
+      'process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done early" }] } }) + String.fromCharCode(10));',
+      "process.exit(0);",
+    ].join(String.fromCharCode(10)),
+    "utf-8",
+  );
+
+  const argv1 = process.argv[1];
+  process.argv[1] = childScript;
+  try {
+    const { api, tools } = makeMockAPI();
+    registerMyflowSubagent(api as any);
+    const tool = tools.find((candidate) => candidate.name === "myflow_subagent")!;
+    const result = (await tool.execute(
+      "id",
+      { agent: "myflow-research", prompt: "quick", timeoutMs: 30_000 },
+      undefined,
+      undefined,
+      { cwd: root },
+    )) as { content: Array<{ text: string }>; details: { runs: Array<Record<string, unknown>> }; isError?: boolean };
+
+    assert.equal(result.content[0].text, "done early");
+    assert.ok(!result.isError);
+    assert.ok(!result.details.runs[0].timedOut);
+    assert.ok(existsSync(String(result.details.runs[0].logPath)));
+  } finally {
+    process.argv[1] = argv1;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("myflow_subagent: parallel dispatch is rejected for write-capable agents", async () => {

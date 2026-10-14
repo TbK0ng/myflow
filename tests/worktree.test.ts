@@ -223,7 +223,13 @@ test("worktree start --dry-run: plans a delegated session without touching git",
     assert.match(planned.session_id, /^myflow-zeta-\d{4}-\d{6}-\d{3}$/, "each plan carries a fresh session id");
     assert.equal(planned.env.MYFLOW_SKIP_BREADCRUMB, "1");
     assert.ok(planned.command.includes("--session-id"));
-    assert.match(planned.command[planned.command.length - 1], /^Active task: \.myflow\/tasks\/demo\n\ndo the work$/);
+    const plannedPrompt = String(planned.command[planned.command.length - 1]);
+    assert.match(plannedPrompt, /^Active task: \.myflow\/tasks\/demo/);
+    // Nobody is watching a detached session, so the work order says who owns the
+    // task lifecycle; without it the session stops to ask for task consent.
+    assert.match(plannedPrompt, /Delegated work order: nobody is watching/);
+    assert.match(plannedPrompt, /Do not create or\nmanage myflow tasks/);
+    assert.match(plannedPrompt, /do the work$/);
     assert.ok(!existsSync(join(project.worktrees, "zeta")), "dry-run must not create the worktree");
     assert.ok(!existsSync(join(project.root, ".myflow", ".runtime", "worktrees.json")), "dry-run must not register a session");
   } finally {
@@ -254,21 +260,79 @@ function startWithFakePi(project: Project, args: string[], binDir: string, captu
   }).trim();
 }
 
-async function waitForCapture(capture: string, needle: string, timeoutMs = 15_000): Promise<string> {
-  // The launch is detached, so the stand-in pi writes its command line on its
-  // own schedule.
-  const deadline = Date.now() + timeoutMs;
-  let seen = "";
-  for (;;) {
-    try {
-      seen = readFileSync(capture, "utf-8");
-    } catch {
-      seen = "";
-    }
-    if (seen.includes(needle) || Date.now() > deadline) return seen;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+test("worktree create: copied inputs stay out of the worktree git status", () => {
+  const project = makeRepo("worktree_dir: ../worktrees\ncopy:\n  - .myflow/tasks\n");
+  try {
+    mkdirSync(join(project.root, ".myflow", "tasks", "t"), { recursive: true });
+    writeFileSync(join(project.root, ".myflow", "tasks", "t", "note.md"), "work order\n");
+    worktree(project, ["create", "copied"]);
+    const target = join(project.worktrees, "copied");
+    assert.ok(existsSync(join(target, ".myflow", "tasks", "t", "note.md")), "the copy lands in the worktree");
+
+    // Inputs for the session, not part of its branch: without this, git add -A
+    // stages them and merging the branch into the main tree aborts because the
+    // same paths exist there untracked.
+    const status = execFileSync("git", ["status", "--short"], { cwd: target, encoding: "utf-8" }).trim();
+    assert.ok(!status.includes(".myflow/tasks"), `copied inputs must not appear in git status, got: ${status}`);
+    const addDryRun = execFileSync("git", ["add", "-A", "--dry-run"], { cwd: target, encoding: "utf-8" }).trim();
+    assert.ok(!addDryRun.includes(".myflow/tasks"), `git add -A must not stage copied inputs, got: ${addDryRun}`);
+  } finally {
+    cleanup(project);
   }
-}
+});
+
+test("worktree start: every launch mints a fresh session id", () => {
+  const project = makeRepo("worktree_dir: ../worktrees\n");
+  const binDir = join(project.root, "..", "bin");
+  mkdirSync(binDir, { recursive: true });
+  const capture = fakePi(binDir);
+  try {
+    // The id is asserted through the registry and the printed plan rather than
+    // through the child argv: a .cmd shim cannot observe a multi-line argument
+    // (cmd splits on the newline), and the delegated work order is multi-line.
+    const first = startWithFakePi(project, ["start", "real", "--prompt", "do the work"], binDir, capture);
+    const firstId = first.match(/session (\S+)\)/)?.[1] ?? "";
+    assert.match(firstId, /^myflow-real-\d{4}-\d{6}-\d{3}$/);
+    assert.ok(first.includes(`resume:   pi --resume ${firstId}`), "the resume command is printed");
+    assert.equal(
+      JSON.parse(worktree(project, ["list", "--json"])).sessions[0].session_id,
+      firstId,
+      "the session id is recorded in the registry",
+    );
+
+    // Same name in a new worktree: the path that used to resume the old
+    // conversation instead of starting a new one.
+    worktree(project, ["remove", "real", "--force"]);
+    const second = startWithFakePi(
+      project,
+      ["start", "real", "--branch", "myflow/real-2", "--prompt", "do the work"],
+      binDir,
+      capture,
+    );
+    const secondId = second.match(/session (\S+)\)/)?.[1] ?? "";
+    assert.notEqual(secondId, firstId, "a second launch must not resume the first session");
+
+    // Continuing one on purpose is still explicit, and the plan shows the id
+    // handed to pi.
+    worktree(project, ["remove", "real", "--force"]);
+    const planned = JSON.parse(
+      worktree(project, ["start", "real", "--branch", "myflow/real-3", "--prompt", "again", "--session-id", firstId, "--dry-run"]),
+    );
+    assert.equal(planned.session_id, firstId, "--session-id is honoured verbatim");
+    const plannedCommand = planned.command.join(" ");
+    assert.ok(plannedCommand.includes(`--session-id ${firstId}`), "pi is launched with that id");
+    assert.match(plannedCommand, /Delegated work order: nobody is watching/);
+    const third = startWithFakePi(
+      project,
+      ["start", "real", "--branch", "myflow/real-3", "--prompt", "again", "--session-id", firstId],
+      binDir,
+      capture,
+    );
+    assert.equal(third.match(/session (\S+)\)/)?.[1], firstId, "--session-id is honoured on a real launch");
+  } finally {
+    cleanup(project);
+  }
+});
 
 test("worktree create: copied inputs stay out of the worktree git status", () => {
   const project = makeRepo("worktree_dir: ../worktrees\ncopy:\n  - .myflow/tasks\n");
@@ -291,52 +355,6 @@ test("worktree create: copied inputs stay out of the worktree git status", () =>
   }
 });
 
-test("worktree start: every launch mints a fresh session id", async () => {
-  const project = makeRepo("worktree_dir: ../worktrees\n");
-  const binDir = join(project.root, "..", "bin");
-  mkdirSync(binDir, { recursive: true });
-  const capture = fakePi(binDir);
-  try {
-    const first = startWithFakePi(project, ["start", "real", "--prompt", "do the work"], binDir, capture);
-    const firstId = first.match(/session (\S+)\)/)?.[1] ?? "";
-    assert.match(firstId, /^myflow-real-\d{4}-\d{6}-\d{3}$/);
-    assert.ok(first.includes(`resume:   pi --resume ${firstId}`), "the resume command is printed");
-    assert.equal(
-      JSON.parse(worktree(project, ["list", "--json"])).sessions[0].session_id,
-      firstId,
-      "the session id is recorded in the registry",
-    );
-    assert.ok(
-      (await waitForCapture(capture, firstId)).includes(`--session-id ${firstId}`),
-      "pi is launched with that id",
-    );
-
-    // Same name in a new worktree: the path that used to resume the old
-    // conversation instead of starting a new one.
-    worktree(project, ["remove", "real", "--force"]);
-    const second = startWithFakePi(
-      project,
-      ["start", "real", "--branch", "myflow/real-2", "--prompt", "do the work"],
-      binDir,
-      capture,
-    );
-    const secondId = second.match(/session (\S+)\)/)?.[1] ?? "";
-    assert.notEqual(secondId, firstId, "a second launch must not resume the first session");
-    assert.ok((await waitForCapture(capture, secondId)).includes(`--session-id ${secondId}`));
-
-    // Continuing one on purpose is still explicit.
-    worktree(project, ["remove", "real", "--force"]);
-    const third = startWithFakePi(
-      project,
-      ["start", "real", "--branch", "myflow/real-3", "--prompt", "again", "--session-id", firstId],
-      binDir,
-      capture,
-    );
-    assert.equal(third.match(/session (\S+)\)/)?.[1], firstId, "--session-id is honoured verbatim");
-  } finally {
-    cleanup(project);
-  }
-});
 
 test("is_alive: a detached child is reported alive from another process", () => {
   const project = makeRepo("worktree_dir: ../worktrees\n");

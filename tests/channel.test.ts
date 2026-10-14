@@ -156,6 +156,7 @@ test("channel spawn --dry-run: builds a worker command from the runtime agent", 
     );
     const prompt = planned.command[planned.command.length - 1];
     assert.match(prompt, /Active task: \.myflow\/tasks\/demo/);
+    assert.match(prompt, /Delegated work order: nobody is watching/);
     assert.match(prompt, /--as checker/);
 
     assert.equal(planned.env.MYFLOW_VERIFY_GATE, "1", "a review worker carries the verify-gate flag");
