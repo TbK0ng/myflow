@@ -1,0 +1,9 @@
+{
+  "title": "补足 4 条 P0 缺口（相对 Pi 参照系）",
+  "status": "in_progress",
+  "description": "实现审计任务找出的 4 条 P0：空上下文门禁、面包屑不变式测试、design/implement 注入、上下文键包含性校验；P0-3 用户选定注入",
+  "slug": "p0-gap-remediation",
+  "parent": null,
+  "created_at": "2026-10-14T09:50:41Z",
+  "started_at": "2026-10-14T09:50:41Z"
+}
