@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { parseFrontmatter, parseToolList } from "../.pi/extensions/myflow/agents.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 
@@ -33,6 +34,13 @@ test("myflow-research agent exists with frontmatter", () => {
   assert.ok(content.includes("name: myflow-research"));
   assert.ok(content.includes("tools:"));
   assert.ok(content.includes("Recursion Guard"));
+});
+
+test("myflow-research frontmatter parses its bounded write scope", () => {
+  const content = readFileSync(join(ROOT, ".pi", "agents", "myflow-research.md"), "utf-8");
+  const { frontmatter } = parseFrontmatter(content);
+  assert.equal(frontmatter.writesUnder, "research");
+  assert.deepEqual(parseToolList(frontmatter.tools), ["read", "write", "find", "grep", "ls"]);
 });
 
 test("myflow-continue command exists", () => {

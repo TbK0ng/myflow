@@ -9,6 +9,7 @@
  *     tools: read, write, edit, bash, find, grep, ls
  *     model: provider/model        # optional
  *     thinking: high               # optional
+ *     writesUnder: research        # optional; task-relative write scope
  *     ---
  *     System prompt for the agent goes here.
  *
@@ -17,6 +18,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { dirname, join, resolve } from "node:path";
 
 export interface AgentConfig {
@@ -25,8 +27,31 @@ export interface AgentConfig {
   tools?: string[];
   model?: string;
   thinking?: string;
+  /**
+   * Task-relative directory this agent's writes are confined to. A declared
+   * scope lets a write-capable agent run in parallel: `subagent.ts` passes it
+   * as `MYFLOW_WRITES_UNDER`, and the child's `tool_call` guard blocks any
+   * write/edit outside `<active task>/<writesUnder>/`.
+   */
+  writesUnder?: string;
   systemPrompt: string;
   filePath: string;
+}
+
+/**
+ * Whether a declared `writesUnder` scope is a safe, task-relative directory.
+ *
+ * An absolute path, a drive letter, or any `..` segment widens the boundary
+ * silently (no test would notice), so all three fail closed. The scope is the
+ * only thing standing between a parallel writer and the whole working tree, so
+ * it is validated rather than trusted.
+ */
+export function isSafeWriteScope(scope: string): boolean {
+  const value = scope.trim();
+  if (!value) return false;
+  if (isAbsolute(value)) return false;
+  if (/^[A-Za-z]:/.test(value)) return false;
+  return !value.split(/[\\/]+/).includes("..");
 }
 
 export interface AgentDiscoveryResult {
@@ -180,6 +205,10 @@ function loadAgentsFromDir(dir: string): AgentConfig[] {
       tools: parseToolList(frontmatter.tools),
       model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
       thinking: typeof frontmatter.thinking === "string" ? frontmatter.thinking : undefined,
+      writesUnder:
+        typeof frontmatter.writesUnder === "string" && frontmatter.writesUnder.trim()
+          ? frontmatter.writesUnder.trim()
+          : undefined,
       systemPrompt: body,
       filePath,
     });

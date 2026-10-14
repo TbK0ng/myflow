@@ -63,7 +63,7 @@ directory. Six hooks are always registered:
 | `input` | Reads the skip keyword, starts the turn cache. |
 | `before_agent_start` | Returns the `workflow-state` breadcrumb. |
 | `context` | Replaces a stale `task-context`, re-adds or strips the breadcrumb. |
-| `tool_call` | Blocks `myflow_subagent` inside a sub-agent (recursion guard). |
+| `tool_call` | Blocks `myflow_subagent` inside a sub-agent (recursion guard), and blocks `write`/`edit` outside a declared `writesUnder` scope. |
 | `session_before_compact` | Records the compaction timestamp so the breadcrumb is re-injected. |
 | `agent_before_settle` | Holds a `myflow-check` sub-agent until the configured verify commands pass (bounded retries). |
 
@@ -74,13 +74,16 @@ Injected blocks are `custom` messages with `display: false`:
 agent and one or more prompts: `single` runs one prompt, `parallel` runs up to
 six prompts for that agent at once, and `chain` runs them in sequence with
 `Previous output:` appended. Runs are capped (`timeoutMs`, default 15 min, 0 = none)
-and logged under `.myflow/.runtime/subagent-logs/`. `parallel` is refused for write-capable agents
-(implement, check): sub-agents share one tree, so one writer runs at a time.
+and logged under `.myflow/.runtime/subagent-logs/`. `parallel` is refused for a
+write-capable agent that declares no `writesUnder` scope (implement, check):
+sub-agents share one tree, so an unbounded writer runs one at a time. A declared
+scope makes the writer parallel-safe within `<active task>/<dir>/`.
 `agent` is normalized to the `myflow-` prefix
 (`implement` → `myflow-implement`) and must have a definition in `.pi/agents/`.
 Per-call `model` and `thinking` override the agent definition, which overrides
 the caller. The child receives the agent body via `--append-system-prompt`, plus
-`MYFLOW_AGENT_TYPE` and `MYFLOW_CONTEXT_ID`, and emits
+`MYFLOW_AGENT_TYPE` and `MYFLOW_CONTEXT_ID` (and `MYFLOW_WRITES_UNDER` when the
+agent declares a write scope), and emits
 `myflow-subagent-progress`. Agents without `model`/`thinking` inherit both from
 the caller.
 

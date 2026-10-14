@@ -63,12 +63,16 @@ machine state: put it in `.gitignore`, never commit it.
   omit the tool from their allowlist, and `tool_call` blocks the call as a
   second line of defense; a sub-agent must report its recommendation instead.
 - Sub-agents run in the caller's directory and share one working tree; nothing
-  creates git worktrees. **At most one writer per working tree at a time**:
-  `myflow_subagent` rejects `mode: parallel` for any agent whose tools include
-  `write`/`edit` (or that declares no allowlist), so `myflow-implement` and
-  `myflow-check` run one at a time — repeats are sequential. Parallel dispatch
-  is for read-only work (`myflow-research`). Independent *tasks* run in isolated
-  worktrees through `/myflow-parallel`.
+  creates git worktrees. **At most one unbounded writer per working tree at a
+  time**: `myflow_subagent` rejects `mode: parallel` for any agent whose tools
+  include `write`/`edit` (or that declares no allowlist) unless it declares a
+  `writesUnder: <dir>` scope, so `myflow-implement` and `myflow-check` run one
+  at a time — repeats are sequential. An agent that declares `writesUnder`
+  (`myflow-research` -> `research/`) may run in parallel, because the child
+  blocks every `write`/`edit` outside `<active task>/<dir>/` and the agent
+  writes one topic per file. That is a **boundary** guarantee (it shrinks the
+  blast radius), not a mutual-exclusion guarantee. Independent *tasks* run in
+  isolated worktrees through `/myflow-parallel`.
 - A `myflow-check` sub-agent is held until `verify:` commands in
   `.myflow/worktree.yaml` pass, so a checked change is a verified change. A
   channel `reviewer` worker is held the same way (its launcher sets
