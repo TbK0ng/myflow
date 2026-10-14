@@ -490,3 +490,159 @@ test("channel store stays under the user channel root", () => {
     cleanup(sandbox);
   }
 });
+
+/**
+ * 从沙箱里的 `channel.py` 跑一段代码，返回 stdout。
+ *
+ * 用 `-c` 驱动可 import 的模块，沙箱已 `cpSync` 了当前仓库的 `channel.py`，所以这里
+ * 验证的正是产品代码本身。`PYTHONPATH` 指到沙箱副本，避免误 import 到别处。
+ */
+function channelHook(sandbox: Sandbox, code: string): string {
+  return execFileSync("python3", ["-c", code], {
+    cwd: sandbox.project,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      USERPROFILE: sandbox.home,
+      HOME: sandbox.home,
+      PYTHONPATH: join(sandbox.project, ".myflow", "scripts"),
+    },
+    timeout: 60_000,
+  }).trim();
+}
+
+/**
+ * 从 Node 用参数数组杀整棵树。
+ *
+ * 绝不经过 Git Bash：MSYS 会把 `/F` 改写成 `F:/`，`taskkill` 随即报无效参数。
+ */
+function killTree(pid: number | undefined): void {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return;
+  try {
+    spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
+  } catch {
+    /* 尽力而为：进程可能已经不在了 */
+  }
+}
+
+/** 写一个「父 → 子」脚本：父常驻，子睡 `childSleepSeconds` 秒；子 pid 落盘。 */
+function writeParentChildScript(dir: string, childSleepSeconds: number): string {
+  const script = join(dir, "parent_child.py");
+  writeFileSync(
+    script,
+    [
+      "import subprocess",
+      "import sys",
+      "import time",
+      "",
+      "pidfile = sys.argv[1]",
+      "child = subprocess.Popen(",
+      `    [sys.executable, "-c", "import time; time.sleep(${childSleepSeconds})"],`,
+      "    stdin=subprocess.DEVNULL,",
+      "    stdout=subprocess.DEVNULL,",
+      "    stderr=subprocess.DEVNULL,",
+      ")",
+      'with open(pidfile, "w", encoding="utf-8") as out:',
+      "    out.write(str(child.pid))",
+      "time.sleep(120)",
+    ].join(String.fromCharCode(10)),
+    "utf-8",
+  );
+  return script;
+}
+
+/** 有界等待这些 pid 真的消失，再交给 cleanup，免得 rm 撞上仍被占用的目录。 */
+async function reap(pids: (number | undefined)[]): Promise<void> {
+  for (const pid of pids) {
+    if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) continue;
+    await waitForPidExit(pid, 5_000);
+  }
+}
+
+test("channel descendants: enumerates a worker's children before the kill", async () => {
+  const sandbox = makeSandbox();
+  const pidFile = join(sandbox.project, "child.pid");
+  const script = writeParentChildScript(sandbox.project, 120);
+  const parent = spawn("python3", [script, pidFile], { cwd: sandbox.project, stdio: "ignore" });
+  let childPid: number | undefined;
+  try {
+    await waitForFile(pidFile);
+    childPid = Number(readFileSync(pidFile, "utf-8"));
+    // 前置断言（非空性）：子进程此刻必须真的活着，否则「枚举到它」无从谈起。
+    assert.equal(isPidAlive(childPid), true, "the child must be alive before enumeration");
+
+    const listed = JSON.parse(
+      channelHook(
+        sandbox,
+        ["import json", "import channel", `print(json.dumps(channel.descendant_pids(${parent.pid})))`].join(
+          String.fromCharCode(10),
+        ),
+      ),
+    ) as number[];
+
+    assert.ok(
+      listed.includes(childPid),
+      `descendant_pids(${parent.pid}) must include the child pid ${childPid}; got ${JSON.stringify(listed)}`,
+    );
+    // 回退点：把 descendant_pids 改成 `return []`（或删掉它、让 cmd_rm 退回只等根）
+    //         → 上面的 includes 断言立刻变红。
+  } finally {
+    killTree(parent.pid);
+    killTree(childPid);
+    await reap([parent.pid, childPid]);
+    cleanup(sandbox);
+  }
+});
+
+test("channel wait_for_exit: covers the descendants, not just the root", async () => {
+  const sandbox = makeSandbox();
+  const pidFile = join(sandbox.project, "child.pid");
+  // 子进程活 4 秒：足够让「只等父」的错误实现暴露（父一死它立即返回，子仍在跑），
+  // 又短到让正确实现等它自然退出即可返回。断言不依赖任何墙钟阈值。
+  const script = writeParentChildScript(sandbox.project, 4);
+  const parent = spawn("python3", [script, pidFile], { cwd: sandbox.project, stdio: "ignore" });
+  let childPid: number | undefined;
+  try {
+    await waitForFile(pidFile);
+    childPid = Number(readFileSync(pidFile, "utf-8"));
+    assert.equal(isPidAlive(childPid), true, "the child must be alive before the wait");
+
+    // 快照后代，然后只杀父（terminate，不是 /T）：子进程必须继续活着。
+    const descendants = JSON.parse(
+      channelHook(
+        sandbox,
+        ["import json", "import channel", `print(json.dumps(channel.descendant_pids(${parent.pid})))`].join(
+          String.fromCharCode(10),
+        ),
+      ),
+    ) as number[];
+    assert.ok(descendants.includes(childPid), "the child must be enumerated before the kill");
+
+    channelHook(sandbox, ["import channel", `channel.terminate(${parent.pid})`].join(String.fromCharCode(10)));
+    assert.equal(isPidAlive(childPid), true, "killing the parent alone must leave the child alive");
+
+    // 等在枚举到的后代上。若等待列表退回「只含父」（或枚举返回空），wait_for_exit
+    // 立刻返回，紧接着的 is_alive 断言会发现子仍活 → 变红。
+    channelHook(
+      sandbox,
+      ["import channel", `channel.wait_for_exit(${JSON.stringify(descendants)}, timeout=20.0)`].join(
+        String.fromCharCode(10),
+      ),
+    );
+
+    const stillAlive = channelHook(
+      sandbox,
+      ["import channel", `print(channel.is_alive(${childPid}))`].join(String.fromCharCode(10)),
+    );
+    assert.equal(
+      stillAlive,
+      "False",
+      `wait_for_exit must not return while the child ${childPid} is still running`,
+    );
+  } finally {
+    killTree(parent.pid);
+    killTree(childPid);
+    await reap([parent.pid, childPid]);
+    cleanup(sandbox);
+  }
+});

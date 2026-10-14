@@ -338,12 +338,108 @@ def terminate_tree(pid: object) -> bool:
         return terminate(pid)
 
 
+def descendant_pids(root_pid: object) -> list[int]:
+    """Return every process descended from `root_pid`, nearest generation first.
+
+    Windows only. On POSIX `terminate_tree` signals the whole process group, so
+    there is no per-process tree to enumerate and this returns an empty list.
+
+    Why the snapshot has to happen *before* the kill: the Windows process table
+    records a child's parent in `th32ParentProcessID`, and that link is what
+    this walk follows. `taskkill /T` destroys the tree, after which the links are
+    gone and nothing can reconstruct the descendants. So a caller that wants to
+    wait for a whole tree must snapshot first, then kill.
+
+    Why not parse `taskkill` output: that text is localized (a Chinese Windows
+    reports the same outcome with different words), and this project has been
+    bitten by gates that silently stop matching when their expected text
+    changes. The process table is the same on every locale.
+
+    Best effort, never raises: a failing snapshot, an unreadable entry, or an
+    empty table yields `[]`. That degrades to "wait for the root alone", which
+    is exactly the pre-existing behavior, instead of crashing `rm`.
+    """
+    if os.name != "nt":
+        return []
+    if not isinstance(root_pid, int) or root_pid <= 0:
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        TH32CS_SNAPPROCESS = 0x00000002
+        # `ctypes` defaults a HANDLE return to a signed 32-bit int, so the
+        # INVALID_HANDLE_VALUE sentinel reads back as -1; the existing
+        # `is_alive` / `terminate` helpers rely on the same convention.
+        INVALID_HANDLE_VALUE = -1
+
+        class PROCESSENTRY32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t),  # ULONG_PTR: pointer-sized
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", ctypes.c_char * 260),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snapshot == INVALID_HANDLE_VALUE or snapshot <= 0:
+            return []
+        children: dict[int, list[int]] = {}
+        try:
+            entry = PROCESSENTRY32()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+            if not kernel32.Process32First(snapshot, ctypes.byref(entry)):
+                return []
+            while True:
+                child = int(entry.th32ProcessID)
+                parent = int(entry.th32ParentProcessID)
+                if child != parent:
+                    children.setdefault(parent, []).append(child)
+                if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
+                    break
+        finally:
+            kernel32.CloseHandle(snapshot)
+    except Exception:
+        # Any ctypes/kernel32 surprise is a degradation, not a failure: the
+        # caller still kills the tree, it just cannot wait for the descendants.
+        return []
+
+    # Breadth-first over the parent -> children map. `seen` starts with the root
+    # so a reused pid cannot make the walk loop or re-list an ancestor.
+    descendants: list[int] = []
+    seen = {root_pid}
+    frontier = [root_pid]
+    while frontier:
+        nxt: list[int] = []
+        for parent in frontier:
+            for child in children.get(parent, []):
+                if child in seen:
+                    continue
+                seen.add(child)
+                descendants.append(child)
+                nxt.append(child)
+        frontier = nxt
+    return descendants
+
+
 def wait_for_exit(pids: list[object], timeout: float = 5.0) -> None:
-    """Block until the pids are gone, so their file handles are released.
+    """Block until exactly these pids are gone, so their handles are released.
 
     Terminating a process is asynchronous: the exit code and the handles it
     held stay alive for a moment, which is long enough for a delete right after
     the kill to fail with WinError 32.
+
+    This waits for the pids it is handed and nothing more. Stopping a tree needs
+    the descendants on the list too: `terminate_tree` stops them, but they
+    cannot be discovered here, so a caller must snapshot the tree first (see
+    `descendant_pids`) and pass the whole thing.
     """
     pending = [pid for pid in pids if isinstance(pid, int) and pid > 0]
     deadline = time.monotonic() + timeout
@@ -653,6 +749,18 @@ def cmd_rm(args: argparse.Namespace) -> int:
         )
         return 1
     if live:
+        # Snapshot each tree *before* killing it: `taskkill /T` erases the very
+        # parent links the walk needs, so enumerating afterwards finds nothing
+        # and the wait silently falls back to the root alone. Keep the root in
+        # the list too -- its handles are the first the delete trips over.
+        doomed: list[int] = []
+        for worker in live:
+            pid = worker.get("pid")
+            if not isinstance(pid, int) or pid <= 0:
+                continue
+            for member in (pid, *descendant_pids(pid)):
+                if member not in doomed:
+                    doomed.append(member)
         for worker in live:
             terminate_tree(worker.get("pid"))
         stopped = {worker.get("pid") for worker in live}
@@ -660,7 +768,7 @@ def cmd_rm(args: argparse.Namespace) -> int:
             args.scope,
             [worker for worker in workers if worker.get("pid") not in stopped],
         )
-        wait_for_exit([worker.get("pid") for worker in live])
+        wait_for_exit(doomed)
     for attempt in range(10):
         try:
             shutil.rmtree(directory)
