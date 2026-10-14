@@ -1,0 +1,482 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  BACKGROUND_DIR,
+  backgroundDir,
+  createBgOutputTool,
+  cursorPath,
+  exitPath,
+  logPath,
+  readCursor,
+  writeCursor,
+  writeEntry,
+  type BackgroundEntry,
+} from "../.pi/extensions/myflow/background.ts";
+
+// F4 — `myflow_bg_output`（`.pi/extensions/myflow/background.ts`）。
+//
+// 这些用例不跑真实 Pi：`createBgOutputTool` 把工具对象导出来，测试直接调
+// `execute(id, params, signal, onUpdate, fakeCtx)`。注册表条目与日志文件都是
+// 手工造出来的，所以用例完全确定，不依赖真的起进程（那是 F3 的事）。
+//
+// 每个用例用独立的临时工程目录，并在 finally 里删掉，绝不读写仓库真实的
+// `.myflow/.runtime/`。
+//
+// 回退点（删掉即变红）：
+//   -1：delta 不推进游标（或推进到文件末尾而不是已读末尾）→ 第二次读非空。
+//   -2：peek 也写游标 → 之后那次真 delta 读到空。
+//   -3：tail 写游标 → 前后 offset 断言变红；或 tail 取前 N 行 → 文本断言变红。
+//   -4：截断时把 next_offset 设成文件末尾（或丢弃多余字节）→ 拼接断言/next_offset 变红。
+//   -5：状态不从 `.exit` 取 → status/exit_code 断言变红。
+//   -6：wait 不检查「有新字节」→ ① 超时；不检查「任务已结束」→ ② 超时；无界 → ③ 上界变红。
+//   -7：游标全局单份而不是按会话 → 第二个会话读到空。
+//   -8：offset>size 时静默返回空 → text/reset 断言变红。
+//   -10：把 max_bytes 直接当字节偏移切（不回退到字符边界）→ 文本出现 U+FFFD / 拼接不等。
+//   -11：退化时返回空原地不动 → 循环卡死、拼不回全文；把 end 回退成空也会变红。
+
+const KEY = "pi_bgoutput";
+
+/** 一个能通过 findProjectRoot 的临时工程根，注册表目录已建好。 */
+function makeRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "myflow-bg-output-"));
+  mkdirSync(join(root, ".myflow"), { recursive: true });
+  writeFileSync(
+    join(root, ".myflow", "workflow.md"),
+    "[workflow-state:in_progress]\nBackground.\n[/workflow-state:in_progress]\n",
+  );
+  mkdirSync(backgroundDir(root), { recursive: true });
+  return root;
+}
+
+/** 造一条注册表条目（字段同 design.md §3.1，log/exit_file 存相对路径）。 */
+function makeEntry(
+  dir: string,
+  id: string,
+  overrides: Partial<BackgroundEntry> = {},
+): BackgroundEntry {
+  return {
+    id,
+    command: "echo hi",
+    cwd: dir,
+    pid: process.pid,
+    log: join(BACKGROUND_DIR, `${id}.log`),
+    exit_file: join(BACKGROUND_DIR, `${id}.exit`),
+    status: "running",
+    exit_code: null,
+    started_at: new Date().toISOString(),
+    ended_at: null,
+    started_by_context_key: KEY,
+    confirmed_by: "ui-confirm",
+    ...overrides,
+  };
+}
+
+interface ToolResult {
+  content: Array<{ type: string; text: string }>;
+  details: Record<string, unknown>;
+  isError?: boolean;
+}
+
+/** 一个不依赖真实会话的工具实例；contextKey 用来模拟不同会话。 */
+function makeTool(contextKey: string = KEY) {
+  return createBgOutputTool({
+    deriveContextKey: () => contextKey,
+    isSubAgent: false,
+  }) as unknown as { execute: (...args: unknown[]) => Promise<ToolResult> };
+}
+
+function fakeCtx(root: string) {
+  return { cwd: root, mode: "tui", hasUI: true };
+}
+
+function run(root: string, params: Record<string, unknown>, contextKey: string = KEY): Promise<ToolResult> {
+  return makeTool(contextKey).execute("call", params, undefined, undefined, fakeCtx(root));
+}
+
+test("F4 -1 delta：首次读全部、再次为空、追加后只读新增", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0001";
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "hello\n");
+
+    const first = await run(root, { task_id: id });
+    assert.equal(first.isError, undefined);
+    assert.equal(first.details.text, "hello\n");
+    assert.equal(first.details.bytes, 6);
+    assert.equal(first.details.next_offset, 6);
+    assert.equal(first.details.truncated, false);
+    assert.equal(readCursor(cursorPath(root, KEY, id)), 6, "delta 必须推进游标");
+
+    const second = await run(root, { task_id: id });
+    assert.equal(second.details.text, "");
+    assert.equal(second.details.bytes, 0);
+    assert.equal(second.details.next_offset, 6);
+
+    appendFileSync(logPath(dir, id), "world\n");
+    const third = await run(root, { task_id: id });
+    assert.equal(third.details.text, "world\n", "只有新增部分");
+    assert.equal(third.details.next_offset, 12);
+    assert.equal(readCursor(cursorPath(root, KEY, id)), 12);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -2 peek：读得到内容，但游标前后完全不变", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0002";
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "abcdef");
+
+    const cursor = cursorPath(root, KEY, id);
+    assert.equal(readCursor(cursor), 0);
+    assert.equal(existsSync(cursor), false, "前置条件：游标文件尚不存在");
+    const result = await run(root, { task_id: id, peek: true });
+    assert.equal(result.details.text, "abcdef");
+    assert.equal(readCursor(cursor), 0, "peek 绝不动游标");
+    assert.equal(existsSync(cursor), false, "peek 不得创建游标文件（否则就不是\"绝不动游标\"）");
+    assert.equal(result.details.next_offset, 0);
+
+    // peek 没有消费，随后一次真正的 delta 仍能拿到全部内容。
+    const consumed = await run(root, { task_id: id });
+    assert.equal(consumed.details.text, "abcdef");
+    assert.equal(readCursor(cursor), 6);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -3 tail：返回最后 N 行且不动游标", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0003";
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "l1\nl2\nl3\nl4\n");
+
+    const cursor = cursorPath(root, KEY, id);
+    writeCursor(cursor, 5);
+    const result = await run(root, { task_id: id, mode: "tail", lines: 2 });
+    assert.equal(result.details.text, "l3\nl4\n");
+    assert.ok(!String(result.details.text).includes("l1"));
+    assert.equal(result.details.truncated, false);
+    assert.equal(readCursor(cursor), 5, "tail 绝不动游标");
+    assert.equal(result.details.next_offset, 5, "tail 的 next_offset 就是未变的游标");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -4 截断：next_offset 指向已返回部分的末尾，剩余字节不丢", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0004";
+    writeEntry(dir, makeEntry(dir, id));
+    const content = "0123456789".repeat(10); // 100 字节
+    writeFileSync(logPath(dir, id), content);
+
+    const first = await run(root, { task_id: id, max_bytes: 7 });
+    assert.equal(first.details.truncated, true);
+    assert.equal(first.details.bytes, 7);
+    assert.equal(first.details.next_offset, 7, "截断时 next_offset 必须是已返回部分的末尾，不是文件末尾");
+
+    // 连续小步读，把结果拼起来必须等于完整内容：证明没有静默丢字节。
+    let collected = String(first.details.text);
+    let sawTruncated = true;
+    for (let i = 0; i < 100 && sawTruncated; i += 1) {
+      const next = await run(root, { task_id: id, max_bytes: 7 });
+      collected += String(next.details.text);
+      sawTruncated = next.details.truncated === true;
+      assert.ok(Number(next.details.next_offset) <= 100);
+    }
+    assert.equal(collected, content, "逐段读必须拼回完整内容");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -5 已退出：status 与 exit_code 来自 .exit", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0005";
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "done\n");
+    writeFileSync(
+      exitPath(dir, id),
+      JSON.stringify({ exit_code: 7, signal: null, at: new Date().toISOString() }),
+    );
+
+    const result = await run(root, { task_id: id });
+    assert.equal(result.details.status, "exited");
+    assert.equal(result.details.exit_code, 7);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -6 wait_ms：有新输出提前返回、任务结束提前返回、否则有界超时", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+
+    // ① 等待期间有新输出 → 提前返回。
+    const idA = "bg-test-0006a";
+    writeEntry(dir, makeEntry(dir, idA, { pid: process.pid }));
+    writeFileSync(logPath(dir, idA), "start\n");
+    writeCursor(cursorPath(root, KEY, idA), 6);
+    const tA = Date.now();
+    const pending = run(root, { task_id: idA, wait_ms: 5000 });
+    setTimeout(() => {
+      try {
+        appendFileSync(logPath(dir, idA), "late\n");
+      } catch {
+        // The temp root is removed in `finally`; a prior failed assertion could
+        // race this callback, and an unhandled timer error would be noise.
+      }
+    }, 250);
+    const a = await pending;
+    const elapsedA = Date.now() - tA;
+    assert.ok(elapsedA < 3000, `有新输出时必须提前返回，实际 ${elapsedA}ms`);
+    assert.equal(a.details.text, "late\n");
+
+    // ② 无输出但任务已结束 → 提前返回。
+    const idB = "bg-test-0006b";
+    writeEntry(dir, makeEntry(dir, idB));
+    writeFileSync(logPath(dir, idB), "ended\n");
+    writeFileSync(exitPath(dir, idB), JSON.stringify({ exit_code: 0, signal: null, at: new Date().toISOString() }));
+    writeCursor(cursorPath(root, KEY, idB), 6);
+    const tB = Date.now();
+    const b = await run(root, { task_id: idB, wait_ms: 5000 });
+    const elapsedB = Date.now() - tB;
+    assert.ok(elapsedB < 1500, `任务已结束时必须提前返回，实际 ${elapsedB}ms`);
+    assert.equal(b.details.status, "exited");
+    assert.equal(b.details.text, "");
+
+    // ③ 无新输出且仍在跑 → 等到超时，且有上界。
+    const idC = "bg-test-0006c";
+    writeEntry(dir, makeEntry(dir, idC, { pid: process.pid }));
+    writeFileSync(logPath(dir, idC), "quiet\n");
+    writeCursor(cursorPath(root, KEY, idC), 6);
+    const tC = Date.now();
+    const c = await run(root, { task_id: idC, wait_ms: 400 });
+    const elapsedC = Date.now() - tC;
+    assert.ok(elapsedC >= 300, `必须真的等到超时，实际 ${elapsedC}ms`);
+    assert.ok(elapsedC < 2000, `等待必须有界，实际 ${elapsedC}ms`);
+    assert.equal(c.details.status, "running");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -7 游标按会话分开：两个会话都能读到，互不消费", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0007";
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "shared\n");
+
+    const a = await run(root, { task_id: id }, "pi_session_a");
+    assert.equal(a.details.text, "shared\n");
+    const b = await run(root, { task_id: id }, "pi_session_b");
+    assert.equal(b.details.text, "shared\n", "第二个会话不得被第一个会话的游标吞掉");
+
+    const aAgain = await run(root, { task_id: id }, "pi_session_a");
+    assert.equal(aAgain.details.text, "", "A 自己的游标已被推进");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -8 游标比文件长（日志被轮转/重建）：从 0 重读并带 reset", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0008";
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "abc\n");
+
+    const cursor = cursorPath(root, KEY, id);
+    writeCursor(cursor, 9999);
+    const result = await run(root, { task_id: id });
+    assert.equal(result.details.reset, true, "必须显式报告重新读了");
+    assert.equal(result.details.text, "abc\n", "不得静默返回空");
+    assert.equal(result.details.bytes, 4);
+    assert.equal(result.details.next_offset, 4);
+    assert.equal(readCursor(cursor), 4, "重置后的游标必须落盘");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -9 校验：task_id 缺失或不存在 → 明确错误", async () => {
+  const root = makeRoot();
+  try {
+    const missingId = await run(root, {});
+    assert.equal(missingId.isError, true);
+    assert.match(String(missingId.details.error), /task_id/);
+
+    const unknownId = await run(root, { task_id: "bg-nope-0000" });
+    assert.equal(unknownId.isError, true);
+    assert.match(String(unknownId.details.error), /No background task/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -10 多字节字符不被切坏：小 max_bytes 分批 delta 逐步拼回原文", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0010";
+    writeEntry(dir, makeEntry(dir, id));
+    const content = "中文输出行\n".repeat(8);
+    const logFile = logPath(dir, id);
+    writeFileSync(logFile, content);
+    const raw = readFileSync(logFile);
+
+    // 独立判定（不复用实现里的函数）：位置 p 是 UTF-8 字符边界 ⟺ p 等于文件
+    // 长度，或该处字节不是续接字节（0b10xxxxxx）。
+    const isBoundary = (p: number) => p === raw.length || (raw[p] & 0xc0) !== 0x80;
+
+    let collected = "";
+    let cursor = 0;
+    let truncated = true;
+    for (let i = 0; i < 200 && truncated; i += 1) {
+      const step = await run(root, { task_id: id, max_bytes: 7 });
+      const text = String(step.details.text);
+      assert.ok(!text.includes("\uFFFD"), `第 ${i} 步不得出现替换字符 U+FFFD`);
+      const next = Number(step.details.next_offset);
+      assert.ok(next > cursor, `第 ${i} 步必须前进（${cursor} → ${next}）`);
+      assert.ok(isBoundary(next), `第 ${i} 步 next_offset=${next} 必须落在字符边界上`);
+      collected += text;
+      cursor = next;
+      truncated = step.details.truncated === true;
+    }
+    assert.equal(collected, content, "逐步拼接必须与原文逐字符相等，一个字都不能丢");
+    assert.equal(cursor, raw.length, "最终必须读到文件末尾");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -11 退化：max_bytes 小于单字符字节数时仍取一个完整字符并最终读完", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0011";
+    writeEntry(dir, makeEntry(dir, id));
+    const content = "中文字";
+    const logFile = logPath(dir, id);
+    writeFileSync(logFile, content);
+    const raw = readFileSync(logFile);
+
+    const isBoundary = (p: number) => p === raw.length || (raw[p] & 0xc0) !== 0x80;
+
+    // 预算 1 字节装不下一个 3 字节汉字：必须破例返回整个字符，且不得空转。
+    const first = await run(root, { task_id: id, max_bytes: 1 });
+    assert.ok(!String(first.details.text).includes("\uFFFD"));
+    assert.equal(first.details.text, "中", "预算装不下一个字符时必须破例取整个字符");
+    assert.ok(Number(first.details.bytes) > 1, "破例时必须真的超过 max_bytes");
+
+    let collected = String(first.details.text);
+    let cursor = Number(first.details.next_offset);
+    let truncated = first.details.truncated === true;
+    for (let i = 0; i < 50 && truncated; i += 1) {
+      const step = await run(root, { task_id: id, max_bytes: 1 });
+      const text = String(step.details.text);
+      assert.ok(!text.includes("\uFFFD"), "不得出现替换字符 U+FFFD");
+      assert.ok(text.length >= 1, "每一步至少一个完整字符，不得空转卡死");
+      const next = Number(step.details.next_offset);
+      assert.ok(next > cursor, `必须前进（${cursor} → ${next}）`);
+      assert.ok(isBoundary(next), `next_offset=${next} 必须落在字符边界上`);
+      collected += text;
+      cursor = next;
+      truncated = step.details.truncated === true;
+    }
+    assert.equal(collected, content, "循环读必须最终拼回全文");
+    assert.equal(cursor, raw.length);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F4 -12 tail 起点对齐：max_bytes 落在字符中间时首字符不被损坏", async () => {
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-0012";
+    writeEntry(dir, makeEntry(dir, id));
+    const content = "第一行输出\n第二行输出\n第三行输出\n第四行输出\n第五行输出\n";
+    const logFile = logPath(dir, id);
+    writeFileSync(logFile, content);
+    const raw = readFileSync(logFile);
+
+    // 独立判定（不复用实现里的函数）：位置 p 处是续接字节（0b10xxxxxx）⟺ 它落在
+    // 一个多字节字符内部。取第一个这样的位置 p，再令 max_bytes = size - p，
+    // tail 的窗口就会正好从字符中间开始。
+    const isContinuation = (p: number) => (raw[p] & 0xc0) === 0x80;
+    let p = 0;
+    while (p < raw.length && !isContinuation(p)) p += 1;
+    assert.ok(p > 0 && p < raw.length, "前置条件：必须存在一个非零的字符内位置");
+    assert.ok(isContinuation(p), "前置条件：该位置必须是续接字节");
+
+    const maxBytes = raw.length - p;
+    assert.equal(raw.length - maxBytes, p, "窗口起点必须正好落在字符内位置 p");
+
+    // 前置条件：tail 不得创建游标文件。
+    const cursor = cursorPath(root, KEY, id);
+    assert.equal(existsSync(cursor), false, "前置条件：游标文件尚不存在");
+
+    const result = await run(root, { task_id: id, mode: "tail", max_bytes: maxBytes });
+    const text = String(result.details.text);
+
+    // ① 起点不得被切坏 → 不得出现替换字符。
+    assert.ok(!text.includes("\uFFFD"), "tail 首字符不得因起点落在字符中间而损坏");
+    // ② 返回的必须是原文尾部的一段（后缀），且非空。
+    assert.ok(text.length > 0, "tail 不得返回空");
+    assert.ok(content.endsWith(text), "tail 必须返回文件尾部的一段（原文的后缀）");
+    const suffixStart = raw.length - Buffer.byteLength(text, "utf-8");
+    assert.ok(
+      suffixStart === raw.length || (raw[suffixStart] & 0xc0) !== 0x80,
+      `tail 起点 ${suffixStart} 必须落在字符边界上`,
+    );
+    assert.ok(suffixStart >= p, `tail 起点应向后对齐，不早于字符内位置 ${p}（实际 ${suffixStart}）`);
+    // ③ tail 绝不动游标。
+    assert.equal(existsSync(cursor), false, "tail 不得创建游标文件");
+    assert.equal(readCursor(cursor), 0, "tail 的游标读出来仍是 0");
+    assert.equal(result.details.next_offset, 0, "tail 的 next_offset 就是未变的游标");
+
+    // 退化：max_bytes 小于尾部单个多字节字符时，向前对齐会把起点推到 EOF；此时
+    // 必须回退到最后一个完整字符的起点，而不是返回空。
+    const idD = "bg-test-0012d";
+    writeEntry(dir, makeEntry(dir, idD));
+    const tailOnly = "中文字"; // 9 字节，无换行，末字符为 3 字节汉字。
+    const logD = logPath(dir, idD);
+    writeFileSync(logD, tailOnly);
+    const rawD = readFileSync(logD);
+    assert.equal(rawD[rawD.length - 1] & 0xc0, 0x80, "前置条件：末字节是续接字节");
+    const degenerate = await run(root, { task_id: idD, mode: "tail", max_bytes: 1 });
+    assert.equal(degenerate.details.text, "字", "退化时必须返回尾部一个完整字符，不得为空");
+    assert.ok(!String(degenerate.details.text).includes("\uFFFD"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
