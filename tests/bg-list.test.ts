@@ -355,3 +355,34 @@ test("F5 -7 include_finished:false 只列仍在跑的", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("H1a list 展示 .exit.error 与 .exit.signal，且与 spawn_error 能区分", async () => {
+  // 回退点：resolveAndHeal/toListRow 丢开 resolved.failure/signal → 两行的
+  //        failure/signal 断言变红；listHumanText 不写出来 → 文本断言变红。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+
+    // ① 运行后异常结束：.exit 里有 error（模拟 spawn 到未知错误码）。
+    const errId = "bg-list-h1a-err";
+    seed(dir, makeEntry(dir, errId, { status: "running", pid: 999_999_999 }), {
+      exit: { exit_code: null, error: "UNKNOWN: resource temporarily unavailable (232)", at: new Date().toISOString() },
+    });
+
+    // ② 被信号杀死：exit_code 为 null，仅 signal 可用。
+    const sigId = "bg-list-h1a-sig";
+    seed(dir, makeEntry(dir, sigId, { status: "running", pid: 999_999_999 }), {
+      exit: { exit_code: null, signal: "SIGKILL", at: new Date().toISOString() },
+    });
+
+    const result = await run(root);
+    const rows = byId(tasksOf(result));
+    assert.match(String(rows[errId].failure), /232/);
+    assert.equal(rows[errId].spawn_error, undefined, "这条只有 .exit.error，两类原因必须能区分");
+    assert.equal(rows[sigId].signal, "SIGKILL");
+    assert.match(result.content[0].text, /232/, "原因必须出现在人读输出里");
+    assert.match(result.content[0].text, /SIGKILL/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

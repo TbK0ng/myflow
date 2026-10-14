@@ -63,6 +63,48 @@ const RENAME_RETRY_MS = 20;
 const RENAME_RETRIES = 50;
 const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 
+/**
+ * Bounded retry policy for a *transient* process-creation failure.
+ *
+ * Windows occasionally refuses to create a process with ERROR_NO_SYSTEM_RESOURCES
+ * (232) while the machine is momentarily short of some resource (paged pool,
+ * desktop heap, handles). The same command usually starts if it is attempted
+ * again a moment later, so a small bounded number of retries turns a transient
+ * refusal into a delayed success instead of a task that never started.
+ *
+ * Only *transient/unknown* failures are retried. A missing program (`ENOENT`),
+ * a bad argument (`EINVAL`), or a permission problem (`EACCES` / `EPERM`) will
+ * fail identically no matter how many times it is attempted, so retrying those
+ * just wastes time and hides the real error.
+ */
+const MAX_SPAWN_RETRIES = 2;
+const SPAWN_RETRY_DELAY_MS = 250;
+const RETRYABLE_SPAWN_CODES = new Set(["EAGAIN", "ENOMEM", "EMFILE", "ENFILE"]);
+const NON_RETRYABLE_SPAWN_CODES = new Set(["ENOENT", "EINVAL", "EACCES", "EPERM"]);
+
+/**
+ * Whether a failed process creation is worth one more attempt.
+ *
+ * `EAGAIN`, `ENOMEM`, `EMFILE` and `ENFILE` are the resource-exhaustion codes
+ * the OS reports. A code we do not recognize is treated as transient too:
+ * Windows errors with no POSIX mapping surface as `UNKNOWN`, and an error with
+ * no `code` at all cannot be classified, so the user's 232 lands here. The four
+ * codes known to be deterministic are never retried.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isRetryableSpawnError(error) {
+  const code =
+    error && typeof error === "object"
+      ? /** @type {{ code?: unknown }} */ (error).code
+      : undefined;
+  if (typeof code !== "string" || code.trim() === "") return true;
+  if (RETRYABLE_SPAWN_CODES.has(code)) return true;
+  if (NON_RETRYABLE_SPAWN_CODES.has(code)) return false;
+  return true;
+}
+
 function sleepSync(milliseconds) {
   // `Atomics.wait` on a throwaway buffer is the only portable synchronous
   // sleep: this runs inside an `exit` handler, where there is no event loop
@@ -163,6 +205,132 @@ function messageOf(error) {
     : String(error);
 }
 
+/** `{ retries: n }` when the command needed more than one attempt, else `{}`. */
+function retriesField(attempts) {
+  return attempts > 1 ? { retries: attempts - 1 } : {};
+}
+
+/** The `.exit` payload for a creation that never produced a process. */
+function spawnFailureRecord(error, attempts) {
+  return {
+    exit_code: null,
+    error: messageOf(error),
+    at: isoTimestamp(),
+    ...retriesField(attempts),
+  };
+}
+
+/**
+ * Create the command's process, retrying a transient creation failure a bounded
+ * number of times, and report how the command ended through `onOutcome`.
+ *
+ * SAFETY INVARIANT — retrying here cannot run the command twice. The `'error'`
+ * event fires **only when the process was never created at all**; a command
+ * that did start reports its failure through `'exit'` (a non-zero exit code),
+ * which is not retried. So an attempt that fails with `'error'` is guaranteed
+ * to have had no effect, and a fresh attempt cannot duplicate prior work. That
+ * is exactly why the retry lives in this detached wrapper and not in
+ * `myflow_bg_start`: the tool must return immediately (R1), while a retry has
+ * to wait for the outcome.
+ *
+ * Injectable for tests: `spawnImpl` replaces `node:child_process.spawn`,
+ * `wait` replaces the synchronous sleep, and `isRetryable` replaces the retry
+ * predicate, so a test can simulate an OS refusal without provoking a real one.
+ *
+ * @param {{
+ *   command: string,
+ *   logFd: number,
+ *   cwd: string,
+ *   onOutcome: (payload: Record<string, unknown>, runnerCode: number) => void,
+ *   spawnImpl?: typeof spawn,
+ *   wait?: (milliseconds: number) => void,
+ *   maxRetries?: number,
+ *   retryDelayMs?: number,
+ *   isRetryable?: (error: unknown) => boolean,
+ * }} options
+ * @returns {Promise<{ attempts: number }>}
+ */
+export function runCommand(options) {
+  const {
+    command,
+    logFd,
+    cwd,
+    onOutcome,
+    spawnImpl = spawn,
+    wait = sleepSync,
+    maxRetries = MAX_SPAWN_RETRIES,
+    retryDelayMs = SPAWN_RETRY_DELAY_MS,
+    isRetryable = isRetryableSpawnError,
+  } = options;
+
+  return new Promise((resolve) => {
+    let attempts = 0;
+
+    const report = (payload, runnerCode) => {
+      try {
+        onOutcome(payload, runnerCode);
+      } catch {
+        // A reporting failure must not become an uncaught exception in an
+        // event handler; the exit code is the only signal left to report.
+      }
+      resolve({ attempts });
+    };
+
+    const attempt = () => {
+      attempts += 1;
+      let child;
+      try {
+        // The command writes straight to the log's descriptor. Using "pipe" and
+        // forwarding by hand would buffer output and break the "read new bytes
+        // while it still runs" guarantee.
+        child = spawnImpl(command, { shell: true, cwd, stdio: ["ignore", logFd, logFd] });
+      } catch (error) {
+        // A synchronous throw from `spawn` means the process was never created,
+        // so it is as safe to retry as an asynchronous `'error'`.
+        if (attempts <= maxRetries && isRetryable(error)) {
+          wait(retryDelayMs);
+          attempt();
+          return;
+        }
+        report(spawnFailureRecord(error, attempts), EXIT_SPAWN_FAILED);
+        return;
+      }
+
+      let settled = false;
+      child.once("error", (error) => {
+        if (settled) return;
+        settled = true;
+        if (attempts <= maxRetries && isRetryable(error)) {
+          wait(retryDelayMs);
+          attempt();
+          return;
+        }
+        report(spawnFailureRecord(error, attempts), EXIT_SPAWN_FAILED);
+      });
+      child.once("spawn", () => {
+        if (settled) return;
+        settled = true;
+        // The process was created, so this attempt is final: a later `'error'`
+        // is ignored (`settled`), and only `'exit'` reports the outcome.
+        child.once("exit", (code, signal) => {
+          const exitCode = typeof code === "number" ? code : null;
+          report(
+            {
+              exit_code: exitCode,
+              signal: signal ?? null,
+              at: isoTimestamp(),
+              ...retriesField(attempts),
+            },
+            exitCode === null ? EXIT_SPAWN_FAILED : exitCode,
+          );
+        });
+      });
+    };
+
+    attempt();
+  });
+}
+
 /**
  * Run one command and record its outcome. Never throws and never writes to
  * stdio; the process exit code carries the result.
@@ -211,22 +379,6 @@ function main() {
     return;
   }
 
-  let child;
-  try {
-    child = spawn(options.command, {
-      shell: true,
-      cwd: process.cwd(),
-      // The command writes straight to the log's descriptor. Using "pipe" and
-      // forwarding by hand would buffer output and break the "read new bytes
-      // while it still runs" guarantee.
-      stdio: ["ignore", logFd, logFd],
-    });
-  } catch (error) {
-    closeSync(logFd);
-    record({ exit_code: null, error: messageOf(error), at: isoTimestamp() }, EXIT_SPAWN_FAILED);
-    return;
-  }
-
   let recorded = false;
   const settle = (payload, runnerCode) => {
     if (recorded) return;
@@ -239,17 +391,15 @@ function main() {
     record(payload, runnerCode);
   };
 
-  // `error` fires when the command (or the shell) could not be started at all.
-  child.on("error", (error) => {
-    settle({ exit_code: null, error: messageOf(error), at: isoTimestamp() }, EXIT_SPAWN_FAILED);
-  });
-
-  child.on("exit", (code, signal) => {
-    const exitCode = typeof code === "number" ? code : null;
-    settle(
-      { exit_code: exitCode, signal: signal ?? null, at: isoTimestamp() },
-      exitCode === null ? EXIT_SPAWN_FAILED : exitCode,
-    );
+  // `runCommand` owns process creation (through the platform shell, writing
+  // straight to the log's descriptor) and the bounded retry policy. `settle`
+  // owns the log descriptor and the `.exit` record the outcome is written into;
+  // the wrapper never sees the child directly.
+  runCommand({
+    command: options.command,
+    cwd: process.cwd(),
+    logFd,
+    onOutcome: (payload, runnerCode) => settle(payload, runnerCode),
   });
 }
 

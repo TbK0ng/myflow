@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  closeSync,
   existsSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
   statSync,
@@ -10,8 +12,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { spawn, spawnSync } from "node:child_process";
-import { once } from "node:events";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { EventEmitter, once } from "node:events";
+import { runCommand } from "../.myflow/scripts/bg_runner.mjs";
 
 // F1 — the background-task wrapper (`.myflow/scripts/bg_runner.mjs`).
 //
@@ -20,6 +23,10 @@ import { once } from "node:events";
 // must stay runnable on its own, decoupled from the Pi extension. Each case
 // creates and removes its own temp directory and waits for every command it
 // starts, so no orphan process is left behind.
+//
+// The H1b cases are the exception: they import `runCommand` on purpose, because
+// the only way to exercise a *transient* OS refusal without provoking one is to
+// inject a stub spawn. That import is the whole point of the export.
 
 const ROOT = join(import.meta.dirname, "..");
 const RUNNER = join(ROOT, ".myflow", "scripts", "bg_runner.mjs");
@@ -233,6 +240,104 @@ test("bg runner -5: the command runs through the platform shell", () => {
     assert.equal(redirected.status, 0);
     assert.match(readFileSync(join(dir, "redirect.txt"), "utf-8"), /redirected/);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数", async () => {
+  // 回退点：删掉重试 → calls===3 与 retries===2 变红；删掉 retriesField → retries 断言变红；
+  //        用 'exit' 而不是 'spawn' 判定成功 → 重试逻辑不生效/命令跑两次。
+  const dir = makeDir();
+  let logFd = -1;
+  try {
+    const log = join(dir, "retry.log");
+    logFd = openSync(log, "a");
+
+    // 桩：前两次以 EAGAIN 失败（进程从未创建），第三次交给真实 spawn。
+    let calls = 0;
+    const spawnImpl = (command: string, options: Parameters<typeof spawn>[1]) => {
+      calls += 1;
+      if (calls <= 2) {
+        const fake = new EventEmitter();
+        setImmediate(() => {
+          const error = new Error("spawn EAGAIN") as NodeJS.ErrnoException;
+          error.code = "EAGAIN";
+          fake.emit("error", error);
+        });
+        return fake as unknown as ChildProcess;
+      }
+      return spawn(command, options);
+    };
+
+    let record: Record<string, unknown> | undefined;
+    let runnerCode: number | undefined;
+    const outcome = await runCommand({
+      command: "echo retried-ok",
+      logFd,
+      cwd: dir,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      wait: () => {},
+      onOutcome: (payload, code) => {
+        record = payload;
+        runnerCode = code;
+      },
+    });
+    closeSync(logFd);
+    logFd = -1;
+
+    assert.equal(calls, 3, "前两次 EAGAIN 失败后必须再试一次");
+    assert.equal(outcome.attempts, 3);
+    assert.equal(record?.retries, 2, "靠重试才起来这件事必须写进 .exit");
+    assert.equal(record?.exit_code, 0);
+    assert.equal(runnerCode, 0);
+    assert.match(readFileSync(log, "utf-8"), /retried-ok/, "第三次尝试必须真的执行了命令");
+  } finally {
+    if (logFd >= 0) closeSync(logFd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记录原因", async () => {
+  // 回退点：把 isRetryableSpawnError 改成恒 true → calls 变成 3，断言变红。
+  const dir = makeDir();
+  let logFd = -1;
+  try {
+    const log = join(dir, "no-retry.log");
+    logFd = openSync(log, "a");
+
+    let calls = 0;
+    const spawnImpl = () => {
+      calls += 1;
+      const fake = new EventEmitter();
+      setImmediate(() => {
+        const error = new Error("spawn ENOENT") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        fake.emit("error", error);
+      });
+      return fake as unknown as ChildProcess;
+    };
+
+    let record: Record<string, unknown> | undefined;
+    const outcome = await runCommand({
+      command: "no-such-command-xyz",
+      logFd,
+      cwd: dir,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      wait: () => {},
+      onOutcome: (payload) => {
+        record = payload;
+      },
+    });
+    closeSync(logFd);
+    logFd = -1;
+
+    assert.equal(calls, 1, "ENOENT 重试也不会好转，必须只尝试一次");
+    assert.equal(outcome.attempts, 1);
+    assert.equal(record?.exit_code, null);
+    assert.match(String(record?.error), /ENOENT/);
+    assert.equal(record?.retries, undefined, "没有重试时省略 retries");
+  } finally {
+    if (logFd >= 0) closeSync(logFd);
     rmSync(dir, { recursive: true, force: true });
   }
 });
