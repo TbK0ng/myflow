@@ -1,0 +1,4 @@
+{"file": ".pi/extensions/myflow/ask.ts", "reason": "工具注册与依赖注入的最简范式；F1-F6 的 background.ts 照它写"}
+{"file": ".pi/extensions/myflow/approval.ts", "reason": "带副作用的工具范式（确认门 + 注入 + 非 UI 降级）"}
+{"file": ".pi/extensions/myflow/index.ts", "reason": "F7 接线目标：既有守卫形态与注册调用点"}
+{"file": ".myflow/spec/harness/index.md", "reason": "F8 契约存储：新 Contract 条目必须写进这里"}
