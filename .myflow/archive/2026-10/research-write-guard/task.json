@@ -1,9 +1,11 @@
 {
   "title": "research 写能力与并行守卫路径化",
-  "status": "in_progress",
+  "status": "completed",
   "description": "给 myflow-research 加 write；把唯一写者守卫从 agent 级改为路径感知，使并行 research 可各自落盘到 research/",
   "slug": "research-write-guard",
   "parent": null,
   "created_at": "2026-10-14T08:55:38Z",
-  "started_at": "2026-10-14T08:56:16Z"
+  "started_at": "2026-10-14T08:56:16Z",
+  "finished_at": "2026-10-14T09:18:41Z",
+  "archived_at": "2026-10-14T09:18:41Z"
 }

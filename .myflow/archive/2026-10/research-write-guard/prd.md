@@ -50,7 +50,7 @@
 
 - 不引入 `bash` 给 research（否则路径约束有洞：`bash` 可写任意位置）。
 - 不做「多写者写同一文件」的仲裁/锁；本任务的保证是**缩小爆炸半径**，不是事务隔离。
-- 不建 `.myflow/spec/`、不建 `.myflow/config.yaml`。
+- 不建 `.myflow/config.yaml`（用户明确不需要）。`.myflow/spec/` **在本任务的 3.1 步由 `myflow-update-spec` 惰性创建**——本任务确实改了契约（`writesUnder` + 边界保证 + 并行规则），按项目惯例应落 spec。
 - 不改其余 5 个 agent（`architect`/`reviewer`/`implement`/`check`）的工具白名单。
 
 ## Technical Notes
