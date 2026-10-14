@@ -1,0 +1,3 @@
+{"file": ".myflow/spec/harness/index.md", "reason": "契约存储：B5 必须新增 questions.jsonl / approval.json / plan 哈希 / 门的语义"}
+{"file": ".myflow/workflow.md", "reason": "工作流单一事实源：B5 必须同步 Step 1.1 / 1.4 与 Task Artifacts"}
+{"file": "tests/task-gate.test.ts", "reason": "测试写法范本：P-1..P-9 沿用其中的 makeProject/cleanEnv/run/runResult"}

@@ -7,7 +7,9 @@ description: "Guides collaborative requirements discovery before implementation.
 
 **CoreRule**: Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
-Ask the questions one at a time.
+Ask the questions one at a time, as a multiple-choice question via the `myflow_ask_user` tool (one question, 2-4 options). The tool records each exchange in `questions.jsonl`, and the approval gate later refuses a plan the user was never asked about, so skipping this step does not work.
+
+When no interactive UI is available, `myflow_ask_user` returns an instruction instead of an answer: list the options in prose, end your turn, and wait. Never invent an answer.
 
 If a question can be answered by exploring the codebase, explore the codebase instead.
 
@@ -42,7 +44,8 @@ Triggered from /skill:myflow-brainstorm when the user describes a development ta
    If you can derive the answer from repo code, docs, configs, conventions, or quick research — do that first.
 
 3. **One question per message**
-   Never overwhelm the user with a list of questions. Ask one, update PRD, repeat.
+   Never overwhelm the user with a list of questions. Ask one with
+   `myflow_ask_user`, update PRD, repeat.
 
 4. **Prefer concrete options**
    For preference/decision questions, present 2–3 feasible, specific approaches with trade-offs.
@@ -349,7 +352,8 @@ Then update PRD:
 ### Rules
 
 * One question per message
-* Prefer multiple-choice when possible
+* Prefer multiple-choice when possible — ask it with `myflow_ask_user`
+  (2-4 options; the user picks exactly one)
 * After each user answer:
 
   * Update PRD immediately
@@ -452,6 +456,20 @@ Here's my understanding of the complete requirements:
 Does this look correct? If yes, I'll proceed with implementation.
 ```
 
+### Request Approval (Required Before Activation)
+
+After the user confirms the plan, request approval with the
+`myflow_request_approval` tool. It writes `approval.json` only when the user
+agrees, and `task.py start` refuses to activate the task until that approval
+matches the **current** plan hash — so editing `prd.md`, `design.md`, or
+`implement.md` afterwards makes the approval stale and requires re-approval.
+
+* TUI: `myflow_request_approval` pops a confirmation and records the decision.
+* No UI: it returns an instruction instead of approving. Have the human run
+  `python3 ./.myflow/scripts/task.py approve <slug>`, then run `task.py start`.
+* Never hand-write `approval.json` and never skip this step: it is the point at
+  which the user's consent is recorded.
+
 ### Subtask Decomposition (Complex Tasks)
 
 For complex tasks with multiple independent work items, create subtasks:
@@ -533,7 +551,8 @@ Task Workflow Phase 2 (Prepare for Implementation)
   Code-Spec Depth Check (if applicable)
   → Research codebase (based on confirmed PRD)
   → Configure code-spec context (jsonl files)
-  → Activate task
+  → Approve the plan (`myflow_request_approval`, or `task.py approve`)
+  → Activate task (`task.py start`)
   ↓
 Task Workflow Phase 3 (Execute)
   Implement → Check → Complete

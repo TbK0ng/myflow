@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import extension, { SKIP_BREADCRUMB_ENV } from "../.pi/extensions/myflow/index.ts";
 import type { ExtensionAPI, HookContext, Message } from "../.pi/extensions/myflow/index.ts";
@@ -13,6 +14,9 @@ function makeProject(): string {
   mkdirSync(join(root, ".myflow", ".runtime", "sessions"), { recursive: true });
   mkdirSync(join(root, ".myflow", "scripts"), { recursive: true });
   copyFileSync(join(fileURLToPath(new URL("..", import.meta.url)), ".myflow", "scripts", "get_context.py"), join(root, ".myflow", "scripts", "get_context.py"));
+  // `gate-info` is the only approval read path; `/myflow-status` shells out to
+  // it, so a project that exercises the command needs a task.py copy too.
+  copyFileSync(join(fileURLToPath(new URL("..", import.meta.url)), ".myflow", "scripts", "task.py"), join(root, ".myflow", "scripts", "task.py"));
   writeFileSync(join(root, ".myflow", "workflow.md"), [
     "[workflow-state:planning]",
     "Plan the work.",
@@ -391,6 +395,187 @@ test("verify gate: bounded and only applies to the check agent", async () => {
   } finally {
     if (previous === undefined) delete process.env[MYFLOW_AGENT_ENV];
     else process.env[MYFLOW_AGENT_ENV] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// G-1…G-4: the plan-approval gate's wiring (index.ts / status.ts).
+// ---------------------------------------------------------------------------
+
+const ASK_APPROVAL_TOOLS = ["myflow_ask_user", "myflow_request_approval"];
+
+/** The demo task dir created by `makeProject`. */
+function demoTaskDir(root: string): string {
+  return join(root, ".myflow", "tasks", "demo");
+}
+
+/** Run the one authoritative hash implementation for the demo task. */
+function planHashFor(root: string): string {
+  return execFileSync(
+    "python3",
+    [join(root, ".myflow", "scripts", "task.py"), "plan-hash", join(root, ".myflow", "tasks", "demo")],
+    { cwd: root, encoding: "utf-8" },
+  ).trim();
+}
+
+/** Short (8 hex) form of a `sha256:<hex>` string, as `/myflow-status` prints. */
+function short(hash: string): string {
+  return hash.split(":", 2)[1].slice(0, 8);
+}
+
+function runStatusCommand(root: string): string {
+  const { api, sent, commands } = makeMockAPI(root);
+  extension(api);
+  return commands["myflow-status"]
+    .handler("", getCtx(api))
+    .then(() => sent.find((m) => m.customType === "myflow-status")!.content!);
+}
+
+test("G-1/G-2: a sub-agent is blocked from asking or requesting approval", async () => {
+  const root = makeProject();
+  const previous = process.env[MYFLOW_AGENT_ENV];
+  process.env[MYFLOW_AGENT_ENV] = "myflow-implement";
+  try {
+    const { api } = makeMockAPI(root);
+    extension(api);
+    const handlers = getHandlers(api);
+    const ctx = getCtx(api);
+    for (const toolName of ASK_APPROVAL_TOOLS) {
+      // Revert point: drop the ASK_TOOL_NAMES branch → both results become undefined.
+      const result = (await handlers.tool_call({ toolName }, ctx)) as
+        | { block?: boolean; reason?: string }
+        | undefined;
+      assert.equal(result?.block, true, `${toolName} must be blocked for a sub-agent`);
+      assert.match(result!.reason ?? "", /main session/);
+    }
+    // The recursion guard this sits beside still fires, unchanged.
+    const recursion = (await handlers.tool_call({ toolName: "myflow_subagent" }, ctx)) as
+      | { block?: boolean; reason?: string }
+      | undefined;
+    assert.match(recursion!.reason ?? "", /Recursion guard/);
+  } finally {
+    if (previous === undefined) delete process.env[MYFLOW_AGENT_ENV];
+    else process.env[MYFLOW_AGENT_ENV] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("G-1/G-2: the main session is not blocked from asking or requesting approval", async () => {
+  const root = makeProject();
+  try {
+    const { api } = makeMockAPI(root);
+    extension(api);
+    const handlers = getHandlers(api);
+    const ctx = getCtx(api);
+    for (const toolName of ASK_APPROVAL_TOOLS) {
+      const result = await handlers.tool_call({ toolName }, ctx);
+      assert.equal(result, undefined, `${toolName} must pass through for the main session`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("G-3: /myflow-status reports approval: missing without approval.json", async () => {
+  const root = makeProject();
+  try {
+    writeFileSync(join(demoTaskDir(root), "prd.md"), "# plan\n");
+    const text = await runStatusCommand(root);
+    assert.match(text, /Approval: missing/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("G-3: /myflow-status reports approval: approved when the hash matches", async () => {
+  const root = makeProject();
+  try {
+    writeFileSync(join(demoTaskDir(root), "prd.md"), "# plan\n");
+    const hash = planHashFor(root);
+    writeFileSync(
+      join(demoTaskDir(root), "approval.json"),
+      JSON.stringify({ approved_by: "cli", plan_files: ["prd.md"], plan_hash: hash, questions_asked: 1 }),
+    );
+    const text = await runStatusCommand(root);
+    assert.match(text, /Approval: approved/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("G-3: /myflow-status reports approval: stale with old -> new short hashes", async () => {
+  const root = makeProject();
+  try {
+    const prd = join(demoTaskDir(root), "prd.md");
+    writeFileSync(prd, "# plan\n");
+    const oldHash = planHashFor(root);
+    writeFileSync(
+      join(demoTaskDir(root), "approval.json"),
+      JSON.stringify({ approved_by: "cli", plan_files: ["prd.md"], plan_hash: oldHash, questions_asked: 1 }),
+    );
+    writeFileSync(prd, "# plan edited\n");
+    const newHash = planHashFor(root);
+
+    const text = await runStatusCommand(root);
+    assert.notEqual(oldHash, newHash, "editing the plan must change the hash");
+    assert.match(text, /Approval: stale \(/);
+    assert.ok(
+      text.includes(`${short(oldHash)} \u2192 ${short(newHash)}`),
+      `stale line must show ${short(oldHash)} -> ${short(newHash)}:\n${text}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("G-3: the injected deriveContextKey resolves the active task (ambiguous sessions)", async () => {
+  const root = makeProject();
+  try {
+    // Two extra session files make a null context key ambiguous (no_task); only
+    // the deriver index.ts injects into the tool can pick the demo task.
+    writeFileSync(
+      join(root, ".myflow", ".runtime", "sessions", "pi_other.json"),
+      JSON.stringify({ current_task: null }),
+    );
+    writeFileSync(
+      join(root, ".myflow", ".runtime", "sessions", "pi_extg3.json"),
+      JSON.stringify({ current_task: ".myflow/tasks/demo" }),
+    );
+
+    const { api, tools } = makeMockAPI(root);
+    extension(api);
+    const tool = tools.find((candidate) => candidate.name === "myflow_ask_user") as unknown as {
+      execute: (
+        id: string,
+        params: Record<string, unknown>,
+        signal: undefined,
+        onUpdate: undefined,
+        ctx: Record<string, unknown>,
+      ) => Promise<{ details: Record<string, unknown>; isError?: boolean }>;
+    };
+
+    const result = await tool.execute(
+      "id",
+      { header: "h", question: "选哪个？", options: ["甲", "乙"] },
+      undefined,
+      undefined,
+      {
+        cwd: root,
+        mode: "tui",
+        hasUI: true,
+        ui: { select: async (_title: string, options: string[]) => options[0] },
+        sessionManager: { getSessionId: () => "extg3" },
+      },
+    );
+
+    assert.ok(!result.isError, `the tool must resolve the active task: ${JSON.stringify(result.details)}`);
+    assert.equal(result.details.answer, "甲");
+    assert.ok(
+      existsSync(join(demoTaskDir(root), "questions.jsonl")),
+      "the answer must be audited in the resolved task dir",
+    );
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

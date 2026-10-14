@@ -204,7 +204,14 @@ test("instruction files only reference script subcommands that exist", () => {
   const subcommands = new Map<string, Set<string>>();
   for (const script of SCRIPTS) {
     const content = readFileSync(join(ROOT, script), "utf-8");
-    subcommands.set(script, new Set(content.matchAll(/add_parser\("([a-z_-]+)"/g).map((m) => m[1] as string)));
+    // `add_parser(` may sit on its own line (task.py registers `gate-info`
+    // that way), so allow whitespace between the call and its quoted name.
+    // Missing a real subcommand here reads as a false "does not exist" for any
+    // doc that names it — the exact drift this test hunts.
+    subcommands.set(
+      script,
+      new Set(content.matchAll(/add_parser\(\s*"([a-z_-]+)"/g).map((m) => m[1] as string)),
+    );
   }
 
   const broken: string[] = [];

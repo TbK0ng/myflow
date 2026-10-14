@@ -15,6 +15,8 @@ import {
   type SubagentPi,
 } from "./subagent.ts";
 import { buildStatusReport, formatStatusReport } from "./status.ts";
+import { registerMyflowAsk } from "./ask.ts";
+import { registerMyflowApproval } from "./approval.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export type { ExtensionAPI };
 
@@ -62,6 +64,8 @@ export interface ToolCallEvent {
 }
 
 const SUBAGENT_TOOL_NAME = "myflow_subagent";
+/** Tools only the main session may call: they address the user directly. */
+const ASK_TOOL_NAMES = new Set(["myflow_ask_user", "myflow_request_approval"]);
 const MAX_VERIFY_ATTEMPTS = 2;
 /** Set for delegated processes (channel workers) that must not see the breadcrumb. */
 export const SKIP_BREADCRUMB_ENV = "MYFLOW_SKIP_BREADCRUMB";
@@ -250,6 +254,18 @@ export default function extension(pi: ExtensionAPI): void {
     deriveContextKey: (ctx) => deriveContextKey((ctx ?? {}) as HookContext),
   });
 
+  // Plan-approval gate tools. They resolve the active task through the injected
+  // deriver and refuse to run in a sub-agent process (both checked in the
+  // `tool_call` guard below as the second line).
+  registerMyflowAsk(pi, {
+    deriveContextKey: (ctx) => deriveContextKey((ctx ?? {}) as HookContext),
+    isSubAgent,
+  });
+  registerMyflowApproval(pi, {
+    deriveContextKey: (ctx) => deriveContextKey((ctx ?? {}) as HookContext),
+    isSubAgent,
+  });
+
   // `/myflow-status` answers "where am I?" without a model call.
   pi.registerCommand("myflow-status", {
     description: "Show the active myflow task, workflow phase, and git state",
@@ -428,6 +444,20 @@ export default function extension(pi: ExtensionAPI): void {
         reason:
           `Recursion guard: this process is the sub-agent "${agentType}" and must not ` +
           `dispatch ${SUBAGENT_TOOL_NAME}. Report the recommended next step to the main session instead.`,
+      };
+    }
+
+    // Ask/approval guard: only the main session may address the user. A
+    // sub-agent runs non-interactively and must not express the user's intent
+    // on their behalf; this mirrors the recursion guard and is the second line
+    // after each tool's own `execute` check.
+    if (ASK_TOOL_NAMES.has(toolEvent.toolName) && isSubAgent) {
+      return {
+        block: true,
+        reason:
+          `Only the main session may ask the user a question or request plan approval. ` +
+          `This process is the sub-agent "${agentType}" and must not address the user; ` +
+          `report the recommendation to the main session instead.`,
       };
     }
 

@@ -3,12 +3,15 @@
 
 Usage:
     task.py create <title> --description <desc> --slug <slug> [--parent <dir>]
-    task.py start <task_dir> [--allow-empty-context]
+    task.py start <task_dir> [--allow-empty-context] [--allow-unapproved]
     task.py current [--source] [--json]
     task.py finish
     task.py archive <task_dir>
     task.py add-subtask <parent_dir> <child_dir>
     task.py add-context <task_dir> <implement|check> <path> [reason]
+    task.py plan-hash <task_dir>
+    task.py gate-info <task_dir>
+    task.py approve <task_dir>
     task.py validate <task_dir>
     task.py list [--status <status>] [--json]
 
@@ -23,6 +26,7 @@ Statuses: planning -> in_progress -> done -> (archived as completed)
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -72,6 +76,17 @@ SESSIONS_DIR = PROJECT_ROOT / ".myflow" / ".runtime" / "sessions"
 # exists but carries no truthy `file` row means a dispatched sub-agent would
 # run with zero spec context, which `start` refuses unless overridden.
 CONTEXT_MANIFESTS = ("implement.jsonl", "check.jsonl")
+
+# The plan artifacts the approval gate binds to, in a fixed order. The order is
+# part of the contract: the hash is computed over this exact list, so a
+# directory walk (whose order varies) can never produce it.
+PLAN_FILES = ("prd.md", "design.md", "implement.md")
+
+# The approval gate's two files, both written under the task directory:
+#   questions.jsonl — append-only audit of choice questions and their answers
+#   approval.json   — the user's approval of a specific plan revision
+QUESTIONS_FILE = "questions.jsonl"
+APPROVAL_FILE = "approval.json"
 
 # Extensions that look like code rather than spec/research docs. `validate`
 # warns (never fails) on these outside spec/docs and the task's own directory:
@@ -361,6 +376,160 @@ def _read_task(task_dir: Path) -> dict | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Approval gate
+#
+# Planning ends when the user approves the *current* plan. The approval is
+# bound to the plan content, not merely the task, so editing prd.md/design.md/
+# implement.md after approval makes the approval stale and re-opens the gate.
+#
+# This is a convention reinforcement against forgetting to ask/approve — it is
+# NOT a security boundary: an agent that can run bash can write approval.json
+# by hand or pass --allow-unapproved. The point is that *skipping* the step is
+# loud and leaves a trace, not that it is impossible.
+# ---------------------------------------------------------------------------
+
+
+def _plan_digest(parts: "list[tuple[str, bytes]]") -> str:
+    """Hash ``(filename, content)`` pairs into ``sha256:<hex>``.
+
+    This is the single, authoritative plan-hash implementation. Each part is
+    ``filename`` (UTF-8) + NUL + raw bytes + NUL, concatenated in list order.
+    The NUL separators and the explicit filename make the digest unforgeable by
+    reordering or concatenation; the caller is responsible for passing the
+    files in the fixed ``PLAN_FILES`` order and only the files that exist.
+    """
+    digest = hashlib.sha256()
+    for name, content in parts:
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(content)
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _plan_hash(task_dir: Path) -> tuple[str | None, list[str]]:
+    """Return ``(sha256, present files)`` for a task's plan artifacts.
+
+    Only files that actually exist participate (a task without design.md is
+    normal). Returns ``(None, present)`` when a present file cannot be read, so
+    the gate fails closed instead of hashing a partial plan.
+    """
+    present = [name for name in PLAN_FILES if (task_dir / name).is_file()]
+    try:
+        parts = [(name, (task_dir / name).read_bytes()) for name in present]
+    except OSError:
+        return None, present
+    return _plan_digest(parts), present
+
+
+def _short_hash(value: str | None) -> str:
+    """First 12 hex chars of a ``sha256:<hex>`` string, for human output."""
+    if not value:
+        return "(none)"
+    hexpart = value.split(":", 1)[1] if ":" in value else value
+    return hexpart[:12]
+
+
+def _answered_question_count(task_dir: Path) -> int:
+    """Count rows in ``questions.jsonl`` that carry a real user answer.
+
+    Only ``via == "ui-select"`` with a non-empty ``answer`` counts. A row with
+    ``via: "none"`` means the question was asked but no UI could deliver it,
+    and must NOT be mistaken for an answer. A missing file is 0, never an
+    error: the whole point is to detect "nothing was ever asked".
+    """
+    path = task_dir / QUESTIONS_FILE
+    if not path.is_file():
+        return 0
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    count = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("via") == "ui-select" and data.get("answer"):
+            count += 1
+    return count
+
+
+def _approval_report(task_dir: Path) -> dict:
+    """Read-only snapshot of a task's approval state.
+
+    ``status`` is one of ``approved`` (hash matches the current plan),
+    ``stale`` (an approval exists but the plan changed), ``missing`` (no file),
+    ``invalid`` (unparseable), or ``unhashable`` (plan files unreadable). Only
+    ``approved`` passes the gate.
+    """
+    current_hash, plan_files = _plan_hash(task_dir)
+    approval_path = task_dir / APPROVAL_FILE
+    approval: dict | None = None
+    if approval_path.is_file():
+        try:
+            loaded = json.loads(approval_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            loaded = None
+        if isinstance(loaded, dict):
+            approval = loaded
+    approved_hash = approval.get("plan_hash") if approval else None
+    if current_hash is None:
+        status = "unhashable"
+    elif not plan_files:
+        status = "missing"
+    elif approval is None:
+        status = "invalid" if approval_path.is_file() else "missing"
+    else:
+        status = "approved" if approved_hash == current_hash else "stale"
+    return {
+        "status": status,
+        "approval": approval,
+        "current_hash": current_hash,
+        "approved_hash": approved_hash if isinstance(approved_hash, str) else None,
+        "plan_files": plan_files,
+        "questions_asked": _answered_question_count(task_dir),
+    }
+
+
+def _write_approval(task_dir: Path, approved_by: str) -> dict:
+    """Write ``approval.json`` for the current plan revision.
+
+    Deliberately a separate file from ``task.json``: ``start``/``archive``
+    rewrite the task record, and the approval is the *user's* decision, not
+    lifecycle metadata. Deleting this file revokes the approval.
+    """
+    plan_hash, plan_files = _plan_hash(task_dir)
+    if plan_hash is None:
+        raise OSError("could not read the plan files to hash")
+    data = {
+        "approved_at": _now(),
+        "approved_by": approved_by,
+        "session_id": os.environ.get("PI_SESSION_ID", "").strip() or None,
+        "plan_files": plan_files,
+        "plan_hash": plan_hash,
+        "questions_asked": _answered_question_count(task_dir),
+    }
+    (task_dir / APPROVAL_FILE).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return data
+
+
+def approval_hint(task_ref: str) -> str:
+    """The three actionable ways out of a refused approval gate."""
+    return "\n".join(
+        [
+            "  (a) Ask the user, then request approval: myflow_request_approval (TUI).",
+            f"  (b) Have a human run:  python3 .myflow/scripts/task.py approve {task_ref}",
+            f"  (c) Knowingly skip:    python3 .myflow/scripts/task.py start {task_ref} --allow-unapproved",
+        ]
+    )
+
+
 def _resolve_session(create: bool) -> tuple[Path | None, str]:
     """Resolve the active session file and report where the pointer came from.
 
@@ -509,6 +678,55 @@ def cmd_start(args: argparse.Namespace) -> int:
             )
             print(f"  Verify:  python3 .myflow/scripts/task.py validate {args.task_dir}", file=sys.stderr)
             print("  Intentionally empty? Re-run start with --allow-empty-context", file=sys.stderr)
+            return 1
+
+    # Approval gate: planning is not finished until the user approves the
+    # *current* plan. Bound to the plan content, so editing a plan file after
+    # approval makes it stale and re-opens the gate. Runs after the
+    # empty-context gate so either refusal is reported on its own terms.
+    if args.allow_unapproved:
+        task["started_without_approval"] = True
+        print("warning: starting without plan approval (--allow-unapproved).", file=sys.stderr)
+        print("         Recorded in task.json as started_without_approval: true.", file=sys.stderr)
+    else:
+        report = _approval_report(task_dir)
+        if not report["plan_files"]:
+            print(
+                "error: refusing to start: no plan files (prd.md is missing) — nothing to approve",
+                file=sys.stderr,
+            )
+            print(approval_hint(args.task_dir), file=sys.stderr)
+            return 1
+        if report["status"] != "approved":
+            reasons = {
+                "missing": "no approval.json — the plan has not been approved",
+                "stale": "approval.json is stale — the plan changed since it was approved",
+                "invalid": "approval.json could not be parsed",
+                "unhashable": "the plan files could not be read to hash",
+            }
+            print(
+                f"error: refusing to start: {reasons.get(report['status'], 'the plan is not approved')}",
+                file=sys.stderr,
+            )
+            print(f"  current plan hash:  {_short_hash(report['current_hash'])}", file=sys.stderr)
+            print(f"  approved plan hash: {_short_hash(report['approved_hash'])}", file=sys.stderr)
+            if report["questions_asked"] < 1:
+                print("  No choice questions have been answered yet (questions.jsonl).", file=sys.stderr)
+            print(approval_hint(args.task_dir), file=sys.stderr)
+            return 1
+        # R2 backstop (design.md §5.2): the write side (`approve` and the
+        # approval tool) already refuses without an answered question, but the
+        # gate that actually admits the task must not depend on the writer
+        # being honest. Count with the same function `approve` uses — never a
+        # second copy of the "answered" predicate. `--allow-unapproved`
+        # deliberately skips this too: it means "skip the whole plan gate".
+        if _answered_question_count(task_dir) < 1:
+            print(
+                "error: refusing to start: approval.json exists but no choice "
+                "question was ever answered (questions.jsonl)",
+                file=sys.stderr,
+            )
+            print("  Ask first: use myflow_ask_user, then request approval again.", file=sys.stderr)
             return 1
 
     task["status"] = "in_progress"
@@ -683,8 +901,130 @@ def cmd_add_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_plan_hash(args: argparse.Namespace) -> int:
+    """Print the current plan's hash (``sha256:<hex>``).
+
+    This is the only plan-hash implementation; the TypeScript approval tool
+    shells out to this command instead of re-deriving the digest, so the two
+    sides cannot drift.
+    """
+    task_dir = _resolve_task_dir(args.task_dir)
+    if task_dir is None:
+        print(
+            f"error: refusing plan-hash for '{args.task_dir}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
+    if not task_dir.is_dir():
+        print(f"error: no task directory at {args.task_dir}", file=sys.stderr)
+        return 1
+    plan_hash, plan_files = _plan_hash(task_dir)
+    if not plan_files:
+        print("error: no plan files to hash (prd.md is missing)", file=sys.stderr)
+        return 1
+    if plan_hash is None:
+        print("error: could not read the plan files to hash", file=sys.stderr)
+        return 1
+    print(plan_hash)
+    return 0
+
+
+def cmd_gate_info(args: argparse.Namespace) -> int:
+    """Print a single-line, read-only JSON snapshot of a task's plan gate.
+
+    This is the TypeScript approval tool's **only** read entry point: it returns
+    the plan hash and the answered-question count from the same implementation
+    the gate uses, so the tool never re-derives a digest or counts
+    ``questions.jsonl`` rows itself (design.md §3.3). Read-only: nothing is
+    written and ``task.json`` is left alone.
+
+    ``approval.status`` reuses ``_approval_report``'s full state set
+    (``approved`` / ``stale`` / ``missing`` / ``invalid`` / ``unhashable``) —
+    design.md §5.1 lists the first three illustratively; the extra two are real
+    states and hiding them would be a second, lossy predicate.
+
+    A task that cannot be resolved prints ``{"error": ...}`` and exits
+    non-zero, so a caller can never mistake a missing task for a zeroed-but-
+    valid gate.
+    """
+    task_dir = _resolve_task_dir(args.task_dir)
+    if task_dir is None or not task_dir.is_dir():
+        print(
+            json.dumps(
+                {"error": f"not a task under {_relative(TASKS_DIR)}: {args.task_dir}"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    report = _approval_report(task_dir)
+    payload = {
+        "plan_hash": report["current_hash"],
+        "plan_files": report["plan_files"],
+        "questions_answered": report["questions_asked"],
+        "approval": {
+            "status": report["status"],
+            "plan_hash": report["approved_hash"],
+        },
+    }
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    """Approve a task's current plan from a human terminal.
+
+    The CLI half of the approval gate, for non-TUI sessions. It refuses when
+    no choice question was answered (the "ask first" link) and when stdin is
+    not a tty (so a script or agent cannot approve on the user's behalf).
+    """
+    task_dir = _resolve_task_dir(args.task_dir)
+    if task_dir is None:
+        print(
+            f"error: refusing to approve '{args.task_dir}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
+    if not task_dir.is_dir():
+        print(f"error: no task directory at {args.task_dir}", file=sys.stderr)
+        return 1
+
+    report = _approval_report(task_dir)
+    if not report["plan_files"]:
+        print("error: cannot approve: no plan files (prd.md is missing)", file=sys.stderr)
+        print("  Write the plan before asking for approval.", file=sys.stderr)
+        return 1
+    if report["current_hash"] is None:
+        print("error: cannot approve: could not read the plan files to hash", file=sys.stderr)
+        return 1
+    if report["questions_asked"] < 1:
+        print(
+            "error: cannot approve: no answered choice questions (questions.jsonl)",
+            file=sys.stderr,
+        )
+        print("  Approving a plan the user was never asked about is exactly what this gate blocks.", file=sys.stderr)
+        print("  Ask at least one choice question with myflow_ask_user first.", file=sys.stderr)
+        return 1
+    if not sys.stdin.isatty():
+        print(
+            "error: refusing to approve from a non-interactive shell (stdin is not a tty)",
+            file=sys.stderr,
+        )
+        print("  Run this yourself in a terminal, or use the TUI tool myflow_request_approval.", file=sys.stderr)
+        return 1
+
+    data = _write_approval(task_dir, approved_by="cli")
+    print(f"approved: {_relative(task_dir)} ({_short_hash(data['plan_hash'])})")
+    return 0
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
-    """Validate a task's context manifests (exit 1 when there is nothing curated)."""
+    """Validate a task's context manifests (exit 1 when there is nothing curated).
+
+    Also reports the approval state, but approval does not change the exit
+    code: ``validate`` stays a reporter for the manifest gate (which ``start``
+    enforces). Treating a missing approval as a validation failure would break
+    every pre-approval ``validate`` run and blur which gate failed.
+    """
     task_dir = _resolve_task_dir(args.task_dir)
     if task_dir is None:
         print(
@@ -706,6 +1046,29 @@ def cmd_validate(args: argparse.Namespace) -> int:
             print(f"  {name}: not found (skipped)")
             continue
         total_errors += _validate_jsonl(jsonl_file, task_dir, max_file_bytes)
+
+    print("=== Approval gate ===")
+    report = _approval_report(task_dir)
+    print(f"  questions.jsonl answered: {report['questions_asked']}")
+    status = report["status"]
+    if status == "approved":
+        print(f"  approval.json: approved ({_short_hash(report['current_hash'])})")
+        print("  plan hash matches current plan: yes")
+    elif status == "stale":
+        print(
+            "  approval.json: stale "
+            f"({_short_hash(report['approved_hash'])} -> {_short_hash(report['current_hash'])})"
+        )
+        print("  plan hash matches current plan: no")
+    elif status == "invalid":
+        print("  approval.json: invalid (unparseable)")
+        print("  plan hash matches current plan: no")
+    elif status == "unhashable":
+        print("  approval.json: unverifiable (plan files could not be read)")
+        print("  plan hash matches current plan: no")
+    else:
+        print("  approval.json: missing")
+        print("  plan hash matches current plan: no")
 
     if total_errors == 0:
         print("all validations passed")
@@ -797,6 +1160,11 @@ def main() -> int:
         action="store_true",
         help="start even when implement.jsonl / check.jsonl have no curated entries",
     )
+    p_start.add_argument(
+        "--allow-unapproved",
+        action="store_true",
+        help="start without a matching approval.json (recorded in task.json)",
+    )
     p_start.set_defaults(func=cmd_start)
 
     p_current = sub.add_parser("current", help="show the active task")
@@ -823,6 +1191,21 @@ def main() -> int:
     p_add.add_argument("path", help="file or directory to reference, relative to the project root")
     p_add.add_argument("reason", nargs="?", default=None, help="why this entry is included")
     p_add.set_defaults(func=cmd_add_context)
+
+    p_hash = sub.add_parser("plan-hash", help="print the current plan's sha256 (the only plan-hash implementation)")
+    p_hash.add_argument("task_dir")
+    p_hash.set_defaults(func=cmd_plan_hash)
+
+    p_gate = sub.add_parser(
+        "gate-info",
+        help="print a one-line JSON snapshot of a task's plan gate (read-only; the approval tool's only read path)",
+    )
+    p_gate.add_argument("task_dir")
+    p_gate.set_defaults(func=cmd_gate_info)
+
+    p_approve = sub.add_parser("approve", help="approve a task's current plan from a human terminal")
+    p_approve.add_argument("task_dir")
+    p_approve.set_defaults(func=cmd_approve)
 
     p_validate = sub.add_parser("validate", help="check a task's jsonl manifests for curated entries")
     p_validate.add_argument("task_dir")

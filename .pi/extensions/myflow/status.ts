@@ -1,8 +1,9 @@
 /**
  * `/myflow-status` report builder.
  *
- * Answers "where am I?" without a model call: active task, workflow phase, and
- * git state. Kept free of Pi runtime imports so `node --test` can exercise it.
+ * Answers "where am I?" without a model call: active task, workflow phase,
+ * git state, and plan-approval state. Kept free of Pi runtime imports so
+ * `node --test` can exercise it.
  */
 
 import { execFileSync } from "node:child_process";
@@ -22,6 +23,18 @@ export interface StatusGit {
   dirty: number;
 }
 
+/**
+ * Read-only snapshot of the plan-approval gate, taken verbatim from
+ * `task.py gate-info`. `status` is passed through unchanged: this module must
+ * not collapse the states into its own predicate (design.md §5.1), so a new
+ * `task.py` state shows up here without a TS change.
+ */
+export interface StatusApproval {
+  status: string;
+  currentHash: string | null;
+  approvedHash: string | null;
+}
+
 export interface StatusReport {
   /** Workflow-state block key that applies right now. */
   phase: string;
@@ -29,9 +42,14 @@ export interface StatusReport {
   phaseBlockFound: boolean;
   task: StatusTask | null;
   git: StatusGit | null;
+  /** Approval state, or null when it cannot be read (no task.py / no task). */
+  approval?: StatusApproval | null;
 }
 
 const GIT_TIMEOUT_MS = 5_000;
+const GATE_TIMEOUT_MS = 5_000;
+/** `task.py`'s project-relative location, resolved against the project root. */
+const TASK_PY_REL = join(".myflow", "scripts", "task.py");
 
 function toPosix(value: string): string {
   return value.split("\\").join("/");
@@ -67,6 +85,51 @@ export function phaseForStatus(status: string | null): string {
   return status;
 }
 
+/**
+ * Read the approval snapshot for a task, or null when it cannot be read.
+ *
+ * The only read path is `task.py gate-info` (design.md §5.1): the plan hash and
+ * the answered-question count have exactly one implementation, and duplicating
+ * either in TS is the drift defect this avoids. Read-only: nothing is written.
+ */
+function readApprovalState(projectRoot: string, taskDir: string): StatusApproval | null {
+  const script = join(projectRoot, TASK_PY_REL);
+  if (!existsSync(script)) return null;
+  try {
+    const output = execFileSync("python3", [script, "gate-info", taskDir], {
+      cwd: projectRoot,
+      encoding: "utf-8",
+      timeout: GATE_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed = JSON.parse(output.trim()) as Record<string, unknown>;
+    const approval = parsed.approval as Record<string, unknown> | undefined;
+    return {
+      status: typeof approval?.status === "string" ? approval.status : "missing",
+      currentHash: typeof parsed.plan_hash === "string" ? parsed.plan_hash : null,
+      approvedHash: typeof approval?.plan_hash === "string" ? approval.plan_hash : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** First `count` hex chars of a `sha256:<hex>` string (or `(none)`). */
+export function shortHash(value: string | null, count = 8): string {
+  if (!value) return "(none)";
+  const hexpart = value.includes(":") ? value.split(":", 2)[1] : value;
+  return hexpart.slice(0, count);
+}
+
+/** Render the approval line for `/myflow-status`; `null` means unreadable. */
+export function formatApproval(approval: StatusApproval | null | undefined): string {
+  if (!approval) return "unavailable (no task.py or no active task)";
+  if (approval.status === "stale") {
+    return `stale (${shortHash(approval.approvedHash)} → ${shortHash(approval.currentHash)})`;
+  }
+  return approval.status;
+}
+
 /** Build the status report for a project and context key. */
 export function buildStatusReport(projectRoot: string, contextKey: string | null): StatusReport {
   const { status, taskDir, taskTitle } = resolveActiveTaskStatus(projectRoot, contextKey);
@@ -95,6 +158,7 @@ export function buildStatusReport(projectRoot: string, contextKey: string | null
     phaseBlockFound,
     task,
     git: readGitStatus(projectRoot),
+    approval: taskDir ? readApprovalState(projectRoot, taskDir) : null,
   };
 }
 
@@ -127,6 +191,7 @@ export function formatStatusReport(report: StatusReport): string {
       ? `Git:    ${report.git.branch || "(detached)"}, ${report.git.dirty} uncommitted change(s)`
       : "Git:    unavailable",
   );
+  lines.push(`Approval: ${formatApproval(report.approval)}`);
   lines.push(`Next:   ${nextActionForPhase(report.phase)}`);
   return lines.join("\n");
 }

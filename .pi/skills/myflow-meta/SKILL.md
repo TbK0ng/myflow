@@ -15,6 +15,8 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
 .pi/
   extensions/myflow/index.ts        # extension factory: hooks + /myflow-status
   extensions/myflow/subagent.ts     # myflow_subagent tool (single/parallel/chain)
+  extensions/myflow/ask.ts          # myflow_ask_user tool (one choice question)
+  extensions/myflow/approval.ts     # myflow_request_approval tool (writes approval.json)
   extensions/myflow/agents.ts       # agent discovery from .pi/agents
   extensions/myflow/status.ts       # status report builder (used by the command)
   extensions/myflow/*.ts            # pure helpers the extension imports: root lookup,
@@ -32,7 +34,7 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
   scripts/worktree.py               # isolated parallel sessions (git worktrees)
   scripts/channel.py                # channel runtime (workers, messages, wait)
   spec/                             # this project's conventions (project-owned)
-  tasks/<slug>/                     # task.json, prd.md, info.md, *.jsonl, research/
+  tasks/<slug>/                     # task.json, prd.md, info.md, *.jsonl, approval.json, research/
   archive/<YYYY-MM>/<slug>/         # archived tasks
   .runtime/sessions/<key>.json      # active-task pointer per session
 tests/                              # harness development only (node --test)
@@ -53,7 +55,7 @@ belong to the project.
 
 ## Runtime: the extension
 
-`.pi/extensions/myflow/` is self-contained: the extension, the tool, the
+`.pi/extensions/myflow/` is self-contained: the extension, the tools, the
 command, the pure helpers, and the type declaration all live in that
 directory. Six hooks are always registered:
 
@@ -63,7 +65,7 @@ directory. Six hooks are always registered:
 | `input` | Reads the skip keyword, starts the turn cache. |
 | `before_agent_start` | Returns the `workflow-state` breadcrumb. |
 | `context` | Replaces a stale `task-context`, re-adds or strips the breadcrumb. |
-| `tool_call` | Blocks `myflow_subagent` inside a sub-agent (recursion guard), and blocks `write`/`edit` outside a declared `writesUnder` scope. |
+| `tool_call` | Blocks `myflow_subagent` inside a sub-agent (recursion guard), blocks `myflow_ask_user` / `myflow_request_approval` inside a sub-agent (main-session-only guard), and blocks `write`/`edit` outside a declared `writesUnder` scope. |
 | `session_before_compact` | Records the compaction timestamp so the breadcrumb is re-injected. |
 | `agent_before_settle` | Holds a `myflow-check` sub-agent until the configured verify commands pass (bounded retries). |
 
@@ -87,8 +89,16 @@ agent declares a write scope), and emits
 `myflow-subagent-progress`. Agents without `model`/`thinking` inherit both from
 the caller.
 
+`myflow_ask_user` and `myflow_request_approval` implement the plan-approval
+gate and take the same injected `deriveContextKey` / `isSubAgent` as
+`myflow_subagent`, so neither imports `index.ts`. The first asks one 2-4 option
+question through `ctx.ui.select` and appends `questions.jsonl`; the second
+confirms through `ctx.ui.confirm` and writes `approval.json` only on consent.
+With no interactive UI both return instructions instead of fabricating an answer
+or an approval. The gate's contracts live in `references/harness-conventions.md`.
+
 `/myflow-status` is a real Pi command (no model call): it prints the active
-task, the workflow phase, and git state.
+task, the workflow phase, the plan-approval state, and git state.
 
 ## Runtime: identity and the shell bridge
 
@@ -119,6 +129,9 @@ for that turn. `session-context` and `task-context` are not suppressed.
 ```bash
 python3 .myflow/scripts/task.py create "<title>" [--slug <name>] [--parent <dir>]
 python3 .myflow/scripts/task.py start .myflow/tasks/<slug>   # activates, planning -> in_progress
+python3 .myflow/scripts/task.py approve .myflow/tasks/<slug> # human approval of the current plan
+python3 .myflow/scripts/task.py plan-hash .myflow/tasks/<slug>   # the only plan-hash implementation
+python3 .myflow/scripts/task.py gate-info .myflow/tasks/<slug>   # read-only gate snapshot (JSON)
 python3 .myflow/scripts/task.py current [--source] [--json]
 python3 .myflow/scripts/task.py archive .myflow/tasks/<slug> # completed + moves to archive/<YYYY-MM>/
 python3 .myflow/scripts/task.py add-subtask <parent> <child>
@@ -128,6 +141,12 @@ python3 .myflow/scripts/task.py list [--status <s>] [--json]
 Statuses: `planning -> in_progress -> done`; `archive` rewrites to `completed`.
 The workflow-state block key equals the status (`no_task` when there is none,
 `completed` for archived work).
+
+`start` now runs two gates after the context-manifest gate: `questions.jsonl`
+must hold at least one answered choice question, and `approval.json`'s
+`plan_hash` must match the current plan hash. Editing any plan file after
+approval makes it stale, so it must be approved again; `--allow-unapproved`
+skips the gate knowingly and records `started_without_approval` in `task.json`.
 
 ## Workflow
 
@@ -159,6 +178,7 @@ with this skill in `references/harness-conventions.md`.
 | --- | --- |
 | A hook's behavior | `.pi/extensions/myflow/index.ts` |
 | `myflow_subagent` modes, progress, spawn flags | `.pi/extensions/myflow/subagent.ts` |
+| Choice questions, plan approval, the gate | `.pi/extensions/myflow/ask.ts`, `.pi/extensions/myflow/approval.ts`; enforcing side in `.myflow/scripts/task.py` |
 | Which agent files exist / their tools | `.pi/agents/*.md`; discovery in `agents.ts` |
 | `/myflow-status` output | `.pi/extensions/myflow/status.ts` |
 | Task context budgets or trust rules | `.myflow/config.yaml`, `.pi/extensions/myflow/context-injection.ts` |
