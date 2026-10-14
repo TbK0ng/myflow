@@ -189,10 +189,11 @@ test("F3 -1 起一个长跑命令 → 工具在 2000ms 内返回（立刻返回�
   try {
     const tool = makeTool();
     const ctx = fakeCtx(root);
-    // Windows cmd.exe 与 POSIX sh 都能跑 `node -e "..."`。探针只睡 4s：
-    // 断言界是 2000ms，4s 已是它的两倍，足以区分「立刻返回」与「等到退出」；
-    // 10s 毫无必要，只会在本机内存紧张时把进程多留 8 秒。
-    const longRunning = 'node -e "setTimeout(function(){}, 4000)"';
+    // 探针由 shell 启动（`cmd.exe /d /s /c "…"`），与生产路径一致。
+    // 只睡 4s：断言界是 2000ms，4s 已是它的两倍，足以区分「立刻返回」与「等到退出」；
+    // 10s 毫无必要，只会在资源紧张时把进程多留 8 秒。
+    // ⚠️ 该探针需要 PATH 上有 `powershell`（Windows-only）；此前的 `node -e` 探针只需 `node`。
+    const longRunning = 'powershell -NoProfile -Command "Start-Sleep -Seconds 4"';
 
     const startedAt = Date.now();
     const result = await tool.execute("call-1", { command: longRunning }, undefined, undefined, ctx);
@@ -225,7 +226,10 @@ test("F3 -2 confirm 为 true → 进程真的起来，且注册表条目已写",
         },
       },
     });
-    const command = 'node -e "console.log(\'bg-start-marker\'); setTimeout(function(){}, 4000)"';
+    // 必须仍然产生输出：下面的断言靠日志里出现 `bg-start-marker` 来证明
+    // 「子进程真的起来了」。PowerShell 写的是 CRLF，断言用的是 includes，不受影响。
+    const command =
+      'powershell -NoProfile -Command "Write-Output bg-start-marker; Start-Sleep -Seconds 4"';
     const result = await makeTool().execute(
       "call-2",
       { command, description: "alive check" },
