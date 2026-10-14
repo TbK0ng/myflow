@@ -22,7 +22,9 @@ function makeProject(): string {
     "Write the code.",
     "[/workflow-state:implementing]",
   ].join("\n"));
-  const taskDir = join(root, "tasks", "demo");
+  // The real layout `task.py` writes: `.myflow/tasks/<slug>`, with the session
+  // pointer holding that same `.myflow/tasks/<slug>` ref.
+  const taskDir = join(root, ".myflow", "tasks", "demo");
   mkdirSync(taskDir, { recursive: true });
   writeFileSync(join(taskDir, "task.json"), JSON.stringify({
     title: "Demo task",
@@ -30,7 +32,7 @@ function makeProject(): string {
   }));
   writeFileSync(
     join(root, ".myflow", ".runtime", "sessions", "pi_session_test.json"),
-    JSON.stringify({ current_task: "tasks/demo" }),
+    JSON.stringify({ current_task: ".myflow/tasks/demo" }),
   );
   return root;
 }
@@ -178,7 +180,7 @@ test("myflow-status command is registered and reports task, phase, and git", asy
   const message = sent.find((m) => m.customType === "myflow-status");
   assert.ok(message, "command must send a myflow-status message");
   assert.match(message!.content!, /myflow: implementing/);
-  assert.match(message!.content!, /Task:   tasks\/demo \(implementing\)/);
+  assert.match(message!.content!, /Task:   \.myflow\/tasks\/demo \(implementing\)/);
   assert.match(message!.content!, /Git:/);
   rmSync(root, { recursive: true, force: true });
 });
@@ -186,7 +188,7 @@ test("myflow-status command is registered and reports task, phase, and git", asy
 test("session_start: sends task-context when prd.md exists (real task resolution)", async () => {
   const root = makeProject();
   // Add a prd.md so getTaskContext returns non-empty content.
-  writeFileSync(join(root, "tasks", "demo", "prd.md"), "# Demo PRD\nBuild the thing.");
+  writeFileSync(join(root, ".myflow", "tasks", "demo", "prd.md"), "# Demo PRD\nBuild the thing.");
   const { api, sent } = makeMockAPI(root);
   extension(api);
   const handlers = getHandlers(api);
@@ -200,7 +202,7 @@ test("session_start: sends task-context when prd.md exists (real task resolution
 
 test("context: replaces stale task-context with current prd.md", async () => {
   const root = makeProject();
-  writeFileSync(join(root, "tasks", "demo", "prd.md"), "# Demo PRD\nBuild the thing.");
+  writeFileSync(join(root, ".myflow", "tasks", "demo", "prd.md"), "# Demo PRD\nBuild the thing.");
   const { api } = makeMockAPI(root);
   extension(api);
   const handlers = getHandlers(api);

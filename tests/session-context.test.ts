@@ -19,7 +19,9 @@ function makeProject(withTask: boolean): string {
     "[/workflow-state:implementing]",
   ].join("\n"));
   if (withTask) {
-    const taskDir = join(root, "tasks", "demo");
+    // The real layout `task.py` writes: `.myflow/tasks/<slug>`, with the session
+    // pointer holding that same `.myflow/tasks/<slug>` ref.
+    const taskDir = join(root, ".myflow", "tasks", "demo");
     mkdirSync(taskDir, { recursive: true });
     writeFileSync(join(taskDir, "task.json"), JSON.stringify({
       title: "Demo task",
@@ -27,7 +29,7 @@ function makeProject(withTask: boolean): string {
     }));
     writeFileSync(
       join(root, ".myflow", ".runtime", "sessions", "pi_session_test.json"),
-      JSON.stringify({ current_task: "tasks/demo" }),
+      JSON.stringify({ current_task: ".myflow/tasks/demo" }),
     );
   }
   return root;

@@ -106,25 +106,52 @@ def _now() -> str:
 
 
 def _relative(path: Path) -> str:
+    """Repo-relative posix ref, or "" when the path leaves the project.
+
+    Returning "" instead of the absolute path matters: an absolute ref is how
+    a task outside the repo used to reach the session pointer and be replayed
+    on every later turn (a resolver must refuse it the same way).
+    """
     try:
         return path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
     except ValueError:
-        return path.as_posix()
+        return ""
+
+
+def _is_within_tasks_dir(path: Path) -> bool:
+    """True when ``path`` resolves to a directory strictly inside the tasks dir.
+
+    Both sides are resolved so ``..`` escapes and symlinks that leave the
+    tasks tree are folded before the comparison.
+    """
+    try:
+        resolved = path.resolve()
+        tasks_root = TASKS_DIR.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return resolved != tasks_root and tasks_root in resolved.parents
 
 
 def _task_dir_for(slug: str) -> Path:
     return TASKS_DIR / slug
 
 
-def _resolve_task_dir(raw: str) -> Path:
-    """Accept a task slug or a project-relative/absolute task directory."""
+def _resolve_task_dir(raw: str) -> Path | None:
+    """Resolve a task slug or path to a directory under ``.myflow/tasks/``.
+
+    Returns ``None`` when the target would fall outside the tasks directory, so
+    an absolute, ``..``-escaping, or symlinked-away ref can never become the
+    active-task pointer.
+    """
     candidate = Path(raw)
     if candidate.is_absolute():
-        return candidate
-    direct = PROJECT_ROOT / candidate
-    if direct.is_dir():
-        return direct
-    return TASKS_DIR / raw
+        resolved = candidate
+    else:
+        direct = PROJECT_ROOT / candidate
+        resolved = direct if direct.is_dir() else TASKS_DIR / raw
+    if not _is_within_tasks_dir(resolved):
+        return None
+    return resolved
 
 
 def _write_task(task_dir: Path, data: dict) -> None:
@@ -220,6 +247,12 @@ def _clear_sessions_pointing_at(task_dir: Path) -> int:
 def cmd_create(args: argparse.Namespace) -> int:
     slug = args.slug or _slugify(args.title)
     task_dir = _task_dir_for(slug)
+    if not _is_within_tasks_dir(task_dir):
+        print(
+            f"error: refusing to create '{slug}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
     if (task_dir / "task.json").exists():
         print(f"error: task '{slug}' already exists", file=sys.stderr)
         return 1
@@ -247,6 +280,12 @@ def cmd_create(args: argparse.Namespace) -> int:
 
 def cmd_start(args: argparse.Namespace) -> int:
     task_dir = _resolve_task_dir(args.task_dir)
+    if task_dir is None:
+        print(
+            f"error: refusing to start '{args.task_dir}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
     task = _read_task(task_dir)
     if task is None:
         print(f"error: no task.json in {args.task_dir}", file=sys.stderr)
@@ -309,6 +348,12 @@ def cmd_current(args: argparse.Namespace) -> int:
 
 def cmd_archive(args: argparse.Namespace) -> int:
     task_dir = _resolve_task_dir(args.task_dir)
+    if task_dir is None:
+        print(
+            f"error: refusing to archive '{args.task_dir}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
     task = _read_task(task_dir)
     if task is None:
         print(f"error: no task.json in {args.task_dir}", file=sys.stderr)
@@ -335,6 +380,18 @@ def cmd_archive(args: argparse.Namespace) -> int:
 def cmd_add_subtask(args: argparse.Namespace) -> int:
     parent_dir = _resolve_task_dir(args.parent_dir)
     child_dir = _resolve_task_dir(args.child_dir)
+    if parent_dir is None:
+        print(
+            f"error: refusing to link '{args.parent_dir}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
+    if child_dir is None:
+        print(
+            f"error: refusing to link '{args.child_dir}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
     parent = _read_task(parent_dir)
     child = _read_task(child_dir)
     if parent is None:

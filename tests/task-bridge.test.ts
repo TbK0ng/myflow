@@ -247,3 +247,116 @@ test("task.py create never hijacks a session that is already on a task", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// W2 / P0-4: the write side refuses to aim the session pointer outside
+// `.myflow/tasks/`.
+//
+// The read side alone is not enough: myflow writes the pointer itself, so a
+// poisoned ref (an absolute path, a `..` escape) would be re-created on every
+// create/start/archive. `_relative()` no longer falls back to an absolute path
+// and `_resolve_task_dir()` returns None outside the tasks tree, which every
+// caller turns into a refusal. The invariant is containment, not "reject
+// absolute paths": an absolute path that stays inside tasks/ is still valid.
+// ---------------------------------------------------------------------------
+
+function runTaskFailure(root: string, args: string[], env: Record<string, string> = {}) {
+  const result = spawnSync("python3", [TASK_PY, ...args], {
+    cwd: root,
+    encoding: "utf-8",
+    env: { ...process.env, ...env },
+  });
+  assert.notEqual(result.status, 0, `task.py ${args.join(" ")} must fail`);
+  return result;
+}
+
+test("task.py start refuses a target outside .myflow/tasks/ and leaves the pointer alone", () => {
+  const root = makeProject();
+  const outside = mkdtempSync(join(tmpdir(), "myflow-outside-task-"));
+  // A plausible task.json outside tasks/ (and one just above it) so a missing
+  // containment check would resolve a real task instead of failing on absence.
+  writeFileSync(join(outside, "task.json"), JSON.stringify({ status: "in_progress" }));
+  mkdirSync(join(root, ".myflow", "escape"), { recursive: true });
+  writeFileSync(join(root, ".myflow", "escape", "task.json"), JSON.stringify({ status: "in_progress" }));
+  mkdirSync(join(root, "outside-root"), { recursive: true });
+  writeFileSync(join(root, "outside-root", "task.json"), JSON.stringify({ status: "in_progress" }));
+  try {
+    runTask(root, ["create", "Guarded", "--slug", "guarded"], { PI_SESSION_ID: "guard-ptr" });
+    const sessionFile = join(root, ".myflow", ".runtime", "sessions", "pi_guard-ptr.json");
+    assert.equal(JSON.parse(readFileSync(sessionFile, "utf-8")).current_task, ".myflow/tasks/guarded");
+
+    const escapes = [
+      "..",
+      "../..",
+      ".myflow/tasks/../escape",
+      ".myflow/tasks/../../outside-root",
+      "../outside-project",
+      outside,
+    ];
+    for (const target of escapes) {
+      const result = runTaskFailure(root, ["start", target], { PI_SESSION_ID: "guard-ptr" });
+      assert.match(result.stderr, /refusing to start/, `start ${target} must explain the refusal`);
+    }
+
+    // The escaped targets are refused, not written through; the pointer is
+    // exactly where `create` left it and the task is still `planning`.
+    assert.equal(JSON.parse(readFileSync(sessionFile, "utf-8")).current_task, ".myflow/tasks/guarded");
+    assert.equal(resolveActiveTaskStatus(root, "pi_guard-ptr").status, "planning");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("task.py archive refuses a target outside .myflow/tasks/", () => {
+  const root = makeProject();
+  const outside = mkdtempSync(join(tmpdir(), "myflow-outside-archive-"));
+  writeFileSync(join(outside, "task.json"), JSON.stringify({ status: "in_progress" }));
+  try {
+    const result = runTaskFailure(root, ["archive", outside]);
+    assert.match(result.stderr, /refusing to archive/);
+    assert.ok(existsSync(join(outside, "task.json")), "a refused archive must not move the dir");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("task.py start accepts an absolute target that stays inside .myflow/tasks/", () => {
+  const root = makeProject();
+  try {
+    runTask(root, ["create", "Absolute task", "--slug", "abs-task"], { PI_SESSION_ID: "abs-ptr" });
+    // Containment, not absolute-path rejection: this absolute path is inside
+    // tasks/, so it is a legitimate target.
+    runTask(root, ["start", join(root, ".myflow", "tasks", "abs-task")], { PI_SESSION_ID: "abs-ptr" });
+    assert.equal(resolveActiveTaskStatus(root, "pi_abs-ptr").status, "in_progress");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("task.py start with a case-varied target follows the platform filesystem", () => {
+  const root = makeProject();
+  try {
+    runTask(root, ["create", "Case task", "--slug", "case-task"], { PI_SESSION_ID: "case-ptr" });
+    const result = spawnSync("python3", [TASK_PY, "start", ".MYFLOW/TASKS/CASE-TASK"], {
+      cwd: root,
+      encoding: "utf-8",
+      env: { ...process.env, PI_SESSION_ID: "case-ptr" },
+    });
+    const sessionFile = join(root, ".myflow", ".runtime", "sessions", "pi_case-ptr.json");
+    if (process.platform === "win32") {
+      // NTFS folds case: the same directory is reached, and the pointer stays
+      // inside tasks/ whichever casing was typed.
+      assert.equal(result.status, 0, result.stderr);
+      const pointer = JSON.parse(readFileSync(sessionFile, "utf-8")).current_task as string;
+      assert.equal(pointer.replaceAll("\\", "/").toLowerCase(), ".myflow/tasks/case-task");
+    } else {
+      // POSIX is case-sensitive: the case-varied path is a different, absent
+      // directory, so the start is rejected.
+      assert.notEqual(result.status, 0, "POSIX is case-sensitive: the target does not exist");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
