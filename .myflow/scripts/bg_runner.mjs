@@ -29,17 +29,17 @@
  *     fallback. The resolved absolute path is recorded in `<exitPath>` under
  *     `shell`, on both the success and failure records, so "which shell ran
  *     this?" is always answerable after the fact.
- *   - The command's stdout and stderr are pointed at the log file's descriptor
- *     directly, so the kernel writes them; nothing is buffered in this process
- *     (`design.md` §2). Appended bytes are visible to another process that
- *     reads the file while the command is still running.
- *   - **Platform trap (measured)**: that descriptor is opened `"w"`, not `"a"`.
- *     Git Bash is an MSYS program, and on this Node/Windows an append-mode
- *     (`O_APPEND`) file descriptor handed to it through `stdio` is not usable:
- *     the shell starts and every write fails with `Bad file descriptor`
- *     (`cmd.exe` accepts the same descriptor, but the shell we resolve is bash).
- *     A `"w"` descriptor works. Because a task id is unique, its log file is
- *     never reused, so truncate-on-open changes nothing observable.
+ *   - The shell itself performs the redirection into the log (`>>`, append), so
+ *     the command's stdout and stderr are written by the kernel and nothing is
+ *     buffered in this process (`design.md` §2). Appended bytes are visible to
+ *     another process that reads the file while the command is still running.
+ *   - The child is started with `stdio: "ignore"` and **no descriptor of any
+ *     kind is handed to it**. Passing an inherited descriptor as a standard
+ *     handle makes libuv restrict the child's inherited handles, and on Windows
+ *     that `CreateProcess` path can fail with `ERROR_NO_SYSTEM_RESOURCES` (232).
+ *     Letting the shell open the log removes that path entirely. The log path is
+ *     quoted for the shell that receives it (`quoteForBash` / `quoteForCmd`), so
+ *     a path containing spaces or quotes cannot break out of the redirection.
  *   - When the command exits this script writes `<exitPath>`:
  *       `{"exit_code":N,"signal":S,"at":"<ISO>","shell":"<path>"}` on a
  *       normal exit,
@@ -64,10 +64,8 @@
 
 import { spawn } from "node:child_process";
 import {
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -258,16 +256,52 @@ export function isCmdShell(shellPath) {
 }
 
 /**
- * The argv a resolved shell needs to run one command string.
+ * Quote a path for POSIX shell use with single quotes.
+ *
+ * A single-quoted string is literal in every POSIX shell, so spaces, `&`, `>`
+ * and `$` cannot escape it. The one character it cannot contain is a single
+ * quote itself, which is emitted as `'\''` (close quote, escaped quote, reopen
+ * quote). The log path is project-relative, but a test temp directory — or a
+ * user's checkout — can contain spaces or quotes, so this must not assume
+ * otherwise.
+ */
+export function quoteForBash(value) {
+  return `'${value.split("'").join("'\\''")}'`;
+}
+
+/**
+ * Quote a path for `cmd.exe` use with double quotes.
+ *
+ * A Windows file path cannot contain a double quote, so wrapping is normally
+ * enough; an embedded quote (which the filesystem would have rejected anyway)
+ * is doubled, cmd's own escape for a literal quote inside a quoted string.
+ */
+export function quoteForCmd(value) {
+  return `"${value.split('"').join('""')}"`;
+}
+
+/**
+ * The argv a resolved shell needs to run one command and append its output to
+ * `logPath`.
  *
  * The command is always a **single** element: that is the whole point of
  * spawning the shell ourselves. bash receives `-lc` (a login shell, matching
- * how the user's Git Bash runs); anything that is not `cmd.exe` is treated as a
+ * how the user's Git Bash runs) with an `exec` redirection, so every command the
+ * shell runs inherits the log; anything that is not `cmd.exe` is treated as a
  * POSIX shell, which is what the resolution order guarantees here.
+ *
+ * The redirection is performed by the **shell**, not by this process handing it
+ * an open descriptor. A descriptor passed through `stdio` is a *standard
+ * handle*, and libuv restricts the child's inherited handles when one is set;
+ * on Windows that `CreateProcess` path can fail with
+ * `ERROR_NO_SYSTEM_RESOURCES`. `>>` also gives append semantics without an
+ * `O_APPEND` descriptor.
  */
-export function shellArgsFor(shellPath, command) {
-  if (isCmdShell(shellPath)) return ["/d", "/s", "/c", command];
-  return ["-lc", command];
+export function shellArgsFor(shellPath, command, logPath) {
+  if (isCmdShell(shellPath)) {
+    return ["/d", "/s", "/c", `${command} >> ${quoteForCmd(logPath)} 2>&1`];
+  }
+  return ["-lc", `exec >> ${quoteForBash(logPath)} 2>&1; ${command}`];
 }
 
 function sleepSync(milliseconds) {
@@ -405,7 +439,7 @@ function spawnFailureRecord(error, attempts, shellPath) {
  *
  * @param {{
  *   command: string,
- *   logFd: number,
+ *   logPath: string,
  *   cwd: string,
  *   onOutcome: (payload: Record<string, unknown>, runnerCode: number) => void,
  *   shellPath?: string,
@@ -420,7 +454,7 @@ function spawnFailureRecord(error, attempts, shellPath) {
 export function runCommand(options) {
   const {
     command,
-    logFd,
+    logPath,
     cwd,
     onOutcome,
     shellPath = resolveShellPath(),
@@ -434,7 +468,7 @@ export function runCommand(options) {
   // The command is the final element of the shell's argv — never re-quoted into
   // a command string of our own (that is what `shell: true` does wrong on
   // Windows).
-  const shellArgs = shellArgsFor(shellPath, command);
+  const shellArgs = shellArgsFor(shellPath, command, logPath);
 
   return new Promise((resolve) => {
     let attempts = 0;
@@ -453,11 +487,12 @@ export function runCommand(options) {
       attempts += 1;
       let child;
       try {
-        // The command writes straight to the log's descriptor. Using "pipe" and
-        // forwarding by hand would buffer output and break the "read new bytes
-        // while it still runs" guarantee. The shell is started with argv, so
-        // the command string reaches it as one element.
-        child = spawnImpl(shellPath, shellArgs, { cwd, stdio: ["ignore", logFd, logFd] });
+        // The shell opens the log itself (`>>`) and the command inherits that
+        // redirection. Using "pipe" and forwarding by hand would buffer output
+        // and break the "read new bytes while it still runs" guarantee; handing
+        // a descriptor over as a standard handle would push libuv onto the
+        // Windows handle-list path that can fail with ERROR_NO_SYSTEM_RESOURCES.
+        child = spawnImpl(shellPath, shellArgs, { cwd, stdio: "ignore" });
       } catch (error) {
         // A synchronous throw from `spawn` means the process was never created,
         // so it is as safe to retry as an asynchronous `'error'`.
@@ -528,9 +563,9 @@ function main() {
 
   const exitPath = options.exit;
   // Resolve the shell once, up front: every `.exit` record (including the
-  // no-command and log-open failures below) then says which shell this task
-  // would have used. A failure to *create* that shell is retried and reported
-  // by `runCommand`, not here.
+  // no-command and log-directory failures below) then says which shell this
+  // task would have used. A failure to *create* that shell is retried and
+  // reported by `runCommand`, not here.
   const shellPath = resolveShellPath();
   const record = (payload, runnerCode) => {
     try {
@@ -550,14 +585,11 @@ function main() {
     return;
   }
 
-  let logFd;
+  // The shell creates the log file with its own `>>` redirection, so this
+  // process hands no descriptor to the child at all. The directory still has to
+  // exist: `>>` creates the file, not the folders leading to it.
   try {
     mkdirSync(dirname(options.log), { recursive: true });
-    // Opened with "w", NOT "a" (see the platform trap below). Each task has a
-    // unique id and therefore its own never-reused log, so truncating on open is
-    // correct: the file is fresh, and bash writes it progressively through the
-    // kernel so a reader still sees appended bytes while the command runs.
-    logFd = openSync(options.log, "w");
   } catch (error) {
     record(
       { exit_code: null, error: messageOf(error), at: isoTimestamp(), shell: shellPath },
@@ -566,29 +598,16 @@ function main() {
     return;
   }
 
-  let recorded = false;
-  const settle = (payload, runnerCode) => {
-    if (recorded) return;
-    recorded = true;
-    try {
-      closeSync(logFd);
-    } catch {
-      /* already closed or never opened */
-    }
-    record(payload, runnerCode);
-  };
-
-  // `runCommand` owns process creation (through the resolved shell, writing
-  // straight to the log's descriptor), the argv it is spawned with, and the
-  // bounded retry policy. `settle` owns the log descriptor and the `.exit`
-  // record the outcome is written into; the wrapper never sees the child
-  // directly.
+  // `runCommand` owns process creation (through the resolved shell, which
+  // performs the redirection into the log), the argv it is spawned with, and
+  // the bounded retry policy. `record` writes the `.exit` outcome; the wrapper
+  // never sees the child directly.
   runCommand({
     command: options.command,
     cwd: process.cwd(),
-    logFd,
+    logPath: options.log,
     shellPath,
-    onOutcome: (payload, runnerCode) => settle(payload, runnerCode),
+    onOutcome: (payload, runnerCode) => record(payload, runnerCode),
   });
 }
 

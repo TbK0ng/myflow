@@ -1,10 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  closeSync,
   existsSync,
   mkdtempSync,
-  openSync,
   readFileSync,
   rmSync,
   statSync,
@@ -16,6 +14,8 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import {
   isCmdShell,
+  quoteForBash,
+  quoteForCmd,
   resolveShellPath,
   runCommand,
   shellArgsFor,
@@ -65,6 +65,38 @@ function runRunner(
 
 function makeDir(): string {
   return mkdtempSync(join(tmpdir(), "myflow-bg-runner-"));
+}
+
+/** Poll `predicate` until it is true or `timeoutMs` elapses. */
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("condition not met before timeout");
+}
+
+/** Whether a pid is still alive (`kill(pid, 0)` never signals, only probes). */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every number nested anywhere in `value` (a passed fd is exactly such a number). */
+function collectNumbers(value: unknown, out: number[] = []): number[] {
+  if (typeof value === "number") {
+    out.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectNumbers(item, out);
+  } else if (value && typeof value === "object") {
+    for (const item of Object.values(value)) collectNumbers(item, out);
+  }
+  return out;
 }
 
 test("bg runner -1: command output lands in the log and exit_code 0 is recorded", () => {
@@ -282,12 +314,8 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
   // 回退点：删掉重试 → calls===3 与 retries===2 变红；删掉 retriesField → retries 断言变红；
   //        用 'exit' 而不是 'spawn' 判定成功 → 重试逻辑不生效/命令跑两次。
   const dir = makeDir();
-  let logFd = -1;
   try {
     const log = join(dir, "retry.log");
-    // 与 bg_runner 一致用 "w"：MSYS bash 无法使用以 "a"（O_APPEND）打开并
-    // 经 stdio 传入的描述符（会报 Bad file descriptor），"w" 可以。
-    logFd = openSync(log, "w");
 
     // 桩：前两次以 EAGAIN 失败（进程从未创建），第三次交给真实 spawn。
     // 注意新的 spawn 形态：外壳与参数是分开的 argv，命令是 args 的最后一个元素。
@@ -314,7 +342,7 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
     let runnerCode: number | undefined;
     const outcome = await runCommand({
       command: "echo retried-ok",
-      logFd,
+      logPath: log,
       cwd: dir,
       spawnImpl: spawnImpl as unknown as typeof spawn,
       wait: () => {},
@@ -323,8 +351,6 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
         runnerCode = code;
       },
     });
-    closeSync(logFd);
-    logFd = -1;
 
     assert.equal(calls, 3, "前两次 EAGAIN 失败后必须再试一次");
     assert.equal(outcome.attempts, 3);
@@ -333,7 +359,6 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
     assert.equal(runnerCode, 0);
     assert.match(readFileSync(log, "utf-8"), /retried-ok/, "第三次尝试必须真的执行了命令");
   } finally {
-    if (logFd >= 0) closeSync(logFd);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -341,10 +366,8 @@ test("H1b -1 瞬时创建失败会被有界重试，且 .exit 记录重试次数
 test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记录原因", async () => {
   // 回退点：把 isRetryableSpawnError 改成恒 true → calls 变成 3，断言变红。
   const dir = makeDir();
-  let logFd = -1;
   try {
     const log = join(dir, "no-retry.log");
-    logFd = openSync(log, "w");
 
     let calls = 0;
     const spawnImpl = () => {
@@ -361,7 +384,7 @@ test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记�
     let record: Record<string, unknown> | undefined;
     const outcome = await runCommand({
       command: "no-such-command-xyz",
-      logFd,
+      logPath: log,
       cwd: dir,
       spawnImpl: spawnImpl as unknown as typeof spawn,
       wait: () => {},
@@ -369,8 +392,6 @@ test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记�
         record = payload;
       },
     });
-    closeSync(logFd);
-    logFd = -1;
 
     assert.equal(calls, 1, "ENOENT 重试也不会好转，必须只尝试一次");
     assert.equal(outcome.attempts, 1);
@@ -378,7 +399,6 @@ test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记�
     assert.match(String(record?.error), /ENOENT/);
     assert.equal(record?.retries, undefined, "没有重试时省略 retries");
   } finally {
-    if (logFd >= 0) closeSync(logFd);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -520,15 +540,123 @@ test("bg runner -7: resolveShellPath 顺序固定（override -> settings -> Git 
     "C:\\Windows\\System32\\cmd.exe",
   );
 
-  // 6. 参数形态：命令必须作为单个 argv 元素（这正是消灭二次解析的关键）。
-  assert.deepEqual(shellArgsFor(gitBash, "echo hi"), ["-lc", "echo hi"]);
-  assert.deepEqual(shellArgsFor("C:\\Windows\\System32\\cmd.exe", "echo hi"), [
+  // 6. 参数形态：命令必须作为单个 argv 元素（这正是消灭二次解析的关键），
+  //    重定向由外壳完成，日志路径按各自外壳的引用规则转义。
+  assert.deepEqual(shellArgsFor(gitBash, "echo hi", "/tmp/task.log"), [
+    "-lc",
+    "exec >> '/tmp/task.log' 2>&1; echo hi",
+  ]);
+  // 含空格与单引号的日志路径：单引号必须转成 '\''，否则路径会被截断。
+  assert.deepEqual(shellArgsFor(gitBash, "echo hi", "/tmp/my log's.task.log"), [
+    "-lc",
+    "exec >> '/tmp/my log'\\''s.task.log' 2>&1; echo hi",
+  ]);
+  assert.deepEqual(shellArgsFor("C:\\Windows\\System32\\cmd.exe", "echo hi", "C:\\tmp dir\\task.log"), [
     "/d",
     "/s",
     "/c",
-    "echo hi",
+    'echo hi >> "C:\\tmp dir\\task.log" 2>&1',
   ]);
   assert.equal(isCmdShell("cmd.exe"), true);
   assert.equal(isCmdShell("/bin/sh"), false);
   assert.equal(isCmdShell(gitBash), false);
+
+  // quoteForBash / quoteForCmd 的单测（回退点：改掉转义规则 → 断言变红）。
+  assert.equal(quoteForBash("/a b/c"), "'/a b/c'");
+  assert.equal(quoteForBash("a'b"), "'a'\\''b'");
+  assert.equal(quoteForCmd("C:\\a b\\c"), '"C:\\a b\\c"');
+});
+
+// ---- S2: the redirection moved from an inherited descriptor to the shell ----
+//
+// S2 root cause: passing an open descriptor as a *standard handle* makes libuv
+// restrict the child's inherited handles, and on Windows that `CreateProcess`
+// path can fail with ERROR_NO_SYSTEM_RESOURCES (232). The fix is to hand the
+// child nothing (`stdio: "ignore"`) and let the shell open the log itself.
+
+test('S2 -1: spawn 用 stdio:"ignore"，不向子进程传任何描述符', async () => {
+  // 回退点：把 spawn 改回 stdio: ["ignore", logFd, logFd]（或以任何形式传数字 fd）
+  //         → `options.stdio === "ignore"` 与 `collectNumbers === []` 两条断言变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "invariant.log");
+    const captured: Array<Record<string, unknown>> = [];
+    const spawnImpl = (
+      shell: string,
+      args: readonly string[],
+      options: Parameters<typeof spawn>[2],
+    ) => {
+      captured.push(options as unknown as Record<string, unknown>);
+      return spawn(shell, args, options);
+    };
+    let record: Record<string, unknown> | undefined;
+    await runCommand({
+      command: "echo invariant-ok",
+      logPath: log,
+      cwd: dir,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      onOutcome: (payload) => {
+        record = payload;
+      },
+    });
+
+    assert.ok(captured.length >= 1, "至少要真正 spawn 一次");
+    for (const options of captured) {
+      assert.equal(options.stdio, "ignore", 'spawn 必须使用 stdio:"ignore"');
+      assert.deepEqual(collectNumbers(options), [], "spawn options 里不得出现任何数字 fd");
+    }
+    assert.equal(record?.exit_code, 0);
+    assert.match(readFileSync(log, "utf-8"), /invariant-ok/, "输出仍必须进入日志");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("S2 -2: 命令仍在运行时，另一个进程能立刻读到已写入的日志字节", async () => {
+  // 回退点：改成 pipe 转发、重新传 fd、或在 runner 里自行缓冲 → 运行中读不到
+  //         live-marker，waitFor 超时抛错变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "live.log");
+    const exit = join(dir, "live.exit");
+    const child = spawn(
+      process.execPath,
+      [RUNNER, "--id", "bg-test", "--log", log, "--exit", exit, "--", "echo live-marker; sleep 4"],
+      { cwd: dir, stdio: "ignore" },
+    );
+    try {
+      await waitFor(
+        () => existsSync(log) && readFileSync(log, "utf-8").includes("live-marker"),
+        5000,
+      );
+      assert.match(readFileSync(log, "utf-8"), /live-marker/, "命令活着时日志必须已可见");
+      assert.equal(existsSync(exit), false, "命令还在跑时不得写出 .exit");
+      assert.equal(isAlive(child.pid!), true, "读取时命令进程必须仍然活着");
+    } finally {
+      child.kill("SIGKILL");
+      await once(child, "close").catch(() => {});
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("S2 -3: 日志路径含空格/单引号、命令含引号与空格都能跑通", () => {
+  // 回退点：去掉 quoteForBash 的引号包裹或单引号转义 → 含空格的日志路径被 shell
+  //         拆成多个参数，重定向失败，marker 进不了日志（marker 断言变红）。
+  const dir = mkdtempSync(join(tmpdir(), "myflow bg space-"));
+  try {
+    const log = join(dir, "a log file's name.log");
+    const exit = join(dir, "a log file's name.exit");
+    const result = runRunner(
+      ["--id", "bg-test", "--log", log, "--exit", exit, "--", 'echo "quoted marker with spaces"'],
+      { cwd: dir },
+    );
+    assert.equal(result.status, 0, "含空格日志路径的命令必须成功");
+    assert.match(readFileSync(log, "utf-8"), /quoted marker with spaces/);
+    const record = JSON.parse(readFileSync(exit, "utf-8"));
+    assert.equal(record.exit_code, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
