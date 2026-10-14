@@ -11,6 +11,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import {
   backgroundDir,
   createBgStartTool,
@@ -18,6 +19,7 @@ import {
   exitPath,
   listEntries,
   logPath,
+  readEntry,
 } from "../.pi/extensions/myflow/background.ts";
 
 // F3 — `myflow_bg_start`（`.pi/extensions/myflow/background.ts`）。
@@ -31,7 +33,7 @@ import {
 // 绝不读写仓库真实的 `.myflow/.runtime/`，也绝不留孤儿进程。
 //
 // 回退点（删掉即变红）：
-//   -1：把工具改成 await 子进程 exit → elapsed ≈ 10s，`< 2000ms` 断言变红。
+//   -1：把工具改成 await 子进程 exit → elapsed ≈ 4s，`< 2000ms` 断言变红。
 //   -2：spawn 改成从不真正起（或 runnerPath 错）→ 日志标记等不到、条目可能仍在。
 //   -3：删掉 `agreed !== true` 分支 → spawn 计数与「无条目」断言变红。
 //   -4：无 UI 时放行（不检查 unattended）→ spawn 计数非 0。
@@ -83,6 +85,43 @@ function stubSpawn(): { fn: (...args: unknown[]) => unknown; calls: SpawnCall[] 
   const fn = (...args: unknown[]) => {
     calls.push(args[0] as unknown as SpawnCall);
     return { pid: 4242, unref() {} } as unknown;
+  };
+  return { fn, calls };
+}
+
+/**
+ * 一个「异步失败」的 spawn 桩：返回 ChildProcess 形状的对象，`pid` 为 0，
+ * `unref()` 为空实现，并在下一个 tick 发出 `'error'`。
+ *
+ * 这正是真实 `spawn` 报告「创建进程失败」（ENOENT/EAGAIN/ENOMEM，例如
+ * Windows 的 ERROR_NO_SYSTEM_RESOURCES）的方式。事件只在注册了监听器时才安全：
+ * 无监听器的 `'error'` 会被 EventEmitter 重抛成未捕获异常。
+ */
+function stubSpawnErroring(error: Error): {
+  fn: (...args: unknown[]) => unknown;
+  calls: SpawnCall[];
+} {
+  const calls: SpawnCall[] = [];
+  const fn = (...args: unknown[]) => {
+    calls.push(args[0] as unknown as SpawnCall);
+    const child = new EventEmitter() as EventEmitter & { unref: () => void; pid?: number };
+    child.pid = 0;
+    child.unref = () => {};
+    process.nextTick(() => child.emit("error", error));
+    return child;
+  };
+  return { fn, calls };
+}
+
+/** 一个同步抛错的 spawn 桩：模拟 `spawn` 在建立子进程前就抛出。 */
+function stubSpawnThrowing(error: Error): {
+  fn: (...args: unknown[]) => unknown;
+  calls: SpawnCall[];
+} {
+  const calls: SpawnCall[] = [];
+  const fn = (...args: unknown[]) => {
+    calls.push(args[0] as unknown as SpawnCall);
+    throw error;
   };
   return { fn, calls };
 }
@@ -150,8 +189,10 @@ test("F3 -1 起一个长跑命令 → 工具在 2000ms 内返回（立刻返回�
   try {
     const tool = makeTool();
     const ctx = fakeCtx(root);
-    // Windows cmd.exe 与 POSIX sh 都能跑 `node -e "..."`。
-    const longRunning = 'node -e "setTimeout(function(){}, 10000)"';
+    // Windows cmd.exe 与 POSIX sh 都能跑 `node -e "..."`。探针只睡 4s：
+    // 断言界是 2000ms，4s 已是它的两倍，足以区分「立刻返回」与「等到退出」；
+    // 10s 毫无必要，只会在本机内存紧张时把进程多留 8 秒。
+    const longRunning = 'node -e "setTimeout(function(){}, 4000)"';
 
     const startedAt = Date.now();
     const result = await tool.execute("call-1", { command: longRunning }, undefined, undefined, ctx);
@@ -184,7 +225,7 @@ test("F3 -2 confirm 为 true → 进程真的起来，且注册表条目已写",
         },
       },
     });
-    const command = 'node -e "console.log(\'bg-start-marker\'); setTimeout(function(){}, 10000)"';
+    const command = 'node -e "console.log(\'bg-start-marker\'); setTimeout(function(){}, 4000)"';
     const result = await makeTool().execute(
       "call-2",
       { command, description: "alive check" },
@@ -373,6 +414,77 @@ test("F3 -7 注入 isSubAgent → 工具内部守卫拒绝，无弹窗/无 spawn
     assert.equal(confirms, 0, "子代理拒绝必须发生在弹窗之前");
     assert.equal(calls.length, 0);
     assert.deepEqual(listEntries(backgroundDir(root)).entries, []);
+  } finally {
+    await cleanup(root, undefined);
+  }
+});
+
+test("F3 -8 spawn 异步 'error' → 不崩，且写入 spawn_error 并自愈为 exited", async () => {
+  const root = makeProject();
+  try {
+    const boom = new Error("spawn EAGAIN: resource temporarily unavailable");
+    const { fn, calls } = stubSpawnErroring(boom);
+    const ctx = fakeCtx(root);
+
+    // 若实现未注册 'error' 监听器，spawn 桩在下一个 tick emit('error') 时会被
+    // EventEmitter 重抛成未捕获异常，用例根本走不到下面的断言（回退即红）。
+    const result = await makeTool({ spawnProcess: fn }).execute(
+      "call-8",
+      { command: "echo hi" },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    // 工具已经返回值：失败是靠注册表条目诊断的，不是靠阻塞返回。
+    assert.equal(result.details.started, true);
+    assert.equal(typeof result.details.id, "string");
+    assert.equal(calls.length, 1, "确认之后必须真的调用 spawn");
+
+    const id = result.details.id as string;
+    const dir = backgroundDir(root);
+
+    // 失败原因必须真的落盘（轮询，不靠固定 sleep）。
+    const recorded = await waitFor(() => {
+      const entry = readEntry(dir, id);
+      return typeof entry?.spawn_error === "string" && entry.spawn_error.length > 0;
+    }, 1000, 20);
+    assert.ok(recorded, "spawn 失败原因必须写入条目的 spawn_error");
+
+    const entry = readEntry(dir, id)!;
+    assert.match(String(entry.spawn_error), /EAGAIN/);
+    assert.equal(entry.status, "exited", "异步失败必须自愈为 exited");
+    assert.ok(
+      typeof entry.ended_at === "string" && entry.ended_at.length > 0,
+      "结束时间必须写入",
+    );
+  } finally {
+    await cleanup(root, undefined);
+  }
+});
+
+test("F3 -9 spawn 同步抛错 → 返回错误，且不写任何注册表条目", async () => {
+  const root = makeProject();
+  try {
+    const { fn, calls } = stubSpawnThrowing(new Error("spawn EPERM: operation not permitted"));
+    const ctx = fakeCtx(root);
+
+    const result = await makeTool({ spawnProcess: fn }).execute(
+      "call-9",
+      { command: "echo hi" },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    assert.equal(result.isError, true);
+    assert.match(String(result.details.error), /Could not start the background runner/);
+    assert.equal(calls.length, 1, "确认之后尝试了 spawn");
+    assert.deepEqual(
+      listEntries(backgroundDir(root)).entries,
+      [],
+      "同步 spawn 失败必须在写条目之前返回，注册表不得残留条目",
+    );
   } finally {
     await cleanup(root, undefined);
   }

@@ -94,6 +94,14 @@ export interface BackgroundEntry {
   ended_at: string | null;
   started_by_context_key: string | null;
   confirmed_by: ConfirmedBy;
+  /**
+   * Why the OS could not create the process, when `spawn` failed
+   * asynchronously. Set by the `'error'` listener in `myflow_bg_start`; absent
+   * on a normal start. A task carrying it is already `exited` with no exit
+   * code, which is how a failed start stays diagnosable instead of looking like
+   * a bare self-healed exit.
+   */
+  spawn_error?: string;
   /** Extra fields are tolerated so a newer writer does not break an older reader. */
   [key: string]: unknown;
 }
@@ -742,7 +750,7 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
 
       // Step 2: spawn the detached wrapper. `unref()` drops it from this
       // process's event loop immediately; this tool deliberately registers no
-      // `exit` listener, so it cannot accidentally wait on the child.
+      // `exit`/`close` listener, so it cannot accidentally wait on the child.
       let pid: number | null;
       try {
         const child = spawnProcess(
@@ -752,6 +760,34 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
         );
         child.unref();
         pid = typeof child.pid === "number" ? child.pid : null;
+
+        // This listener is NOT waiting on the child. It registers no `exit` or
+        // `close` handler, awaits nothing, and never delays the return: the
+        // tool still comes back the moment the entry is on disk (R1).
+        //
+        // It is mandatory for a different reason. `spawn` reports a failure to
+        // *create* the process — ENOENT, EAGAIN, ENOMEM (e.g. Windows
+        // ERROR_NO_SYSTEM_RESOURCES), and the rest — asynchronously, through the
+        // `'error'` event. An `'error'` event with no listener is re-thrown by
+        // EventEmitter as an uncaught exception, which can take down the whole
+        // Pi process. Without this listener a failed start is not just
+        // undiagnosable; it is a crash.
+        child.on("error", (error: unknown) => {
+          try {
+            const current = readEntry(dir, id);
+            if (!current) return;
+            const failed: BackgroundEntry = {
+              ...current,
+              status: "exited",
+              ended_at: new Date().toISOString(),
+              spawn_error: messageOf(error),
+            };
+            writeEntry(dir, failed);
+          } catch {
+            // The listener runs outside the tool's control flow: a registry
+            // write that fails here must never become an uncaught exception.
+          }
+        });
       } catch (error) {
         return errorResult(`Could not start the background runner: ${messageOf(error)}`, {
           via: "error",
