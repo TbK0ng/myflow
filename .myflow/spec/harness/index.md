@@ -44,6 +44,28 @@ Payload tour and inventory:
   `researchX` would match `research`); `..` is not collapsed before the prefix
   comparison; or the comparison is not case-insensitive on Windows.
 
+### Task context gate: empty `implement.jsonl` / `check.jsonl`
+
+- **Producer**: `.myflow/scripts/task.py create` seeds empty `implement.jsonl`
+  and `check.jsonl` in every task it creates.
+- **Consumers**:
+  - `task.py start` — refuses a task whose manifest exists but has 0 curated
+    entries, unless `--allow-empty-context` is passed. The manifest gate is a
+    second line of defense after the phase-1 review gate in `workflow.md`.
+  - `task.py validate <task>` — reports the same condition (and invalid rows,
+    missing referenced files) with a non-zero exit.
+  - `task.py add-context <task> <implement|check> <path> [reason]` — the write
+    side; appends `{file, reason}` (or `{file, type:"directory", reason}` for a
+    directory) and refuses a duplicated path.
+- **Value/shape**: a curated entry is a JSON object line carrying a truthy
+  `file` (or legacy `path`) string. `create` seeds the file **empty** — a
+  placeholder `_example` row is a hard validation error, not scaffolding.
+- **Invariant**: an **absent** manifest is not gated; only a seeded-but-empty
+  one is. Gating absence would strand every task created before seeding landed.
+- **Breaks if**: the gate reads a missing file as 0 entries; `create` stops
+  seeding (the gate then never fires); or a gate ships without `add-context` as
+  its write side (an unsatisfiable gate).
+
 ## Design Decisions
 
 ### Design Decision: bound the write scope, do not try to exclude writers

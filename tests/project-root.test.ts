@@ -45,7 +45,7 @@ test("task.py resolves the project root from a subdirectory", () => {
   const project = makeProject();
   try {
     run(project, "task.py", ["create", "Rooted task", "--slug", "rooted"]);
-    run(project, "task.py", ["start", ".myflow/tasks/rooted"]);
+    run(project, "task.py", ["start", ".myflow/tasks/rooted", "--allow-empty-context"]);
 
     const fromDeep = run(project, "task.py", ["current"], deep(project.root));
     assert.match(fromDeep, /rooted|Rooted task/);
@@ -63,7 +63,7 @@ test("get_context.py reads the same state from a subdirectory", () => {
   const project = makeProject();
   try {
     run(project, "task.py", ["create", "Context task", "--slug", "contextual"]);
-    run(project, "task.py", ["start", ".myflow/tasks/contextual"]);
+    run(project, "task.py", ["start", ".myflow/tasks/contextual", "--allow-empty-context"]);
 
     const atRoot = JSON.parse(run(project, "get_context.py", ["--json"]));
     const atDeep = JSON.parse(run(project, "get_context.py", ["--json"], deep(project.root)));

@@ -28,7 +28,7 @@ test("shell/session bridge: PI_SESSION_ID names the session file", () => {
   const root = makeProject();
   try {
     runTask(root, ["create", "Demo task", "--slug", "demo"], { PI_SESSION_ID: "abc-123" });
-    runTask(root, ["start", ".myflow/tasks/demo"], { PI_SESSION_ID: "abc-123" });
+    runTask(root, ["start", ".myflow/tasks/demo", "--allow-empty-context"], { PI_SESSION_ID: "abc-123" });
 
     const sessionFile = join(root, ".myflow", ".runtime", "sessions", "pi_abc-123.json");
     assert.ok(existsSync(sessionFile), "session file must be named pi_<PI_SESSION_ID>.json");
@@ -43,7 +43,7 @@ test("shell/session bridge: extension resolves the task written by task.py", () 
   const root = makeProject();
   try {
     runTask(root, ["create", "Bridge task", "--slug", "bridge"], { PI_SESSION_ID: "session-xyz" });
-    runTask(root, ["start", ".myflow/tasks/bridge"], { PI_SESSION_ID: "session-xyz" });
+    runTask(root, ["start", ".myflow/tasks/bridge", "--allow-empty-context"], { PI_SESSION_ID: "session-xyz" });
 
     // This is exactly what deriveContextKey produces for that Pi session.
     const result = resolveActiveTaskStatus(root, "pi_session-xyz");
@@ -59,7 +59,7 @@ test("shell/session bridge: MYFLOW_CONTEXT_ID overrides PI_SESSION_ID", () => {
   const root = makeProject();
   try {
     runTask(root, ["create", "Override task", "--slug", "override"]);
-    runTask(root, ["start", ".myflow/tasks/override"], {
+    runTask(root, ["start", ".myflow/tasks/override", "--allow-empty-context"], {
       PI_SESSION_ID: "should-be-ignored",
       MYFLOW_CONTEXT_ID: "pi_explicit",
     });
@@ -75,7 +75,7 @@ test("task.py archive clears the active task pointer", () => {
   const root = makeProject();
   try {
     runTask(root, ["create", "Archived task", "--slug", "archived"], { PI_SESSION_ID: "arc" });
-    runTask(root, ["start", ".myflow/tasks/archived"], { PI_SESSION_ID: "arc" });
+    runTask(root, ["start", ".myflow/tasks/archived", "--allow-empty-context"], { PI_SESSION_ID: "arc" });
     assert.equal(resolveActiveTaskStatus(root, "pi_arc").status, "in_progress");
 
     const archived = runTask(root, ["archive", ".myflow/tasks/archived"], { PI_SESSION_ID: "arc" });
@@ -90,7 +90,7 @@ test("task.py current --source and --json", () => {
   const root = makeProject();
   try {
     runTask(root, ["create", "Source task", "--slug", "src"], { PI_SESSION_ID: "src-1" });
-    runTask(root, ["start", ".myflow/tasks/src"], { PI_SESSION_ID: "src-1" });
+    runTask(root, ["start", ".myflow/tasks/src", "--allow-empty-context"], { PI_SESSION_ID: "src-1" });
 
     const text = runTask(root, ["current", "--source"], { PI_SESSION_ID: "src-1" });
     assert.match(text, /^\.myflow\/tasks\/src\tin_progress\tSource task\tsource:context:pi_src-1$/);
@@ -111,7 +111,7 @@ test("task.py list --status filters tasks", () => {
   try {
     runTask(root, ["create", "Active", "--slug", "active"], { PI_SESSION_ID: "list-1" });
     runTask(root, ["create", "Planned", "--slug", "planned"], { PI_SESSION_ID: "list-1" });
-    runTask(root, ["start", ".myflow/tasks/active"], { PI_SESSION_ID: "list-1" });
+    runTask(root, ["start", ".myflow/tasks/active", "--allow-empty-context"], { PI_SESSION_ID: "list-1" });
 
     const inProgress = runTask(root, ["list", "--status", "in_progress"], { PI_SESSION_ID: "list-1" });
     assert.match(inProgress, /^active\tin_progress\tActive$/m);
@@ -128,7 +128,7 @@ test("task.py archive moves the task and clears the session pointer", () => {
   const root = makeProject();
   try {
     runTask(root, ["create", "Archive me", "--slug", "arch"], { PI_SESSION_ID: "arch-1" });
-    runTask(root, ["start", ".myflow/tasks/arch"], { PI_SESSION_ID: "arch-1" });
+    runTask(root, ["start", ".myflow/tasks/arch", "--allow-empty-context"], { PI_SESSION_ID: "arch-1" });
 
     const output = runTask(root, ["archive", ".myflow/tasks/arch"], { PI_SESSION_ID: "arch-1" });
     assert.match(output, /^archived: \.myflow\/archive\/\d{4}-\d{2}\/arch/);
@@ -162,7 +162,7 @@ test("get_context.py reports session runtime context and the active task", () =>
       ].join("\n"),
     );
     runTask(root, ["create", "Ctx task", "--slug", "ctx"], { PI_SESSION_ID: "ctx-1" });
-    runTask(root, ["start", ".myflow/tasks/ctx"], { PI_SESSION_ID: "ctx-1" });
+    runTask(root, ["start", ".myflow/tasks/ctx", "--allow-empty-context"], { PI_SESSION_ID: "ctx-1" });
 
     const env = { ...process.env, PI_SESSION_ID: "ctx-1" };
     const text = execFileSync("python3", [GET_CONTEXT_PY], { cwd: root, encoding: "utf-8", env });
@@ -223,7 +223,7 @@ test("planning is reachable: task.py create points the session at the new task",
     assert.equal(status.taskTitle, "Planning task");
 
     // Starting it moves the same session on to in_progress.
-    runTask(root, ["start", ".myflow/tasks/planning-task"], { PI_SESSION_ID: "plan-1" });
+    runTask(root, ["start", ".myflow/tasks/planning-task", "--allow-empty-context"], { PI_SESSION_ID: "plan-1" });
     assert.equal(resolveActiveTaskStatus(root, "pi_plan-1").status, "in_progress");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -234,7 +234,7 @@ test("task.py create never hijacks a session that is already on a task", () => {
   const root = makeProject();
   try {
     runTask(root, ["create", "First", "--slug", "first"], { PI_SESSION_ID: "plan-2" });
-    runTask(root, ["start", ".myflow/tasks/first"], { PI_SESSION_ID: "plan-2" });
+    runTask(root, ["start", ".myflow/tasks/first", "--allow-empty-context"], { PI_SESSION_ID: "plan-2" });
     runTask(root, ["create", "Second", "--slug", "second"], { PI_SESSION_ID: "plan-2" });
 
     const status = resolveActiveTaskStatus(root, "pi_plan-2");
@@ -328,7 +328,7 @@ test("task.py start accepts an absolute target that stays inside .myflow/tasks/"
     runTask(root, ["create", "Absolute task", "--slug", "abs-task"], { PI_SESSION_ID: "abs-ptr" });
     // Containment, not absolute-path rejection: this absolute path is inside
     // tasks/, so it is a legitimate target.
-    runTask(root, ["start", join(root, ".myflow", "tasks", "abs-task")], { PI_SESSION_ID: "abs-ptr" });
+    runTask(root, ["start", join(root, ".myflow", "tasks", "abs-task"), "--allow-empty-context"], { PI_SESSION_ID: "abs-ptr" });
     assert.equal(resolveActiveTaskStatus(root, "pi_abs-ptr").status, "in_progress");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -339,7 +339,7 @@ test("task.py start with a case-varied target follows the platform filesystem", 
   const root = makeProject();
   try {
     runTask(root, ["create", "Case task", "--slug", "case-task"], { PI_SESSION_ID: "case-ptr" });
-    const result = spawnSync("python3", [TASK_PY, "start", ".MYFLOW/TASKS/CASE-TASK"], {
+    const result = spawnSync("python3", [TASK_PY, "start", ".MYFLOW/TASKS/CASE-TASK", "--allow-empty-context"], {
       cwd: root,
       encoding: "utf-8",
       env: { ...process.env, PI_SESSION_ID: "case-ptr" },

@@ -3,11 +3,13 @@
 
 Usage:
     task.py create <title> --description <desc> --slug <slug> [--parent <dir>]
-    task.py start <task_dir>
+    task.py start <task_dir> [--allow-empty-context]
     task.py current [--source] [--json]
     task.py finish
     task.py archive <task_dir>
     task.py add-subtask <parent_dir> <child_dir>
+    task.py add-context <task_dir> <implement|check> <path> [reason]
+    task.py validate <task_dir>
     task.py list [--status <status>] [--json]
 
 Data model (matches .pi/extensions/myflow/turn-cache.ts resolveActiveTaskStatus):
@@ -65,6 +67,20 @@ PROJECT_ROOT = _find_project_root()
 TASKS_DIR = PROJECT_ROOT / ".myflow" / "tasks"
 ARCHIVE_DIR = PROJECT_ROOT / ".myflow" / "archive"
 SESSIONS_DIR = PROJECT_ROOT / ".myflow" / ".runtime" / "sessions"
+
+# The context manifests every sub-agent-capable setup seeds. A manifest that
+# exists but carries no truthy `file` row means a dispatched sub-agent would
+# run with zero spec context, which `start` refuses unless overridden.
+CONTEXT_MANIFESTS = ("implement.jsonl", "check.jsonl")
+
+# Extensions that look like code rather than spec/research docs. `validate`
+# warns (never fails) on these outside spec/docs and the task's own directory:
+# the reader is a sub-agent that can open the code itself.
+_CODE_FILE_EXTENSIONS = {
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs",
+    ".java", ".rb", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".kt",
+    ".swift", ".php", ".sh", ".ps1", ".sql", ".vue", ".svelte",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +146,182 @@ def _is_within_tasks_dir(path: Path) -> bool:
     except (OSError, RuntimeError, ValueError):
         return False
     return resolved != tasks_root and tasks_root in resolved.parents
+
+
+def _curated_entry_count(jsonl_file: Path) -> int | None:
+    """Count curated entries in a jsonl context manifest.
+
+    Returns ``None`` when the file does not exist. That asymmetry is the whole
+    gate: ``create`` seeds the manifests, so an absent file means the setup is
+    not one a sub-agent reads and must not be gated. A curated entry is a JSON
+    object row carrying a truthy ``file`` (or legacy ``path``) value — the same
+    rows the injection materializes.
+    """
+    if not jsonl_file.is_file():
+        return None
+    try:
+        lines = jsonl_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    count = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and (data.get("file") or data.get("path")):
+            count += 1
+    return count
+
+
+def _seed_context_manifests(task_dir: Path) -> None:
+    """Create empty ``implement.jsonl`` / ``check.jsonl`` placeholders.
+
+    Empty on purpose: a placeholder row would read as unresolved scaffolding to
+    ``validate``. The files stay empty until the planning phase curates real
+    entries through ``add-context``.
+    """
+    for name in CONTEXT_MANIFESTS:
+        path = task_dir / name
+        if not path.exists():
+            path.write_text("", encoding="utf-8")
+
+
+def _resolve_context_entry(path_str: str) -> Path:
+    """Resolve a jsonl entry path against the project root (absolute passes through)."""
+    candidate = Path(path_str)
+    return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+
+
+def _context_max_file_bytes() -> int:
+    """Read ``context_injection.max_file_bytes`` from ``.myflow/config.yaml``.
+
+    Mirrors the extension's parser and default so `validate` warns at the same
+    threshold the injection actually truncates at.
+    """
+    default = 32768
+    config = PROJECT_ROOT / ".myflow" / "config.yaml"
+    if not config.is_file():
+        return default
+    try:
+        text = config.read_text(encoding="utf-8")
+    except OSError:
+        return default
+    in_section = False
+    section_indent = -1
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not in_section:
+            if re.match(r"^context_injection\s*:\s*(#.*)?$", stripped):
+                in_section = True
+                section_indent = len(raw) - len(raw.lstrip())
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        if len(raw) - len(raw.lstrip()) <= section_indent:
+            break
+        match = re.match(r"^max_file_bytes\s*:\s*(\d+)", stripped)
+        if match:
+            return int(match.group(1))
+    return default
+
+
+def _validate_jsonl(jsonl_file: Path, task_dir: Path, max_file_bytes: int) -> int:
+    """Validate one manifest; return its error count (0 curated entries = 1 error).
+
+    A missing file is skipped, never an error: ``create`` seeds the manifests
+    only on sub-agent-capable setups, so absence means no sub-agent reads it.
+    """
+    name = jsonl_file.name
+    if not jsonl_file.is_file():
+        print(f"  {name}: not found (skipped)")
+        return 0
+
+    task_rel = ""
+    try:
+        task_rel = task_dir.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        task_rel = ""
+
+    try:
+        lines = jsonl_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+
+    errors = 0
+    real_entries = 0
+    for line_num, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"  {name}:{line_num}: invalid JSON")
+            errors += 1
+            continue
+        if not isinstance(data, dict):
+            print(f"  {name}:{line_num}: expected a JSON object")
+            errors += 1
+            continue
+        if "_example" in data:
+            print(
+                f'  {name}:{line_num}: placeholder `_example` row — replace it with '
+                '{"file": "<path>", "reason": "<why>"}'
+            )
+            errors += 1
+            continue
+        file_path = data.get("file")
+        entry_type = data.get("type", "file")
+        if not file_path:
+            continue
+        if not isinstance(file_path, str):
+            print(f"  {name}:{line_num}: `file` must be a string path")
+            errors += 1
+            continue
+        real_entries += 1
+        full_path = _resolve_context_entry(file_path)
+        if entry_type == "directory":
+            if not full_path.is_dir():
+                print(f"  {name}:{line_num}: directory not found: {file_path}")
+                errors += 1
+            continue
+        if not full_path.is_file():
+            print(f"  {name}:{line_num}: file not found: {file_path}")
+            errors += 1
+            continue
+
+        posix_path = file_path.replace("\\", "/").lstrip("/")
+        exempt = posix_path.startswith((".myflow/spec/", "docs/", "docs-site/")) or (
+            bool(task_rel) and (posix_path == task_rel or posix_path.startswith(f"{task_rel}/"))
+        )
+        if full_path.suffix.lower() in _CODE_FILE_EXTENSIONS and not exempt:
+            print(
+                f"  {name}:{line_num}: warning: {file_path} looks like a code file — "
+                "implement/check.jsonl should reference spec/research docs"
+            )
+        if max_file_bytes:
+            try:
+                size: int | None = full_path.stat().st_size
+            except OSError:
+                size = None
+            if size is not None and size > max_file_bytes:
+                print(
+                    f"  {name}:{line_num}: warning: {file_path} is {size} bytes, exceeds "
+                    f"context_injection.max_file_bytes ({max_file_bytes})"
+                )
+
+    if errors == 0 and real_entries == 0:
+        action = name.split(".", 1)[0]
+        print(f"  {name}: no curated entries — sub-agents would get zero spec context")
+        print(f'    Curate one:  python3 .myflow/scripts/task.py add-context <task> {action} <path> "<why>"')
+        print("    Intentionally empty?  python3 .myflow/scripts/task.py start <task> --allow-empty-context")
+        return 1
+    noun = "entry" if real_entries == 1 else "entries"
+    print(f"  {name}: {real_entries} curated {noun}")
+    return errors
 
 
 def _task_dir_for(slug: str) -> Path:
@@ -265,6 +457,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         "created_at": _now(),
     }
     _write_task(task_dir, data)
+    # Seed the context manifests empty. Materializing them here — rather than
+    # leaving the model to remember — is what lets `start` tell "not curated
+    # yet" apart from "this setup has no manifests", and it gives
+    # `add-context` a file to append to from the first planning turn.
+    _seed_context_manifests(task_dir)
     session, _source = _read_session()
     if not session.get("current_task"):
         # Planning needs a pointer too. Without one the extension reports
@@ -290,6 +487,30 @@ def cmd_start(args: argparse.Namespace) -> int:
     if task is None:
         print(f"error: no task.json in {args.task_dir}", file=sys.stderr)
         return 1
+
+    # Context-manifest gate: a manifest that exists but carries no curated
+    # entry means every implement/check sub-agent for this task runs with zero
+    # spec context, and nothing downstream surfaces that. An absent manifest
+    # is not gated — that is a setup without sub-agent manifests, not an
+    # uncurated one.
+    if not args.allow_empty_context:
+        empty_manifests = [
+            name for name in CONTEXT_MANIFESTS if _curated_entry_count(task_dir / name) == 0
+        ]
+        if empty_manifests:
+            joined = " and ".join(empty_manifests)
+            verb = "has" if len(empty_manifests) == 1 else "have"
+            print(f"error: {joined} {verb} no curated entries", file=sys.stderr)
+            print("Sub-agents (implement/check) would run with zero spec context.", file=sys.stderr)
+            print(
+                f'  Curate:  python3 .myflow/scripts/task.py add-context {args.task_dir} '
+                'implement <path> "<why>"',
+                file=sys.stderr,
+            )
+            print(f"  Verify:  python3 .myflow/scripts/task.py validate {args.task_dir}", file=sys.stderr)
+            print("  Intentionally empty? Re-run start with --allow-empty-context", file=sys.stderr)
+            return 1
+
     task["status"] = "in_progress"
     task["started_at"] = _now()
     _write_task(task_dir, task)
@@ -406,6 +627,93 @@ def cmd_add_subtask(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_add_context(args: argparse.Namespace) -> int:
+    """Append one curated entry to a task's ``implement.jsonl`` / ``check.jsonl``.
+
+    This is the write side of the empty-context gate: without it `start` would
+    refuse a seeded task with no way to satisfy the gate. The entry carries a
+    ``reason`` so the manifest is self-describing, matching the rows the
+    injection materializes.
+    """
+    task_dir = _resolve_task_dir(args.task_dir)
+    if task_dir is None:
+        print(
+            f"error: refusing to add context to '{args.task_dir}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
+    if not task_dir.is_dir():
+        print(f"error: no task directory at {args.task_dir}", file=sys.stderr)
+        return 1
+
+    action = args.action
+    if action.endswith(".jsonl"):
+        action = action[: -len(".jsonl")]
+    # Keep the manifest a plain name so the joined path cannot leave the task.
+    if action not in ("implement", "check") or "/" in args.action or "\\" in args.action:
+        print(f"error: context action must be 'implement' or 'check': {args.action}", file=sys.stderr)
+        return 1
+
+    jsonl_file = task_dir / f"{action}.jsonl"
+    path = args.path
+    reason = args.reason or "Added manually"
+
+    full_path = _resolve_context_entry(path)
+    entry_type = "file"
+    if full_path.is_dir():
+        entry_type = "directory"
+        if not path.endswith("/"):
+            path = f"{path}/"
+    elif not full_path.is_file():
+        print(f"error: path not found: {path}", file=sys.stderr)
+        return 1
+
+    if jsonl_file.is_file():
+        content = jsonl_file.read_text(encoding="utf-8")
+        if f'"{path}"' in content:
+            print(f"warning: entry already exists for {path}")
+            return 0
+
+    entry: dict = {"file": path, "reason": reason}
+    if entry_type == "directory":
+        entry = {"file": path, "type": "directory", "reason": reason}
+    with jsonl_file.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    print(f"added {entry_type}: {path} -> {action}.jsonl")
+    return 0
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Validate a task's context manifests (exit 1 when there is nothing curated)."""
+    task_dir = _resolve_task_dir(args.task_dir)
+    if task_dir is None:
+        print(
+            f"error: refusing to validate '{args.task_dir}': not a task under {_relative(TASKS_DIR)}",
+            file=sys.stderr,
+        )
+        return 1
+    if not task_dir.is_dir():
+        print(f"error: no task directory at {args.task_dir}", file=sys.stderr)
+        return 1
+
+    print("=== Validating context files ===")
+    print(f"target: {_relative(task_dir)}")
+    max_file_bytes = _context_max_file_bytes()
+    total_errors = 0
+    for name in CONTEXT_MANIFESTS:
+        jsonl_file = task_dir / name
+        if not jsonl_file.is_file():
+            print(f"  {name}: not found (skipped)")
+            continue
+        total_errors += _validate_jsonl(jsonl_file, task_dir, max_file_bytes)
+
+    if total_errors == 0:
+        print("all validations passed")
+        return 0
+    print(f"validation failed ({total_errors} error(s))")
+    return 1
+
+
 def _collect_tasks() -> list[dict]:
     if not TASKS_DIR.is_dir():
         return []
@@ -460,6 +768,11 @@ def main() -> int:
 
     p_start = sub.add_parser("start", help="start a task (sets the active task)")
     p_start.add_argument("task_dir")
+    p_start.add_argument(
+        "--allow-empty-context",
+        action="store_true",
+        help="start even when implement.jsonl / check.jsonl have no curated entries",
+    )
     p_start.set_defaults(func=cmd_start)
 
     p_current = sub.add_parser("current", help="show the active task")
@@ -476,6 +789,17 @@ def main() -> int:
     p_sub.add_argument("parent_dir")
     p_sub.add_argument("child_dir")
     p_sub.set_defaults(func=cmd_add_subtask)
+
+    p_add = sub.add_parser("add-context", help="append a curated entry to a task's jsonl manifest")
+    p_add.add_argument("task_dir")
+    p_add.add_argument("action", help="implement or check")
+    p_add.add_argument("path", help="file or directory to reference, relative to the project root")
+    p_add.add_argument("reason", nargs="?", default=None, help="why this entry is included")
+    p_add.set_defaults(func=cmd_add_context)
+
+    p_validate = sub.add_parser("validate", help="check a task's jsonl manifests for curated entries")
+    p_validate.add_argument("task_dir")
+    p_validate.set_defaults(func=cmd_validate)
 
     p_list = sub.add_parser("list", help="list all tasks")
     p_list.add_argument("--status", default=None, help="filter by status")
