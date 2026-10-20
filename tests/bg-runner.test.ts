@@ -480,6 +480,8 @@ test("bg runner -6: MYFLOW_BG_SHELL 覆盖被采用，并原样记进 .exit.shel
 
 test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（override -> settings -> Git -> PATH -> null）", () => {
   // 回退点：任一候选顺序被调换、多写一套解析、或丢掉存在性检查 → 对应断言变红。
+  // 回退点（H1）：把 `syswow64` 从 findOnPath 的跳过集合删掉 → 下面 4d 的两条断言
+  //               变红（它们断言的是“拒绝 WSL 启动器的三个视图”，不是“支持 WSL”）。
   const gitBash = join("C:\\", "Program Files", "Git", "bin", "bash.exe");
   const noExists = () => false;
   const settingsFile = join("H:/home", ".pi", "agent", "settings.json");
@@ -584,6 +586,43 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
     "System32 里的 bash.exe 是 WSL 启动器，不得采用，也不得退回 cmd.exe",
   );
 
+  // 4d. System32 的三个视图都是同一个 WSL 启动器，必须一视同仁：
+  //     `System32`（64 位视角）/ `Sysnative`（32 位进程看 64 位 System32 的别名）
+  //     / `SysWOW64`（64 位进程看 32 位 System32 的视图）。前两个已被 4b/4c 覆盖，
+  //     这里补 SysWOW64：本机不装 WSL、也不打算装，所以它不是“待支持”，而是“必须拒绝”。
+  //     回退点：从 findOnPath 的跳过集合里删掉 'syswow64' → 下面两条断言变红。
+  const syswowLauncher = join("C:\\Windows\\SysWOW64", "bash.exe");
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "C:\\Windows\\SysWOW64",
+      exists: (p) => p === syswowLauncher,
+      readFile: () => "",
+    }),
+    null,
+    "SysWOW64 里的 bash.exe 是 WSL 启动器的 32 位视图，不得采用",
+  );
+
+  // 4e. 同上，但真正的 Git Bash 排在 System32 三视图之后：必须跳过三个视图、取后者。
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: ["C:\\Windows\\SysWOW64", "C:\\Windows\\Sysnative", "C:\\Windows\\System32", "D:\\bin"].join(";"),
+      exists: (p) =>
+        p === syswowLauncher ||
+        p === join("C:\\Windows\\Sysnative", "bash.exe") ||
+        p === wslLauncher ||
+        p === pathBash,
+      readFile: () => "",
+    }),
+    pathBash,
+    "System32/Sysnative/SysWOW64 的 bash.exe 全部跳过，只采用真正的 Git Bash",
+  );
+
   // 5. 即使 %ComSpec% / COMSPEC 指着一个真实存在的 cmd.exe，也不得兜底。
   //    回退点：恢复 ComSpec 兜底 → 两条断言变红。
   for (const env of [
@@ -647,6 +686,35 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   // quoteForBash 的单测（回退点：改掉转义规则 → 断言变红）。
   assert.equal(quoteForBash("/a b/c"), "'/a b/c'");
   assert.equal(quoteForBash("a'b"), "'a'\\''b'");
+});
+
+test("bg runner -7b: 本机真实解析出的外壳是 Git Bash，且不是任何 WSL 启动器视图", () => {
+  // 这是本任务的机器契约（H1）：“本机只用 Git Bash”。它不是恒真断言：真的用默认参数
+  // 解析一遍，再按**路径段**检查结果，而不是只检查字符串里有没有 “system32”。
+  //
+  // 回退点：
+  //   - findOnPath 不再跳过 syswow64/system32/sysnative，而本机 PATH 上恰好有 WSL 启动器
+  //     → 下面的段断言变红；
+  //   - resolveShellPath 变成返回 null → “必须解析到外壳”变红。
+  const shell = resolveShellPath();
+  assert.equal(typeof shell, "string", "本机必须能解析到 POSIX 外壳（期望 Git Bash）");
+  assert.ok(shell && shell.length > 0, "解析结果不得为空字符串");
+  assert.ok(existsSync(shell), `解析出的外壳必须真实存在：${shell}`);
+
+  const segments = shell.split(/[\\/]+/).map((segment) => segment.toLowerCase());
+  for (const forbidden of ["system32", "sysnative", "syswow64"]) {
+    assert.ok(
+      !segments.includes(forbidden),
+      `本机外壳不得来自 WSL 启动器视图（${forbidden}）：${shell}`,
+    );
+  }
+
+  // 名字必须是 bash（POSIX 外壳），不能是 cmd.exe 或别的东西。
+  const name = segments[segments.length - 1];
+  assert.ok(
+    name === "bash.exe" || name === "bash",
+    `本机外壳必须是 bash（Git Bash），实际是：${shell}`,
+  );
 });
 
 // ---- P1: no cmd.exe fallback ----

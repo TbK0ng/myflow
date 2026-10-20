@@ -25,7 +25,9 @@
  *     the command through verbatim.
  *   - The shell is resolved by `resolveShellPath`, in this fixed order:
  *     `MYFLOW_BG_SHELL` -> `~/.pi/agent/settings.json`'s `shellPath` -> the Git
- *     for Windows bash -> `bash` on `PATH`. The resolved absolute path is
+ *     for Windows bash -> `bash` on `PATH` (skipping the three Windows
+ *     `System32` / `Sysnative` / `SysWOW64` views, which hold WSL's launcher).
+ *     The resolved absolute path is
  *     recorded in `<exitPath>` under `shell`, on both the success and failure
  *     records, so "which shell ran this?" is always answerable after the fact.
  *   - There is deliberately **no `cmd.exe` fallback**, and a resolved `cmd.exe`
@@ -236,10 +238,16 @@ function findOnPath(name, platform, pathValue, exists) {
     // Never fall back to the WSL launcher. On Windows `%SystemRoot%\System32\bash.exe`
     // is the WSL entry point, which this project forbids invoking; a Git Bash
     // lives elsewhere on PATH (and its standard location is tried before this).
-    // `Sysnative` is the same thing seen by a 32-bit process.
+    //
+    // `Sysnative` and `SysWOW64` are the other two spellings of that same
+    // directory: `Sysnative` is the alias a 32-bit process uses to reach the
+    // 64-bit System32, and `SysWOW64` is the 32-bit view of System32 seen by a
+    // 64-bit process. All three resolve to the same `bash.exe` WSL entry point,
+    // so all three are skipped. This machine has no WSL installed and does not
+    // intend to: naming them here is a *refusal*, never a way to support WSL.
     if (platform === "win32") {
       const base = basename(directory).toLowerCase();
-      if (base === "system32" || base === "sysnative") continue;
+      if (base === "system32" || base === "sysnative" || base === "syswow64") continue;
     }
     for (const candidate of candidates) {
       const full = join(directory, candidate);
