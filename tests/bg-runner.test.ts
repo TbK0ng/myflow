@@ -12,13 +12,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { pathToFileURL } from "node:url";
 import {
-  isCmdShell,
   quoteForBash,
-  quoteForCmd,
   resolveShellPath,
   runCommand,
   shellArgsFor,
+  shellRejectionReason,
   spawnRetryDelayMs,
   SPAWN_RETRY_TOTAL_BUDGET_MS,
 } from "../.myflow/scripts/bg_runner.mjs";
@@ -67,6 +67,23 @@ function runRunner(
 
 function makeDir(): string {
   return mkdtempSync(join(tmpdir(), "myflow-bg-runner-"));
+}
+
+/**
+ * The machine's real POSIX shell, as the runner resolves it.
+ *
+ * Almost every case needs to pin `MYFLOW_BG_SHELL` to the real shell so the
+ * developer's own configuration cannot change what is exercised. `resolveShellPath`
+ * now returns `null` when nothing resolves, so the non-null case is asserted
+ * once here instead of at every call site.
+ */
+function realShellPath(): string {
+  const shell = resolveShellPath();
+  assert.ok(
+    typeof shell === "string" && shell.length > 0,
+    "本机必须能解析到 POSIX 外壳（Git Bash 或 PATH 上的 bash）",
+  );
+  return shell;
 }
 
 /** Poll `predicate` until it is true or `timeoutMs` elapses. */
@@ -287,7 +304,7 @@ test("bg runner -4: an unstartable shell is recorded as exit_code null plus erro
     const noCommandExit = join(dir, "no-command.exit");
     const noCommand = runRunner(
       ["--id", "bg-test", "--log", log, "--exit", noCommandExit, "--", "definitely_not_a_real_command_xyz"],
-      { env: { ...process.env, MYFLOW_BG_SHELL: resolveShellPath() } },
+      { env: { ...process.env, MYFLOW_BG_SHELL: realShellPath() } },
     );
     assert.equal(noCommand.status, 127, "bash 把不存在的命令报为退出码 127（不是 spawn 失败）");
     const noCommandRecord = JSON.parse(readFileSync(noCommandExit, "utf-8"));
@@ -447,7 +464,7 @@ test("bg runner -6: MYFLOW_BG_SHELL 覆盖被采用，并原样记进 .exit.shel
   try {
     const log = join(dir, "override.log");
     const exit = join(dir, "override.exit");
-    const shell = resolveShellPath(); // 本机真实 bash（Git Bash 或 PATH 上的 bash）
+    const shell = realShellPath(); // 本机真实 bash（Git Bash 或 PATH 上的 bash）
     const result = runRunner(
       ["--id", "bg-test", "--log", log, "--exit", exit, "--", "echo override-marker"],
       { env: { ...process.env, MYFLOW_BG_SHELL: shell } },
@@ -461,7 +478,7 @@ test("bg runner -6: MYFLOW_BG_SHELL 覆盖被采用，并原样记进 .exit.shel
   }
 });
 
-test("bg runner -7: resolveShellPath 顺序固定（override -> settings -> Git -> PATH -> cmd）", () => {
+test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（override -> settings -> Git -> PATH -> null）", () => {
   // 回退点：任一候选顺序被调换、多写一套解析、或丢掉存在性检查 → 对应断言变红。
   const gitBash = join("C:\\", "Program Files", "Git", "bin", "bash.exe");
   const noExists = () => false;
@@ -504,8 +521,8 @@ test("bg runner -7: resolveShellPath 顺序固定（override -> settings -> Git 
       exists: (p) => p === settingsFile,
       readFile: () => JSON.stringify({ shellPath: "H:/gone/shell.exe" }),
     }),
-    "cmd.exe",
-    "settings 的 shellPath 不存在时必须继续向下解析",
+    null,
+    "settings 的 shellPath 不存在时必须继续向下解析（不得停在不存在的外壳上）",
   );
 
   // 3. Git for Windows 标准路径。
@@ -551,7 +568,9 @@ test("bg runner -7: resolveShellPath 顺序固定（override -> settings -> Git 
     "System32 下的 bash.exe 是 WSL 启动器，必须跳过",
   );
 
-  // 4c. 只有 System32 里有 bash.exe → 不得采用，退回 %ComSpec% 兜底。
+  // 4c. 只有 System32 里有 bash.exe → 不得采用，**也不得退回 cmd.exe**：
+  //     没有可用的 POSIX 外壳就是 null（拒绝），不是换一个外壳静默继续。
+  //     回退点：把第 5 步的 ComSpec/cmd.exe 兜底加回来 → 这几条断言全变红。
   assert.equal(
     resolveShellPath({
       env: {},
@@ -561,47 +580,225 @@ test("bg runner -7: resolveShellPath 顺序固定（override -> settings -> Git 
       exists: (p) => p === wslLauncher,
       readFile: () => "",
     }),
-    "cmd.exe",
+    null,
+    "System32 里的 bash.exe 是 WSL 启动器，不得采用，也不得退回 cmd.exe",
   );
 
-  // 5. 兜底：%ComSpec% 的 cmd.exe。
+  // 5. 即使 %ComSpec% / COMSPEC 指着一个真实存在的 cmd.exe，也不得兜底。
+  //    回退点：恢复 ComSpec 兜底 → 两条断言变红。
+  for (const env of [
+    { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+    { COMSPEC: "C:\\Windows\\System32\\cmd.exe" },
+  ]) {
+    assert.equal(
+      resolveShellPath({
+        env,
+        platform: "win32",
+        homeDir: "H:/home",
+        pathValue: "",
+        exists: (p) => p === "C:\\Windows\\System32\\cmd.exe",
+        readFile: () => "",
+      }),
+      null,
+      "ComSpec 不再是兜底路径：解析不到 bash 必须返回 null",
+    );
+  }
+
+  // 5b. POSIX 上同样没有 /bin/sh 兜底。
   assert.equal(
     resolveShellPath({
-      env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
-      platform: "win32",
+      env: {},
+      platform: "linux",
       homeDir: "H:/home",
-      pathValue: "",
+      pathValue: "/usr/local/bin",
       exists: noExists,
       readFile: () => "",
     }),
-    "C:\\Windows\\System32\\cmd.exe",
+    null,
+    "/bin/sh 不再是兜底路径",
   );
 
-  // 6. 参数形态：命令必须作为单个 argv 元素（这正是消灭二次解析的关键），
-  //    重定向由外壳完成，日志路径按各自外壳的引用规则转义。
-  assert.deepEqual(shellArgsFor(gitBash, "echo hi", "/tmp/task.log"), [
+  // 6. 参数形态：外壳恒为 POSIX，所以只有一种 argv；命令必须是单个 argv 元素
+  //    （这正是消灭二次解析的关键），重定向由外壳完成。
+  //    回退点：把 cmd 分支（`/d /s /c`）加回来 → 形态不再唯一，断言变红。
+  assert.deepEqual(shellArgsFor("echo hi", "/tmp/task.log"), [
     "-lc",
     "exec >> '/tmp/task.log' 2>&1; echo hi",
   ]);
   // 含空格与单引号的日志路径：单引号必须转成 '\''，否则路径会被截断。
-  assert.deepEqual(shellArgsFor(gitBash, "echo hi", "/tmp/my log's.task.log"), [
+  assert.deepEqual(shellArgsFor("echo hi", "/tmp/my log's.task.log"), [
     "-lc",
     "exec >> '/tmp/my log'\\''s.task.log' 2>&1; echo hi",
   ]);
-  assert.deepEqual(shellArgsFor("C:\\Windows\\System32\\cmd.exe", "echo hi", "C:\\tmp dir\\task.log"), [
-    "/d",
-    "/s",
-    "/c",
-    'echo hi >> "C:\\tmp dir\\task.log" 2>&1',
-  ]);
-  assert.equal(isCmdShell("cmd.exe"), true);
-  assert.equal(isCmdShell("/bin/sh"), false);
-  assert.equal(isCmdShell(gitBash), false);
 
-  // quoteForBash / quoteForCmd 的单测（回退点：改掉转义规则 → 断言变红）。
+  // 7. cmd.exe 与“解析不到”都是拒绝理由，且两者必须可区分（错误文案不同）。
+  //    回退点：删掉 shellRejectionReason 的任一分支 → 对应断言变红。
+  assert.match(String(shellRejectionReason("C:\\Windows\\System32\\cmd.exe")), /cmd\.exe/);
+  assert.match(String(shellRejectionReason("cmd")), /cmd\.exe/);
+  assert.match(String(shellRejectionReason(null)), /no POSIX shell/);
+  assert.equal(shellRejectionReason(gitBash), null, "bash 不是拒绝理由");
+  assert.equal(shellRejectionReason("/bin/sh"), null, "任何非 cmd 的路径都按 POSIX 外壳处理");
+  assert.equal(
+    shellRejectionReason("D:/tools/Git/git-bash.exe"),
+    null,
+    "名字里含 cmd 但不是 cmd.exe 不得误判",
+  );
+
+  // quoteForBash 的单测（回退点：改掉转义规则 → 断言变红）。
   assert.equal(quoteForBash("/a b/c"), "'/a b/c'");
   assert.equal(quoteForBash("a'b"), "'a'\\''b'");
-  assert.equal(quoteForCmd("C:\\a b\\c"), '"C:\\a b\\c"');
+});
+
+// ---- P1: no cmd.exe fallback ----
+//
+// Driving `cmd.exe` means handing it `/d /s /c "<command> >> <log> 2>&1"` as one
+// argv element, and Node re-quotes that element for the Windows command line:
+// a quote inside the command becomes `\"`, which `cmd.exe` does not accept. Any
+// quoted command would fail on that path, so the fallback was advertised as
+// usable while being broken. It is gone: no POSIX shell ⇒ **refuse**, and the
+// refusal must prove that nothing ran (otherwise "refused" and "ran but failed"
+// are indistinguishable from outside).
+
+test("bg runner -8: 解析不到 POSIX 外壳 → 拒绝、写 error、且一个字都不执行", () => {
+  // 回退点：把 resolveShellPath 的 `%ComSpec%` / `cmd.exe` 兜底加回来 → 这里注入的
+  //         resolveShell 才失效；删掉 runWrapper 里的 shellRejectionReason 判定
+  //         → 进程仍会去起 `null` 外壳并写出不同的记录，status / log 断言变红。
+  //
+  // The branch is unreachable on a real Windows machine (the Git for Windows bash
+  // exists there), so the child process injects a resolver that finds nothing.
+  // Everything else is real: a separate process, a real `<exit>` file, a real
+  // attempt to run a command that must never reach a shell.
+  const dir = makeDir();
+  try {
+    const log = join(dir, "refused.log");
+    const exit = join(dir, "refused.exit");
+    const sideEffect = join(dir, "side-effect.txt");
+    const probe = join(dir, "no-shell-probe.mjs");
+    const runnerUrl = pathToFileURL(RUNNER).href;
+    const argv = [
+      "--id",
+      "bg-test",
+      "--log",
+      log,
+      "--exit",
+      exit,
+      "--",
+      "echo SHOULD-NOT-RUN > side-effect.txt",
+    ];
+    writeFileSync(
+      probe,
+      [
+        `import { runWrapper } from ${JSON.stringify(runnerUrl)};`,
+        `runWrapper({ argv: ${JSON.stringify(argv)}, resolveShell: () => null });`,
+        "",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(process.execPath, [probe], { cwd: dir, encoding: "utf-8" });
+    assert.notEqual(result.status, 0, "解析不到外壳时 wrapper 必须非零退出（拒绝，不是假装成功）");
+    assert.equal(result.stdout, "", "wrapper 仍然不得写 stdout");
+    assert.equal(result.stderr, "", "wrapper 仍然不得写 stderr");
+
+    const record = JSON.parse(readFileSync(exit, "utf-8"));
+    assert.equal(record.exit_code, null, "没有进程被执行，不得编造退出码");
+    assert.equal(record.shell, null, "解析不到外壳时 shell 必须为 null（不得写成 cmd.exe）");
+    assert.match(String(record.error), /no POSIX shell could be resolved/);
+    assert.match(String(record.error), /No command was executed/, "必须明说命令一个字都没跑");
+    // How to fix it: the search order must be in the record, not just in the code.
+    assert.match(String(record.error), /MYFLOW_BG_SHELL/);
+    assert.match(String(record.error), /settings\.json's shellPath/);
+    assert.match(String(record.error), /Git for Windows bash/);
+    assert.match(String(record.error), /bash on PATH/);
+
+    // The two facts that make "refused" different from "ran and failed":
+    assert.equal(existsSync(log), false, "被拒绝时不得创建日志文件");
+    assert.equal(existsSync(sideEffect), false, "被拒绝时命令不得产生任何副作用");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bg runner -9: MYFLOW_BG_SHELL 指到 cmd.exe → 拒绝，并指出不支持 cmd.exe", () => {
+  // 回退点：删掉 shellRejectionReason 的 cmd.exe 分支 → wrapper 会把 cmd 当 POSIX
+  //         外壳用 `-lc` 起起来，status/error/log 三条断言全变红。
+  //
+  // `MYFLOW_BG_SHELL` is taken verbatim, so a path whose basename is `cmd.exe`
+  // triggers the guard on every platform without needing a real cmd.exe.
+  const dir = makeDir();
+  try {
+    const log = join(dir, "cmd.log");
+    const exit = join(dir, "cmd.exit");
+    const sideEffect = join(dir, "side-effect.txt");
+    const cmdShell = join(dir, "cmd.exe");
+    const result = runRunner(
+      ["--id", "bg-test", "--log", log, "--exit", exit, "--", "echo SHOULD-NOT-RUN > side-effect.txt"],
+      { cwd: dir, env: { ...process.env, MYFLOW_BG_SHELL: cmdShell } },
+    );
+
+    assert.notEqual(result.status, 0, "cmd.exe 不是可用外壳：必须非零退出");
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "");
+
+    const record = JSON.parse(readFileSync(exit, "utf-8"));
+    assert.equal(record.exit_code, null);
+    assert.match(String(record.error), /cmd\.exe/, "错误信息必须点名 cmd.exe");
+    assert.match(String(record.error), /not supported/, "必须明确“不支持”而不是笼统失败");
+    assert.match(String(record.error), /No command was executed/);
+    assert.match(String(record.error), /MYFLOW_BG_SHELL/, "必须指出改哪里");
+    assert.equal(record.shell, cmdShell, ".exit 仍必须记录被拒绝的那个外壳路径");
+
+    assert.equal(existsSync(log), false, "被拒绝时不得创建日志文件");
+    assert.equal(existsSync(sideEffect), false, "被拒绝时命令不得产生任何副作用");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bg runner -10: runCommand 自己也会拒绝无外壳，且从不起进程", async () => {
+  // 回退点：把 runCommand 顶部的 shellRejectionReason 判定删掉（只留 runWrapper 的）
+  //         → spawnImpl 被调用（calls === 1）且 payload 不再是 shellUnavailable 形状，
+  //         calls / error / log 三条断言变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "no-shell.log");
+    let calls = 0;
+    // If the guard regresses, this stub settles immediately with ENOENT so the
+    // case *fails* (calls === 1, wrong error text) instead of hanging.
+    const spawnImpl = () => {
+      calls += 1;
+      const fake = new EventEmitter();
+      setImmediate(() => {
+        const error = new Error("spawn ENOENT") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        fake.emit("error", error);
+      });
+      return fake as unknown as ChildProcess;
+    };
+    let record: Record<string, unknown> | undefined;
+    let runnerCode: number | undefined;
+    const outcome = await runCommand({
+      command: "echo SHOULD-NOT-RUN",
+      logPath: log,
+      cwd: dir,
+      shellPath: null,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      onOutcome: (payload, code) => {
+        record = payload;
+        runnerCode = code;
+      },
+    });
+
+    assert.equal(calls, 0, "没有外壳就不得调用 spawn");
+    assert.equal(outcome.attempts, 0, "一次尝试都没有发生");
+    assert.notEqual(runnerCode, 0, "拒绝必须报告非零 runnerCode");
+    assert.equal(record?.exit_code, null);
+    assert.match(String(record?.error), /no POSIX shell could be resolved/);
+    assert.match(String(record?.error), /No command was executed/);
+    assert.equal(record?.retries, undefined, "拒绝不是重试失败，不得记 retries");
+    assert.equal(existsSync(log), false, "被拒绝时不得创建日志文件");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---- S2: the redirection moved from an inherited descriptor to the shell ----

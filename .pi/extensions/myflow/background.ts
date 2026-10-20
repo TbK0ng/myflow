@@ -588,6 +588,18 @@ export interface BgToolRegistration {
   runnerPath?: string;
   /** Override `node:child_process.spawn` (tests). */
   spawnProcess?: typeof spawn;
+  /**
+   * Called with the new task id **after** its registry entry is written.
+   *
+   * The session keeps this hook so `session_shutdown` can report the tasks it
+   * started without scanning the whole project registry (which would pay
+   * readdir+parse on every session start). It is a notification, not a
+   * decision point: it runs after the entry is on disk, its return value is
+   * ignored, and a throwing callback is swallowed — by then the process is
+   * already running and no callback may turn a successful start into a
+   * failure. Defaults to no-op.
+   */
+  onStarted?: (id: string) => void;
 }
 
 function textResult(details: Record<string, unknown>, text: string, isError = false) {
@@ -648,11 +660,11 @@ const BG_START_PARAMETERS = {
     command: {
       type: "string",
       description:
-        "The command to run in the background. Must be non-empty. It is executed by Git Bash " +
+        "The command to run in the background. Must be non-empty. It is executed by a POSIX shell " +
         "(`bash -lc`) — the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's " +
-        "shellPath, then the Git for Windows bash, then `bash` on PATH, then an explicit " +
-        "cmd.exe /d /s /c fallback. It is spawned directly with argv, NOT through Node's shell " +
-        "option, so quotes are parsed by bash semantics.",
+        "shellPath, then the Git for Windows bash, then `bash` on PATH; when no POSIX shell " +
+        "resolves (or it resolves to cmd.exe) the task is refused and nothing runs. It is spawned " +
+        "directly with argv, NOT through Node's shell option, so quotes are parsed by bash semantics.",
     },
     description: {
       type: "string",
@@ -718,7 +730,7 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
     description: [
       "Start a command in the background and return immediately with a task id.",
       "A background task outlives the session; read it with myflow_bg_output, list it with myflow_bg_list, and stop it with myflow_bg_stop.",
-      "The command runs under Git Bash (`bash -lc`): the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's shellPath, then the Git for Windows bash, then `bash` on PATH, then an explicit cmd.exe /d /s /c fallback.",
+      "The command runs under a POSIX shell (`bash -lc`): the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's shellPath, then the Git for Windows bash, then `bash` on PATH. There is no cmd.exe fallback: when no POSIX shell resolves the task is refused and nothing runs.",
       "It is spawned directly with argv rather than through Node's shell option, so the command's quotes are parsed by bash semantics.",
       "Requires the user's confirmation; without an interactive UI it refuses unless `unattended: true` is passed, which is recorded as unconfirmed.",
     ].join(" "),
@@ -849,6 +861,18 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
             `not be written: ${messageOf(error)}. The process is now untracked; stop it manually if needed.`,
           { started: true, id, pid, log, confirmed_by: confirmedBy, via: "error" },
         );
+      }
+
+      // Step 3b: tell the caller (the session's own bookkeeping). This is a
+      // notification after the fact — the entry is on disk and the process is
+      // already running — so a throwing callback is swallowed rather than
+      // turning a successful start into an error.
+      if (registration.onStarted) {
+        try {
+          registration.onStarted(id);
+        } catch {
+          /* a bookkeeping callback must not change the tool's outcome */
+        }
       }
 
       // Step 4: return. No child-process event is awaited anywhere above.
@@ -2037,4 +2061,49 @@ export function createBgStopTool(registration: BgStopRegistration = {}): Record<
       return textResult(result as unknown as Record<string, unknown>, stopHumanText(result));
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+//
+// The four tools above are exported individually so a test can drive one
+// `execute` with a stub context. Production goes through
+// `registerMyflowBackground`, the single place that puts them on Pi's API.
+//
+// Dependency injection, not an import of `./index.ts`: `index.ts` calls this
+// function, so importing it back would close the `index.ts` -> `background.ts`
+// -> `index.ts` cycle. Everything session-specific (the context-key deriver,
+// the sub-agent flag, the started-id hook) is passed in by the caller, exactly
+// as `ask.ts` / `approval.ts` do it.
+//
+// The factory registers tools and nothing else: it starts no process and no
+// timer, because an extension factory runs before any session exists
+// (`docs/extensions.md`: "Do not start processes or timers in the factory").
+// ---------------------------------------------------------------------------
+
+/** The four `myflow_bg_*` tool names, as one set for the main-session guard. */
+export const BG_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
+  BG_START_TOOL_NAME,
+  BG_OUTPUT_TOOL_NAME,
+  BG_LIST_TOOL_NAME,
+  BG_STOP_TOOL_NAME,
+]);
+
+/** Minimal `pi` surface used by the registration function. */
+export interface BgPi {
+  registerTool(tool: Record<string, unknown>): void;
+}
+
+/**
+ * Register all four background tools on the Pi extension API.
+ *
+ * `registration` is forwarded verbatim to every builder, so all four share one
+ * `isSubAgent` and one `deriveContextKey`. `onStarted` is only consulted by
+ * `myflow_bg_start`, which calls it after the registry entry is written.
+ */
+export function registerMyflowBackground(pi: BgPi, registration: BgToolRegistration = {}): void {
+  pi.registerTool(createBgStartTool(registration));
+  pi.registerTool(createBgOutputTool(registration));
+  pi.registerTool(createBgListTool(registration));
+  pi.registerTool(createBgStopTool(registration));
 }

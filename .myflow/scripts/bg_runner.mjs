@@ -25,10 +25,18 @@
  *     the command through verbatim.
  *   - The shell is resolved by `resolveShellPath`, in this fixed order:
  *     `MYFLOW_BG_SHELL` -> `~/.pi/agent/settings.json`'s `shellPath` -> the Git
- *     for Windows bash -> `bash` on `PATH` -> an explicit `cmd.exe /d /s /c`
- *     fallback. The resolved absolute path is recorded in `<exitPath>` under
- *     `shell`, on both the success and failure records, so "which shell ran
- *     this?" is always answerable after the fact.
+ *     for Windows bash -> `bash` on `PATH`. The resolved absolute path is
+ *     recorded in `<exitPath>` under `shell`, on both the success and failure
+ *     records, so "which shell ran this?" is always answerable after the fact.
+ *   - There is deliberately **no `cmd.exe` fallback**, and a resolved `cmd.exe`
+ *     is refused. Driving `cmd.exe` would mean handing it
+ *     `/d /s /c "<command> >> <log> 2>&1"` as one argv element, and Node
+ *     re-quotes that element for the Windows command line: a quote inside the
+ *     command becomes `\"`, which `cmd.exe` does not accept. Every quoted
+ *     command would fail on that path, so offering it as a usable shell would
+ *     be a lie. When nothing resolves — or the resolved path is `cmd.exe` —
+ *     the wrapper records `exit_code: null` plus an `error` naming the search
+ *     order, and **runs no command at all**.
  *   - The shell itself performs the redirection into the log (`>>`, append), so
  *     the command's stdout and stderr are written by the kernel and nothing is
  *     buffered in this process (`design.md` §2). Appended bytes are visible to
@@ -38,8 +46,8 @@
  *     handle makes libuv restrict the child's inherited handles, and on Windows
  *     that `CreateProcess` path can fail with `ERROR_NO_SYSTEM_RESOURCES` (232).
  *     Letting the shell open the log removes that path entirely. The log path is
- *     quoted for the shell that receives it (`quoteForBash` / `quoteForCmd`), so
- *     a path containing spaces or quotes cannot break out of the redirection.
+ *     quoted for the shell that receives it (`quoteForBash`), so a path
+ *     containing spaces or quotes cannot break out of the redirection.
  *   - On Windows the shell is also started **detached**, so libuv asks for
  *     `DETACHED_PROCESS` and the shell is created **without a console**. This
  *     wrapper is console-less, so without the flag Windows would build a fresh
@@ -58,7 +66,9 @@
  *       `{"exit_code":N,"signal":S,"at":"<ISO>","shell":"<path>"}` on a
  *       normal exit,
  *       `{"exit_code":null,"error":"...","at":"<ISO>","shell":"<path>"}`
- *       when it could not be spawned. The write is atomic (temp file + rename)
+ *       when it could not be spawned, and the same shape with `shell: null`
+ *       when no usable POSIX shell resolved (a refusal that runs nothing).
+ *       The write is atomic (temp file + rename)
  *       so a concurrent reader never observes a half-written record
  *       (`design.md` §3.2).
  *
@@ -240,15 +250,24 @@ function findOnPath(name, platform, pathValue, exists) {
 }
 
 /**
- * Resolve the absolute path of the shell that runs the command.
+ * Resolve the absolute path of the shell that runs the command, or `null` when
+ * no POSIX shell can be found.
  *
  * Order (fixed; this is the only implementation of it):
  *   1. `MYFLOW_BG_SHELL` — explicit override, used verbatim.
  *   2. `~/.pi/agent/settings.json` `shellPath` — the user's own choice.
  *   3. The Git for Windows bash, at its standard install location.
  *   4. `bash` on `PATH`.
- *   5. An explicit `cmd.exe` from `%ComSpec%` (POSIX: `/bin/sh`) — the last
- *      resort, still spawned with argv so there is no nested-quote problem.
+ *
+ * There is **no** `cmd.exe` / `/bin/sh` last resort. Falling back to `cmd.exe`
+ * would only look like a working shell: Node re-quotes the command into
+ * `cmd.exe /d /s /c "..."` and escapes inner quotes as `\"`, which `cmd.exe`
+ * rejects, so every quoted command would fail there (see the file header).
+ * A missing shell is therefore a *refusal*, decided by `shellRejectionReason`
+ * and recorded by the caller — never a silent change of shell.
+ *
+ * This stays a pure resolver: it never throws and never exits. `null` means
+ * "nothing usable found".
  *
  * Injectable (`env`, `platform`, `exists`, `readFile`, `homeDir`, `pathValue`)
  * so the order can be tested without touching the machine's real settings.
@@ -261,7 +280,7 @@ function findOnPath(name, platform, pathValue, exists) {
  *   homeDir?: string,
  *   pathValue?: string,
  * }} [options]
- * @returns {string}
+ * @returns {string | null}
  */
 export function resolveShellPath(options = {}) {
   const env = options.env ?? process.env;
@@ -289,16 +308,41 @@ export function resolveShellPath(options = {}) {
   const onPath = findOnPath("bash", platform, pathValue, exists);
   if (onPath) return onPath;
 
-  // 5. Explicit fallback: `%ComSpec%` on Windows, `/bin/sh` elsewhere.
-  const comspec = (env.ComSpec ?? env.COMSPEC ?? "").trim();
-  if (comspec) return comspec;
-  return platform === "win32" ? "cmd.exe" : "/bin/sh";
+  return null;
 }
 
-/** Whether a resolved shell should be driven as `cmd.exe` (`/d /s /c`). */
-export function isCmdShell(shellPath) {
-  const base = basename(shellPath).toLowerCase();
-  return base === "cmd" || base === "cmd.exe";
+/**
+ * The search order, spelled out for the refusal message. A reader of `.exit`
+ * only sees that file, so it has to say *where* to fix the configuration
+ * rather than merely that something is missing.
+ */
+export const SHELL_SEARCH_ORDER =
+  "MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's shellPath, then the Git for Windows bash, then bash on PATH";
+
+/**
+ * Why a resolved shell cannot be used, or `null` when it can.
+ *
+ * Exactly two refusals, and neither one falls back to a different shell:
+ *
+ *   - nothing resolved (`null` or blank) — there is no POSIX shell to run;
+ *   - the resolved path is `cmd.exe` — unsupported on purpose. Node re-quotes
+ *     argv for the Windows command line and escapes an inner quote as `\"`,
+ *     which `cmd.exe` does not accept, so any quoted command would fail there.
+ *     This can happen when the user points `MYFLOW_BG_SHELL` (or the settings
+ *     `shellPath`) at `cmd.exe`; it is reported as such instead of being
+ *     driven as if it were a POSIX shell.
+ *
+ * @param {string | null | undefined} shellPath
+ * @returns {string | null}
+ */
+export function shellRejectionReason(shellPath) {
+  const value = typeof shellPath === "string" ? shellPath.trim() : "";
+  if (!value) return "no POSIX shell could be resolved";
+  const base = basename(value).toLowerCase();
+  if (base === "cmd" || base === "cmd.exe") {
+    return `${value} is cmd.exe, which is not supported as the background-command shell`;
+  }
+  return null;
 }
 
 /**
@@ -316,25 +360,15 @@ export function quoteForBash(value) {
 }
 
 /**
- * Quote a path for `cmd.exe` use with double quotes.
+ * The argv the resolved shell needs to run one command and append its output
+ * to `logPath`.
  *
- * A Windows file path cannot contain a double quote, so wrapping is normally
- * enough; an embedded quote (which the filesystem would have rejected anyway)
- * is doubled, cmd's own escape for a literal quote inside a quoted string.
- */
-export function quoteForCmd(value) {
-  return `"${value.split('"').join('""')}"`;
-}
-
-/**
- * The argv a resolved shell needs to run one command and append its output to
- * `logPath`.
- *
- * The command is always a **single** element: that is the whole point of
- * spawning the shell ourselves. bash receives `-lc` (a login shell, matching
- * how the user's Git Bash runs) with an `exec` redirection, so every command the
- * shell runs inherits the log; anything that is not `cmd.exe` is treated as a
- * POSIX shell, which is what the resolution order guarantees here.
+ * There is exactly one shape, because the shell is always a POSIX shell:
+ * `shellRejectionReason` refuses anything else (including `cmd.exe`) before
+ * this is ever called. The command is always a **single** element: that is the
+ * whole point of spawning the shell ourselves. bash receives `-lc` (a login
+ * shell, matching how the user's Git Bash runs) with an `exec` redirection, so
+ * every command the shell runs inherits the log.
  *
  * The redirection is performed by the **shell**, not by this process handing it
  * an open descriptor. A descriptor passed through `stdio` is a *standard
@@ -343,10 +377,7 @@ export function quoteForCmd(value) {
  * `ERROR_NO_SYSTEM_RESOURCES`. `>>` also gives append semantics without an
  * `O_APPEND` descriptor.
  */
-export function shellArgsFor(shellPath, command, logPath) {
-  if (isCmdShell(shellPath)) {
-    return ["/d", "/s", "/c", `${command} >> ${quoteForCmd(logPath)} 2>&1`];
-  }
+export function shellArgsFor(command, logPath) {
   return ["-lc", `exec >> ${quoteForBash(logPath)} 2>&1; ${command}`];
 }
 
@@ -513,6 +544,32 @@ function spawnFailureRecord(error, attempts, shellPath) {
 }
 
 /**
+ * The `.exit` payload for "there is no usable POSIX shell, so nothing ran".
+ *
+ * Two facts have to be unambiguous in this file, because the reader of `.exit`
+ * sees nothing else: *the command was not executed*, and *where the shell is
+ * looked for* (so the configuration can be fixed). Neither is a spawn failure —
+ * no process was ever requested.
+ *
+ * @param {string | null | undefined} shellPath the rejected candidate, if any
+ * @param {string} reason from `shellRejectionReason`
+ */
+export function shellUnavailableRecord(shellPath, reason) {
+  const rejected = typeof shellPath === "string" && shellPath.trim() ? shellPath : null;
+  return {
+    exit_code: null,
+    error: [
+      `Cannot run the background command: ${reason}.`,
+      `Looked for a shell in this order: ${SHELL_SEARCH_ORDER}.`,
+      "No command was executed. Set MYFLOW_BG_SHELL (or the shellPath in",
+      "~/.pi/agent/settings.json) to a bash executable, then start the task again.",
+    ].join(" "),
+    at: isoTimestamp(),
+    shell: rejected,
+  };
+}
+
+/**
  * Create the command's process, retrying a transient creation failure a bounded
  * number of times, and report how the command ended through `onOutcome`.
  *
@@ -529,12 +586,17 @@ function spawnFailureRecord(error, attempts, shellPath) {
  * `wait` replaces the synchronous sleep, and `isRetryable` replaces the retry
  * predicate, so a test can simulate an OS refusal without provoking a real one.
  *
+ * A `shellPath` that is `null` or `cmd.exe` is a *refusal*: `onOutcome` gets
+ * the `shellUnavailableRecord` payload and no process is created at all. That
+ * guard is repeated here (not only in `runWrapper`) so a direct caller cannot
+ * drive the wrapper into the unsupported `cmd.exe` path either.
+ *
  * @param {{
  *   command: string,
  *   logPath: string,
  *   cwd: string,
  *   onOutcome: (payload: Record<string, unknown>, runnerCode: number) => void,
- *   shellPath?: string,
+ *   shellPath?: string | null,
  *   spawnImpl?: typeof spawn,
  *   wait?: (milliseconds: number) => void,
  *   maxRetries?: number,
@@ -555,10 +617,20 @@ export function runCommand(options) {
     isRetryable = isRetryableSpawnError,
   } = options;
 
+  const rejection = shellRejectionReason(shellPath);
+  if (rejection) {
+    try {
+      onOutcome(shellUnavailableRecord(shellPath, rejection), EXIT_SPAWN_FAILED);
+    } catch {
+      /* a reporting failure must not throw out of here */
+    }
+    return Promise.resolve({ attempts: 0 });
+  }
+
   // The command is the final element of the shell's argv — never re-quoted into
   // a command string of our own (that is what `shell: true` does wrong on
-  // Windows).
-  const shellArgs = shellArgsFor(shellPath, command, logPath);
+  // Windows). There is one argv shape because the shell is always POSIX here.
+  const shellArgs = shellArgsFor(command, logPath);
 
   return new Promise((resolve) => {
     let attempts = 0;
@@ -649,11 +721,17 @@ export function runCommand(options) {
 /**
  * Run one command and record its outcome. Never throws and never writes to
  * stdio; the process exit code carries the result.
+ *
+ * `argv` and `resolveShell` are injectable so a test can drive the
+ * "no usable shell" refusal in a *real* child process: the Git for Windows bash
+ * exists on every supported Windows machine, so that branch is otherwise
+ * unreachable there without editing the machine's configuration. Production
+ * calls this with no arguments.
  */
-function main() {
+export function runWrapper(injected = {}) {
   let options;
   try {
-    options = parseArgs(process.argv.slice(2));
+    options = parseArgs(injected.argv ?? process.argv.slice(2));
   } catch {
     // Without valid arguments there is no exit path to write to, and this
     // script is contractually silent. A non-zero code is the only signal.
@@ -669,9 +747,10 @@ function main() {
   const exitPath = options.exit;
   // Resolve the shell once, up front: every `.exit` record (including the
   // no-command and log-directory failures below) then says which shell this
-  // task would have used. A failure to *create* that shell is retried and
-  // reported by `runCommand`, not here.
-  const shellPath = resolveShellPath();
+  // task would have used. A failure to *create* a resolved shell is retried and
+  // reported by `runCommand`; a failure to *resolve* one is refused below.
+  const resolveShell = injected.resolveShell ?? resolveShellPath;
+  const shellPath = resolveShell();
   const record = (payload, runnerCode) => {
     try {
       writeExitRecord(exitPath, payload);
@@ -687,6 +766,15 @@ function main() {
       { exit_code: null, error: "no command provided", at: isoTimestamp(), shell: shellPath },
       EXIT_BAD_ARGS,
     );
+    return;
+  }
+
+  // No usable POSIX shell is a refusal, not a silent change of shell: it is
+  // checked *before* the log directory and the process, so a refused task
+  // leaves no log file at all — "nothing ran" is observable, not a claim.
+  const rejection = shellRejectionReason(shellPath);
+  if (rejection) {
+    record(shellUnavailableRecord(shellPath, rejection), EXIT_SPAWN_FAILED);
     return;
   }
 
@@ -718,5 +806,5 @@ function main() {
 
 // Run only when executed directly, so the helpers above stay importable.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main();
+  runWrapper();
 }
