@@ -588,6 +588,18 @@ export interface BgToolRegistration {
   runnerPath?: string;
   /** Override `node:child_process.spawn` (tests). */
   spawnProcess?: typeof spawn;
+  /**
+   * Called with the new task id **after** its registry entry is written.
+   *
+   * The session keeps this hook so `session_shutdown` can report the tasks it
+   * started without scanning the whole project registry (which would pay
+   * readdir+parse on every session start). It is a notification, not a
+   * decision point: it runs after the entry is on disk, its return value is
+   * ignored, and a throwing callback is swallowed — by then the process is
+   * already running and no callback may turn a successful start into a
+   * failure. Defaults to no-op.
+   */
+  onStarted?: (id: string) => void;
 }
 
 function textResult(details: Record<string, unknown>, text: string, isError = false) {
@@ -849,6 +861,18 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
             `not be written: ${messageOf(error)}. The process is now untracked; stop it manually if needed.`,
           { started: true, id, pid, log, confirmed_by: confirmedBy, via: "error" },
         );
+      }
+
+      // Step 3b: tell the caller (the session's own bookkeeping). This is a
+      // notification after the fact — the entry is on disk and the process is
+      // already running — so a throwing callback is swallowed rather than
+      // turning a successful start into an error.
+      if (registration.onStarted) {
+        try {
+          registration.onStarted(id);
+        } catch {
+          /* a bookkeeping callback must not change the tool's outcome */
+        }
       }
 
       // Step 4: return. No child-process event is awaited anywhere above.
@@ -2037,4 +2061,49 @@ export function createBgStopTool(registration: BgStopRegistration = {}): Record<
       return textResult(result as unknown as Record<string, unknown>, stopHumanText(result));
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+//
+// The four tools above are exported individually so a test can drive one
+// `execute` with a stub context. Production goes through
+// `registerMyflowBackground`, the single place that puts them on Pi's API.
+//
+// Dependency injection, not an import of `./index.ts`: `index.ts` calls this
+// function, so importing it back would close the `index.ts` -> `background.ts`
+// -> `index.ts` cycle. Everything session-specific (the context-key deriver,
+// the sub-agent flag, the started-id hook) is passed in by the caller, exactly
+// as `ask.ts` / `approval.ts` do it.
+//
+// The factory registers tools and nothing else: it starts no process and no
+// timer, because an extension factory runs before any session exists
+// (`docs/extensions.md`: "Do not start processes or timers in the factory").
+// ---------------------------------------------------------------------------
+
+/** The four `myflow_bg_*` tool names, as one set for the main-session guard. */
+export const BG_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
+  BG_START_TOOL_NAME,
+  BG_OUTPUT_TOOL_NAME,
+  BG_LIST_TOOL_NAME,
+  BG_STOP_TOOL_NAME,
+]);
+
+/** Minimal `pi` surface used by the registration function. */
+export interface BgPi {
+  registerTool(tool: Record<string, unknown>): void;
+}
+
+/**
+ * Register all four background tools on the Pi extension API.
+ *
+ * `registration` is forwarded verbatim to every builder, so all four share one
+ * `isSubAgent` and one `deriveContextKey`. `onStarted` is only consulted by
+ * `myflow_bg_start`, which calls it after the registry entry is written.
+ */
+export function registerMyflowBackground(pi: BgPi, registration: BgToolRegistration = {}): void {
+  pi.registerTool(createBgStartTool(registration));
+  pi.registerTool(createBgOutputTool(registration));
+  pi.registerTool(createBgListTool(registration));
+  pi.registerTool(createBgStopTool(registration));
 }

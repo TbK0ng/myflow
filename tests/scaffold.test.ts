@@ -151,6 +151,7 @@ test("copied payload extension registers hooks, tool, and command", async () => 
       "context",
       "input",
       "session_before_compact",
+      "session_shutdown",
       "session_start",
       "tool_call",
     ]);

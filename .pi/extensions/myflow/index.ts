@@ -17,6 +17,14 @@ import {
 import { buildStatusReport, formatStatusReport } from "./status.ts";
 import { registerMyflowAsk } from "./ask.ts";
 import { registerMyflowApproval } from "./approval.ts";
+import {
+  BG_TOOL_NAMES,
+  backgroundDir,
+  readEntry,
+  registerMyflowBackground,
+  resolveStatus,
+  type BgPi,
+} from "./background.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export type { ExtensionAPI };
 
@@ -66,6 +74,8 @@ export interface ToolCallEvent {
 const SUBAGENT_TOOL_NAME = "myflow_subagent";
 /** Tools only the main session may call: they address the user directly. */
 const ASK_TOOL_NAMES = new Set(["myflow_ask_user", "myflow_request_approval"]);
+/** How much of a background command a shutdown notice shows. */
+const SHUTDOWN_COMMAND_CHARS = 80;
 const MAX_VERIFY_ATTEMPTS = 2;
 /** Set for delegated processes (channel workers) that must not see the breadcrumb. */
 export const SKIP_BREADCRUMB_ENV = "MYFLOW_SKIP_BREADCRUMB";
@@ -246,6 +256,13 @@ export default function extension(pi: ExtensionAPI): void {
   let lastCompactionTs = 0;
   let lastInjectionTs = 0;
   let verifyAttempts = 0;
+  // Background tasks this session started, by id. Ids only: the registry on
+  // disk stays the source of truth and is read on demand — a session start
+  // never scans `.myflow/.runtime/background/` (design.md §5).
+  const startedBackgroundIds = new Set<string>();
+  // `session_shutdown` can be reached more than once (cancel, reload, session
+  // replacement, process exit), so the handler must run its body exactly once.
+  let shutdownDone = false;
 
   // Native Pi sub-agent dispatch (single / parallel / chain). Registered in
   // both main sessions and sub-agents; the recursion guard below prevents a
@@ -264,6 +281,17 @@ export default function extension(pi: ExtensionAPI): void {
   registerMyflowApproval(pi, {
     deriveContextKey: (ctx) => deriveContextKey((ctx ?? {}) as HookContext),
     isSubAgent,
+  });
+
+  // Background-task tools. Registered in both main sessions and sub-agents so
+  // the `tool_call` guard below can refuse a sub-agent explicitly (with a
+  // reason) instead of the tool simply being absent; each tool's own
+  // `execute` refuses too. `onStarted` is the session's own bookkeeping, used
+  // only by the shutdown notice — the project registry is never scanned here.
+  registerMyflowBackground(pi as unknown as BgPi, {
+    deriveContextKey: (ctx) => deriveContextKey((ctx ?? {}) as HookContext),
+    isSubAgent,
+    onStarted: (id) => startedBackgroundIds.add(id),
   });
 
   // `/myflow-status` answers "where am I?" without a model call.
@@ -461,6 +489,21 @@ export default function extension(pi: ExtensionAPI): void {
       };
     }
 
+    // Background guard: only the main session may manage background tasks. A
+    // sub-agent runs non-interactively and registers its work in the shared,
+    // project-wide registry, where it would outlive the child and belong to
+    // nobody; this is the second line after each tool's own `execute` check.
+    if (BG_TOOL_NAMES.has(toolEvent.toolName) && isSubAgent) {
+      return {
+        block: true,
+        reason:
+          `Only the main session may manage background tasks. This process is the sub-agent ` +
+          `"${agentType}"; background tasks register in the shared project registry and ` +
+          `outlive the process, so a sub-agent must not create or control them. ` +
+          `Report the recommendation to the main session instead.`,
+      };
+    }
+
     // Path guard: a sub-agent that declared `writesUnder` may only write inside
     // `<active task>/<writesUnder>/`. An agent with no declaration (implement,
     // check) is the serial writer `subagent.ts` already keeps out of parallel
@@ -484,6 +527,83 @@ export default function extension(pi: ExtensionAPI): void {
 
   pi.on("session_before_compact", async (_event, _ctx) => {
     lastCompactionTs = Date.now();
+  });
+
+  /**
+   * The session is going away.
+   *
+   * Background tasks are **project-level**, not session-level (PRD Q1: the
+   * whole point is that a task survives the session). So this handler
+   * deliberately kills nothing: no `terminateTree`, no `taskkill`, no
+   * `process.kill`. What it does instead is (a) release this session's own
+   * resources and (b) tell the user which tasks this session started that are
+   * still running, so a leftover process is never invisible.
+   *
+   * Session-scoped resources: this extension holds **no timer and no child
+   * handle**. `myflow_bg_start` spawns the wrapper detached and immediately
+   * `unref()`s it, and the read/wait loops in `myflow_bg_output` are per-call
+   * and finish before the tool returns. The only session state is the id set
+   * below, which dies with the session object; there is nothing else to
+   * release.
+   *
+   * Idempotent by contract (`docs/extensions.md`: cancellation, reload,
+   * session replacement and process exit all converge here): a second call
+   * returns immediately, and nothing thrown ever escapes — a shutdown hook
+   * that throws can block or corrupt the exit.
+   */
+  pi.on("session_shutdown", async (_event, ctx) => {
+    // Claim the run before doing anything: cancellation, reload, session
+    // replacement and process exit all converge here, and this body must run
+    // exactly once. Claiming first makes a second call a no-op even if the
+    // first one throws halfway.
+    if (shutdownDone) return;
+    shutdownDone = true;
+    try {
+      const root = projectRoot ?? findProjectRoot(ctx.cwd) ?? ctx.cwd;
+      const dir = backgroundDir(root);
+      const running: Array<{ id: string; command: string }> = [];
+
+      for (const id of startedBackgroundIds) {
+        try {
+          const entry = readEntry(dir, id);
+          if (!entry) continue;
+          // Same precedence the tools use: a `.exit` record outranks pid
+          // liveness, so a finished task is never reported as running.
+          if (resolveStatus(dir, entry).status !== "running") continue;
+          running.push({ id, command: entry.command });
+        } catch {
+          // One unreadable entry must not silence the others.
+        }
+      }
+
+      // No UI means no one to notify: skip silently rather than log.
+      const ui = ctx.ui;
+      if (running.length > 0 && ui && typeof ui.notify === "function") {
+        const lines = running.map(({ id, command }) => {
+          const shown =
+            command.length > SHUTDOWN_COMMAND_CHARS
+              ? `${command.slice(0, SHUTDOWN_COMMAND_CHARS)}...`
+              : command;
+          return `  ${id}  ${shown}`;
+        });
+        ui.notify(
+          [
+            `${running.length} background task(s) started by this session are still running:`,
+            ...lines,
+            "They outlive this session on purpose. Read one with myflow_bg_output, stop one with myflow_bg_stop.",
+          ].join("\n"),
+          "warning",
+        );
+      }
+
+      // The id set is deliberately NOT cleared here. It is the only session
+      // state this extension owns (no timer, no child handle), it dies with the
+      // session object, and keeping it is what makes `shutdownDone` — not a
+      // side effect of clearing — the thing that guarantees one run per
+      // session. Clearing it would make the flag unobservable and untestable.
+    } catch {
+      // A shutdown hook that throws can block or corrupt the exit.
+    }
   });
 
   // Verify gate: a check sub-agent does not settle while the configured verify
