@@ -552,6 +552,37 @@ test("H6 -10 starting 行可见；超时自愈为 exited 并回写；prune 清�
     assert.ok(!existsSync(logPath(dir, residue.id)), "日志必须被删除");
     assert.ok(!existsSync(pidPath(dir, residue.id)), ".pid 握手必须随条目一起删除");
     assert.ok(!(pruned.details.tasks as BgListRow[]).some((row) => row.id === residue.id));
+
+    // (d) The opposite case: a 25h-old `starting` entry whose `.pid` names a
+    // **live** process did start — only the tool's `running` write-back never
+    // landed. It must NOT be pruned: deleting it would erase the log and the
+    // pid of a running command, i.e. create exactly the orphan the handshake
+    // exists to prevent.
+    //
+    // 回退点：`isFinished` 不看 pid 存活（只看 `starting` 超时）→ 下面三条
+    //   存在性断言全变红，且 `pruned` 变成 2。
+    const liveStarting = makeEntry(dir, "bg-list-starting-0010d", {
+      status: "starting",
+      pid: 0,
+      started_at: iso(now - 25 * hour),
+    });
+    seed(dir, liveStarting);
+    writeFileSync(pidPath(dir, liveStarting.id), JSON.stringify({ pid: process.pid, at: iso(now) }));
+
+    const prunedAgain = await tool.execute(
+      "list-10e",
+      { prune: true },
+      undefined,
+      undefined,
+      fakeCtx(root),
+    );
+    assert.equal(prunedAgain.details.pruned, 0, "pid 仍存活的 starting 条目不得被 prune");
+    assert.ok(existsSync(entryPath(dir, liveStarting.id)), "存活任务的条目必须保留");
+    assert.ok(existsSync(pidPath(dir, liveStarting.id)), "存活任务的 .pid 握手必须保留");
+    // 而且同一次 list 里它必须被认成 running（level 4 压过 level 5）。
+    const liveRow = (prunedAgain.details.tasks as BgListRow[]).find((row) => row.id === liveStarting.id);
+    assert.equal(liveRow?.status, "running");
+    assert.equal(liveRow?.pid, process.pid);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

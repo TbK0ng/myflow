@@ -689,10 +689,20 @@ export function writeCursor(path: string, offset: number): void {
  * `starting` entry counts only once it is past `STARTING_TIMEOUT_MS`, because
  * until then it is a task that may still confirm itself (and pruning it would
  * race the wrapper).
+ *
+ * A **live pid** outranks the `starting` timeout, for the same reason level 4
+ * outranks level 5 in `resolveStatus`: the wrapper wrote its `<id>.pid`
+ * handshake, so the task did start — only the tool's `running` write-back never
+ * landed (the tool crashed between `spawn` and that second write). Deleting such
+ * an entry, its log and its `.pid` would leave a running command with no
+ * registry entry at all: exactly the orphan this feature exists to prevent. A
+ * reused pid can therefore keep an old `starting` entry unprunable, which is the
+ * safe direction — the documented pid-identity limit, never a deletion.
  */
 function isFinished(dir: string, entry: BackgroundEntry, nowMs: number): boolean {
   if (existsSync(exitPathFor(dir, entry))) return true;
   if (entry.status === "exited" || entry.status === "stopped") return true;
+  if (isAlive(readPid(dir, entry))) return false;
   if (entry.status === "starting") {
     const startedAt = parseTimestamp(entry.started_at);
     return startedAt === null || nowMs - startedAt > STARTING_TIMEOUT_MS;
@@ -766,9 +776,9 @@ function removeEntryFiles(dir: string, entry: BackgroundEntry): void {
  *
  * `now` is an explicit parameter (never read from the clock here) so the 24h
  * boundary is testable. A running task is never touched, a `starting` task is
- * left alone until its handshake timeout has passed, and a finished task with
- * no usable end date is left in place: something we cannot date is not
- * something we should delete.
+ * left alone until its handshake timeout has passed **and** no pid reads alive,
+ * and a finished task with no usable end date is left in place: something we
+ * cannot date is not something we should delete.
  */
 export function prune(dir: string, now: number): number {
   const cutoff = now - PRUNE_AFTER_MS;

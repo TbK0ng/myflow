@@ -1360,3 +1360,45 @@ test("H6 -13 拒绝外壳时也已经写下 .pid（握手早于外壳解析）",
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("H6 -14 .pid 写失败 → fail-closed：不执行命令，.exit 说明握手失败", () => {
+  // 回退点：删掉 `runWrapper` 里写 `.pid` 的 try/catch（或让 catch 落下去继续执行
+  //   → marker 出现、命令在「没有 pid 记录」的情况下跑了，孤儿窗口重新打开；
+  //   握手失败却不写 `.exit` → exit 断言读不到文件。
+  //
+  // 这是一个真实的写失败，不是桩：`--pid` 的**父目录**是一个普通文件，
+  //   所以 `writeJsonAtomic` 的 `mkdirSync` 必然失败（Windows/Linux 都是 EEXIST）。
+  const dir = makeDir();
+  try {
+    const blocker = join(dir, "blocker");
+    writeFileSync(blocker, "not a directory");
+    const log = join(dir, "task.log");
+    const exit = join(dir, "task.exit");
+    const pidFile = join(blocker, "task.pid");
+    const marker = join(dir, "marker.txt");
+
+    const result = runRunner([
+      "--id",
+      "bg-test",
+      "--log",
+      log,
+      "--exit",
+      exit,
+      "--pid",
+      pidFile,
+      "--",
+      `echo RAN > ${shPath(marker)}`,
+    ]);
+
+    assert.notEqual(result.status, 0, "握手写失败必须以非零退出码上报");
+    const record = JSON.parse(readFileSync(exit, "utf-8"));
+    assert.equal(record.exit_code, null);
+    assert.match(String(record.error), /pid handshake/, "`.exit` 必须点名是握手写失败");
+    assert.equal(record.shell, null, "拒绝发生在解析外壳之前，没有外壳可报告");
+    assert.ok(!existsSync(marker), "握手写失败时命令绝不能执行");
+    assert.ok(!existsSync(log), "命令没执行，外壳也不会创建日志文件");
+    assert.ok(!existsSync(pidFile), "写失败的握手不得留下残缺文件");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
