@@ -14,6 +14,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { pathToFileURL } from "node:url";
 import {
+  isRetryableSpawnError,
   quoteForBash,
   resolveShellPath,
   runCommand,
@@ -452,6 +453,89 @@ test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记�
     assert.equal(record?.exit_code, null);
     assert.match(String(record?.error), /ENOENT/);
     assert.equal(record?.retries, undefined, "没有重试时省略 retries");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("H2 -1 谓词层：ERR_* 是确定性错误，不重试；资源类/未知/无 code 仍重试", () => {
+  // 回退点（H2）：删掉 isRetryableSpawnError 里的 `code.startsWith("ERR_")` 提前返回
+  //   → 下面四条 ERR_* 断言都变红（它们会落到末尾的 `return true`）。
+  //   把 ERR_* 塞进 NON_RETRYABLE_SPAWN_CODES 是做不到的：前缀不是集合成员，
+  //   所以必须留这条单独判断。
+  const withCode = (code: string | undefined) =>
+    code === undefined ? {} : { code };
+
+  for (const code of [
+    "ERR_INVALID_ARG_TYPE",
+    "ERR_INVALID_CALLBACK",
+    "ERR_OUT_OF_RANGE",
+    "ERR_UNKNOWN_SIGNAL",
+  ]) {
+    assert.equal(
+      isRetryableSpawnError(withCode(code)),
+      false,
+      `${code} 是调用方写错，重试只会把错误延迟整个退避预算`,
+    );
+  }
+
+  // 可重试的一侧必须保持：资源耗尽、无法识别的 code（Windows 232 → UNKNOWN），
+  // 以及没有 code 的错误。
+  assert.equal(isRetryableSpawnError(withCode("EAGAIN")), true);
+  assert.equal(isRetryableSpawnError(withCode("ENOMEM")), true);
+  assert.equal(isRetryableSpawnError(withCode("UNKNOWN")), true);
+  assert.equal(isRetryableSpawnError(withCode("")), true, "空 code 无法分类，按可重试处理");
+  assert.equal(isRetryableSpawnError({}), true, "没有 code 的错误必须可重试（232 靠这条）");
+  assert.equal(isRetryableSpawnError(undefined), true);
+  assert.equal(isRetryableSpawnError(null), true);
+
+  // 既有确定性集合不能被这次改动挤掉。
+  for (const code of ["ENOENT", "EINVAL", "EACCES", "EPERM"]) {
+    assert.equal(isRetryableSpawnError(withCode(code)), false, `${code} 必须仍然不重试`);
+  }
+});
+
+test("H2 -2 行为层：同步抛 ERR_INVALID_ARG_TYPE 只尝试一次，且不退避等待", async () => {
+  // 回退点（H2）：删掉 ERR_ 前缀判断 → attempts 变成 9（1 + maxRetries 8）、
+  //   calls 变成 9、waits 不再为空，下面四条断言全变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "err-code.log");
+
+    let calls = 0;
+    const spawnImpl = () => {
+      calls += 1;
+      // Node 在参数错误时是**同步抛**，不是发 'error' 事件；两条路径都必须不重试。
+      const error = new Error("The \"options\" argument must be of type object") as NodeJS.ErrnoException;
+      error.code = "ERR_INVALID_ARG_TYPE";
+      throw error;
+    };
+
+    let record: Record<string, unknown> | undefined;
+    let runnerCode: number | undefined;
+    const waits: number[] = [];
+    const outcome = await runCommand({
+      command: "never-runs",
+      logPath: log,
+      cwd: dir,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      maxRetries: 8,
+      wait: (ms: number) => {
+        waits.push(ms);
+      },
+      onOutcome: (payload, code) => {
+        record = payload;
+        runnerCode = code;
+      },
+    });
+
+    assert.equal(outcome.attempts, 1, "ERR_INVALID_ARG_TYPE 必须只尝试一次");
+    assert.equal(calls, 1, "spawn 只应被调用一次");
+    assert.deepEqual(waits, [], "确定性错误不得触发任何退避等待");
+    assert.notEqual(runnerCode, 0, "被拒必须以非零退出码上报");
+    assert.equal(record?.exit_code, null);
+    assert.equal(record?.retries, undefined, "没有重试时省略 retries");
+    assert.match(String(record?.error), /ERR_INVALID_ARG_TYPE/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

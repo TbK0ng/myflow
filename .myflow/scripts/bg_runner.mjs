@@ -133,9 +133,9 @@ const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
  * for a total wait well under `SPAWN_RETRY_TOTAL_BUDGET_MS`.
  *
  * Only *transient/unknown* failures are retried. A missing program (`ENOENT`),
- * a bad argument (`EINVAL`), or a permission problem (`EACCES` / `EPERM`) will
- * fail identically no matter how many times it is attempted, so retrying those
- * just wastes time and hides the real error.
+ * a bad argument (`EINVAL`), a permission problem (`EACCES` / `EPERM`), or one
+ * of Node's own `ERR_*` codes will fail identically no matter how many times it
+ * is attempted, so retrying those just wastes time and hides the real error.
  */
 const MAX_SPAWN_RETRIES = 7;
 const SPAWN_RETRY_BASE_DELAY_MS = 250;
@@ -177,6 +177,13 @@ const NON_RETRYABLE_SPAWN_CODES = new Set(["ENOENT", "EINVAL", "EACCES", "EPERM"
  * no `code` at all cannot be classified, so the user's 232 lands here. The four
  * codes known to be deterministic are never retried.
  *
+ * Node's own `ERR_*` codes (`ERR_INVALID_ARG_TYPE`, `ERR_INVALID_CALLBACK`, …)
+ * are never retried either: they mean *the caller wrote the call wrong*, so no
+ * amount of waiting changes the outcome. Retrying them would only delay the
+ * real error by the whole ~7.2s budget. They are matched by prefix rather than
+ * listed in `NON_RETRYABLE_SPAWN_CODES`, because `ERR_*` is a namespace, not a
+ * handful of fixed members.
+ *
  * @param {unknown} error
  * @returns {boolean}
  */
@@ -186,6 +193,7 @@ export function isRetryableSpawnError(error) {
       ? /** @type {{ code?: unknown }} */ (error).code
       : undefined;
   if (typeof code !== "string" || code.trim() === "") return true;
+  if (code.startsWith("ERR_")) return false;
   if (RETRYABLE_SPAWN_CODES.has(code)) return true;
   if (NON_RETRYABLE_SPAWN_CODES.has(code)) return false;
   return true;
