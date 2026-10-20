@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { isSafeWriteScope } from "./agents.ts";
+import { isSafeWriteScope, isWithinWriteScope } from "./agents.ts";
 import { findProjectRoot } from "./find-project-root.ts";
 import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
 import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
@@ -84,28 +84,13 @@ export const SKIP_BREADCRUMB_ENV = "MYFLOW_SKIP_BREADCRUMB";
 const PATH_SCOPED_WRITE_TOOLS = new Set(["write", "edit"]);
 
 /**
- * Normalize a write target for a containment check.
- *
- * `resolve` collapses `..` and normalizes separators; unifying to `/` keeps the
- * prefix check from being fooled by a `\` vs `/` difference, and lowercasing on
- * Windows makes the comparison case-insensitive (the filesystem is). This is a
- * lexical check (it does not follow symlinks): the guarantee is a directory
- * boundary, not mutual exclusion.
+ * `normalizeWriterPath` / `isWithinWriteScope` moved to `./agents.ts` so
+ * `background.ts` can run the same containment test for `cwd` (R5/ADR-9).
+ * `background.ts` cannot import this module: `index.ts` already imports it, so
+ * the reverse edge would be a cycle. These re-exports keep every existing
+ * importer of `./index.ts` working unchanged.
  */
-export function normalizeWriterPath(target: string, baseDir: string): string {
-  const normalized = resolve(baseDir, target).split("\\").join("/");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-/** Whether `target` resolves to `root` or a path inside it. */
-export function isWithinWriteScope(target: string, root: string, baseDir: string): boolean {
-  const normalizedTarget = normalizeWriterPath(target, baseDir);
-  let normalizedRoot = normalizeWriterPath(root, baseDir);
-  while (normalizedRoot.length > 1 && normalizedRoot.endsWith("/")) {
-    normalizedRoot = normalizedRoot.slice(0, -1);
-  }
-  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
-}
+export { isWithinWriteScope, normalizeWriterPath } from "./agents.ts";
 
 /**
  * Read the write target from a `write`/`edit` tool call.

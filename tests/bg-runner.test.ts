@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -1205,6 +1206,74 @@ test("S3 -3: 永远失败时有界放弃（真实等待，总耗时小于预算+
     );
     assert.match(String(record?.error), /refused to create the process after 8 attempts/);
     assert.match(String(record?.error), /UNKNOWN/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H5 — `--cwd`（R5）
+//
+// The wrapper's own cwd (where `--log` / `--exit` resolve from) and the
+// *command's* cwd are now separate: `myflow_bg_start` validates the directory
+// and passes it as `--cwd`, so a background command can run in a subdirectory
+// without moving the log/exit bookkeeping out of the project.
+// ---------------------------------------------------------------------------
+
+/** Quote `process.execPath` for a POSIX shell (its path may contain spaces). */
+function quotedNode(): string {
+  return `'${process.execPath.replace(/'/g, "'\''")}'`;
+}
+
+test("H5 -6 --cwd 生效（命令在该目录执行），缺值是硬错误", () => {
+  const dir = makeDir();
+  try {
+    const sub = join(dir, "app");
+    mkdirSync(sub, { recursive: true });
+    const log = join(dir, "task.log");
+    const exit = join(dir, "task.exit");
+
+    // 回退点：删掉 `cwd: options.cwd ?? process.cwd()` 里的 `options.cwd`（退回
+    // process.cwd()）→ `console.log(process.cwd())` 打印的是 dir，断言变红。
+    const result = runRunner(
+      [
+        "--id",
+        "bg-test",
+        "--log",
+        log,
+        "--exit",
+        exit,
+        "--cwd",
+        sub,
+        "--",
+        `${quotedNode()} -e "console.log(process.cwd())"`,
+      ],
+      { cwd: dir },
+    );
+
+    assert.equal(result.status, 0);
+    assert.equal(
+      readFileSync(log, "utf-8").trim(),
+      sub,
+      "命令必须在 --cwd 指定的目录里执行",
+    );
+    // 记账文件仍落在 wrapper 自己的 cwd 下（--log/--exit 是绝对路径，不受 --cwd 影响）。
+    assert.equal(JSON.parse(readFileSync(exit, "utf-8")).exit_code, 0);
+
+    // `--cwd` 缺值不得悄悄退回“当前目录”：否则命令会在一个确认门从未展示过的
+    // 目录里运行。硬错误 = 退出码 2，且不写 `.exit`（回退点：把缺值当 null → 正常启动）。
+    const missingCwdExit = join(dir, "missing.exit");
+    const missing = runRunner([
+      "--id",
+      "bg-test",
+      "--log",
+      join(dir, "missing.log"),
+      "--exit",
+      missingCwdExit,
+      "--cwd",
+    ]);
+    assert.equal(missing.status, 2, "`--cwd` 缺值必须是硬错误（EXIT_BAD_ARGS）");
+    assert.ok(!existsSync(missingCwdExit), "参数错误时不得写 .exit 记录");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

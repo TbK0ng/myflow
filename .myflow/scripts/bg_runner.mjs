@@ -414,13 +414,14 @@ function sleepSync(milliseconds) {
  *
  * Unknown flags before `--` are a hard error rather than a silently ignored
  * typo: a mistyped `--exit` would otherwise make the wrapper "succeed" while
- * writing the record nowhere.
+ * writing the record nowhere. `--cwd` additionally treats a missing value as a
+ * hard error (see below), because that one changes where the command runs.
  *
  * @param {string[]} argv arguments after the executable, i.e. `process.argv.slice(2)`
- * @returns {{ id: string | null, log: string | null, exit: string | null, command: string | null }}
+ * @returns {{ id: string | null, log: string | null, exit: string | null, cwd: string | null, command: string | null }}
  */
 export function parseArgs(argv) {
-  const options = { id: null, log: null, exit: null, command: null };
+  const options = { id: null, log: null, exit: null, cwd: null, command: null };
   let index = 0;
   for (; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -440,6 +441,19 @@ export function parseArgs(argv) {
     }
     if (arg === "--exit") {
       options.exit = argv[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg === "--cwd") {
+      // A missing value is a hard error, unlike the other flags: silently
+      // falling back to this process's cwd would run the command in a
+      // directory nobody asked for, and the confirmation the user saw named a
+      // different one. `--cwd` is therefore never "absent by accident".
+      const value = argv[index + 1];
+      if (typeof value !== "string" || value === "") {
+        throw new Error("--cwd requires a value");
+      }
+      options.cwd = value;
       index += 1;
       continue;
     }
@@ -811,9 +825,14 @@ export function runWrapper(injected = {}) {
   // performs the redirection into the log), the argv it is spawned with, and
   // the bounded retry policy. `record` writes the `.exit` outcome; the wrapper
   // never sees the child directly.
+  //
+  // `--cwd` is where the *command* runs; this wrapper's own cwd stays whatever
+  // the caller picked (the project root), so `--log`/`--exit` paths and this
+  // script's own location are unaffected by it. `myflow_bg_start` resolves and
+  // validates the directory before spawning; the wrapper only forwards it.
   runCommand({
     command: options.command,
-    cwd: process.cwd(),
+    cwd: options.cwd ?? process.cwd(),
     logPath: options.log,
     shellPath,
     onOutcome: (payload, runnerCode) => record(payload, runnerCode),

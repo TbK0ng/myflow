@@ -54,6 +54,36 @@ export function isSafeWriteScope(scope: string): boolean {
   return !value.split(/[\\/]+/).includes("..");
 }
 
+/**
+ * Normalize a path for a containment check.
+ *
+ * `resolve` collapses `..` and normalizes separators; unifying to `/` keeps the
+ * prefix check from being fooled by a `\` vs `/` difference, and lowercasing on
+ * Windows makes the comparison case-insensitive (the filesystem is). This is a
+ * lexical check (it does not follow symlinks): the guarantee is a directory
+ * boundary, not mutual exclusion.
+ *
+ * It lives here, next to `isSafeWriteScope`, because two callers need the same
+ * rule and one of them (`background.ts`) must not import `index.ts`: the
+ * `writesUnder` guard (`index.ts`, via `evaluateWriteScope`) and the
+ * `myflow_bg_start` `cwd` test (R5/ADR-9). A second copy of this predicate is
+ * exactly the kind of drift that lets one boundary be loosened alone.
+ */
+export function normalizeWriterPath(target: string, baseDir: string): string {
+  const normalized = resolve(baseDir, target).split("\\").join("/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+/** Whether `target` resolves to `root` or a path inside it. */
+export function isWithinWriteScope(target: string, root: string, baseDir: string): boolean {
+  const normalizedTarget = normalizeWriterPath(target, baseDir);
+  let normalizedRoot = normalizeWriterPath(root, baseDir);
+  while (normalizedRoot.length > 1 && normalizedRoot.endsWith("/")) {
+    normalizedRoot = normalizedRoot.slice(0, -1);
+  }
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
+}
+
 export interface AgentDiscoveryResult {
   agents: AgentConfig[];
   agentsDir: string | null;

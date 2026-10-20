@@ -42,6 +42,11 @@ import {
 //   -7：删掉 bgSubAgentRefusal → 子代理用例出现副作用。
 //   -10：删掉 `onStarted` 调用的 try/catch → 成功的 start 变成被拒绝（promise
 //        reject），用例变红。
+//   H5 -1：删掉 `--cwd` 透传（或把条目 cwd 写回 root）→ 命令在错误目录执行，
+//        marker 里的路径不等于 `<root>/app`。
+//   H5 -2/-3/-4：删掉 `resolveBgCwd` 的包含判定（或目录存在性判定）→ 越界路径
+//        被接受，confirm/spawn 计数非 0、注册表非空。
+//   H5 -5：把确认门的 message 改回只传 command → 断言里读不到 cwd。
 
 const ROOT = join(import.meta.dirname, "..");
 const RUNNER = join(ROOT, ".myflow", "scripts", "bg_runner.mjs");
@@ -582,6 +587,204 @@ test("F3 -10 onStarted 抛错被吞：已经起来的 start 仍是成功", async
     const entry = readEntry(backgroundDir(root), id);
     assert.ok(entry, "注册表条目必须存在（进程已经在跑了）");
     assert.equal(entry!.status, "running");
+  } finally {
+    await cleanup(root, undefined);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H5 — `cwd`（R5 / ADR-9）
+//
+// `cwd` 是命令真正执行的目录，所以它有两条约束：必须在项目根之内（与
+// `writesUnder` 共用同一个按段、大小写不敏感、折叠 `..` 的包含判定），并且必须
+// 是已存在的目录。校验发生在确认门**之前**：拒绝时不弹窗、不写条目、不 spawn。
+// ---------------------------------------------------------------------------
+
+/**
+ * 在 `bash -lc` 里调用本机的 node（不依赖 PATH 上有 node）。
+ *
+ * `process.execPath` 里可能有空格（Windows 的 `C:\Program Files\nodejs\`），
+ * 所以用单引号包住：POSIX 单引号内一切字面量，路径里的反斜杠不会被 bash 转义。
+ */
+function nodeCommand(script: string): string {
+  const quoted = `'${process.execPath.replace(/'/g, "'\''")}'`;
+  return `${quoted} -e "${script}"`;
+}
+
+test("H5 -1 cwd:'app' → 命令真的在 <root>/app 里执行（真进程）", async () => {
+  const root = makeProject();
+  mkdirSync(join(root, "app"), { recursive: true });
+  let pid: unknown;
+  try {
+    const result = await makeTool().execute(
+      "call-h5-1",
+      // 回退点：删掉 spawn 参数里的 `--cwd`（或把条目/参数退回 root）→ 命令在项目根
+      // 执行，marker 内容是 root 而不是 root/app，断言变红。
+      { command: `${nodeCommand("process.stdout.write(process.cwd())")} > marker.txt`, cwd: "app" },
+      undefined,
+      undefined,
+      fakeCtx(root),
+    );
+
+    pid = result.details.pid;
+    assert.equal(result.details.started, true);
+
+    const id = result.details.id as string;
+    const dir = backgroundDir(root);
+    const marker = join(root, "app", "marker.txt");
+
+    const wrote = await waitFor(() => existsSync(marker) && readFileSync(marker, "utf-8").length > 0);
+    assert.ok(wrote, "命令必须把 cwd 写进 app/marker.txt，证明它真的在 app 里执行");
+    assert.equal(
+      readFileSync(marker, "utf-8").trim(),
+      join(root, "app"),
+      "工作目录必须是解析后的 <root>/app",
+    );
+
+    // 注册表条目记录解析后的绝对 cwd，而不是用户传的相对路径。
+    const entry = readEntry(dir, id)!;
+    assert.equal(entry.cwd, join(root, "app"));
+  } finally {
+    await cleanup(root, pid);
+  }
+});
+
+test("H5 -2 cwd:'../outside' → 拒绝，零副作用", async () => {
+  const root = makeProject();
+  try {
+    const { fn, calls } = stubSpawn();
+    let confirms = 0;
+    const ctx = fakeCtx(root, {
+      ui: {
+        confirm: async () => {
+          confirms += 1;
+          return true;
+        },
+      },
+    });
+
+    // 回退点：删掉 resolveBgCwd 的包含判定 → `..` 逃逸被接受，confirm/spawn 非 0。
+    const result = await makeTool({ spawnProcess: fn }).execute(
+      "call-h5-2",
+      { command: "echo hi", cwd: "../outside" },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    assert.equal(result.isError, true);
+    assert.equal(result.details.started, false);
+    assert.equal(result.details.via, "error");
+    assert.match(String(result.details.error), /inside the project root/);
+    assert.equal(confirms, 0, "越界的 cwd 必须在弹窗之前被拒绝");
+    assert.equal(calls.length, 0, "越界的 cwd 绝不能 spawn");
+    assert.deepEqual(listEntries(backgroundDir(root)).entries, [], "拒绝不得写注册表条目");
+  } finally {
+    await cleanup(root, undefined);
+  }
+});
+
+test("H5 -3 根外的绝对路径（真实存在的目录）→ 拒绝，零副作用", async () => {
+  const root = makeProject();
+  try {
+    const { fn, calls } = stubSpawn();
+    let confirms = 0;
+    const ctx = fakeCtx(root, {
+      ui: {
+        confirm: async () => {
+          confirms += 1;
+          return true;
+        },
+      },
+    });
+    // 一个**真实存在**的目录，但它在项目根之外：证明拒绝来自包含判定，
+    // 而不是碰巧因为「目录不存在」而被挡下。
+    const outside = tmpdir();
+    assert.ok(existsSync(outside));
+
+    // 回退点：删掉包含判定（只留存在性/目录判定）→ 这条用例被放行。
+    const result = await makeTool({ spawnProcess: fn }).execute(
+      "call-h5-3",
+      { command: "echo hi", cwd: outside },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    assert.equal(result.isError, true);
+    assert.equal(result.details.via, "error");
+    assert.match(String(result.details.error), /inside the project root/);
+    assert.equal(confirms, 0);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(listEntries(backgroundDir(root)).entries, []);
+  } finally {
+    await cleanup(root, undefined);
+  }
+});
+
+test("H5 -4 不存在的目录 → 拒绝，零副作用", async () => {
+  const root = makeProject();
+  try {
+    const { fn, calls } = stubSpawn();
+    let confirms = 0;
+    const ctx = fakeCtx(root, {
+      ui: {
+        confirm: async () => {
+          confirms += 1;
+          return true;
+        },
+      },
+    });
+
+    // 回退点：删掉目录存在性判定 → 路径通过包含判定后被接受，计数非 0。
+    const result = await makeTool({ spawnProcess: fn }).execute(
+      "call-h5-4",
+      { command: "echo hi", cwd: "no-such-dir" },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    assert.equal(result.isError, true);
+    assert.equal(result.details.via, "error");
+    assert.match(String(result.details.error), /existing directory/);
+    assert.equal(confirms, 0);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(listEntries(backgroundDir(root)).entries, []);
+  } finally {
+    await cleanup(root, undefined);
+  }
+});
+
+test("H5 -5 确认门文本包含 cwd（非根与等于根时都显示）", async () => {
+  const root = makeProject();
+  mkdirSync(join(root, "app"), { recursive: true });
+  try {
+    const messages: Array<{ title: string; message: string }> = [];
+    const ctx = fakeCtx(root, {
+      ui: {
+        confirm: async (title: string, message: string) => {
+          messages.push({ title, message });
+          return false; // 只要看见文本，不必真的起进程
+        },
+      },
+    });
+
+    // 回退点：把 message 改回只传 `command` → 下面的 cwd 断言一条都读不到。
+    await makeTool().execute(
+      "call-h5-5a",
+      { command: "pwd > marker.txt", cwd: "app" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    await makeTool().execute("call-h5-5b", { command: "echo hi" }, undefined, undefined, ctx);
+
+    assert.equal(messages.length, 2, "每次确认都要弹窗一次");
+    assert.ok(messages[0].message.includes(join(root, "app")), "确认文本必须写出解析后的 cwd");
+    assert.ok(messages[0].message.includes("pwd > marker.txt"), "确认文本必须仍然写出命令");
+    // S-2：等于项目根时也显示，避免「看起来像在别处」的歧义。
+    assert.ok(messages[1].message.includes(root), "cwd 等于项目根时也要显示目录");
   } finally {
     await cleanup(root, undefined);
   }

@@ -56,6 +56,7 @@ import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { findProjectRoot } from "./find-project-root.ts";
+import { isWithinWriteScope } from "./agents.ts";
 
 /** The registry directory, relative to a project root. */
 export const BACKGROUND_DIR = join(".myflow", ".runtime", "background");
@@ -665,6 +666,13 @@ export interface BgStartParams {
   command?: string;
   description?: string;
   unattended?: boolean;
+  /**
+   * Directory the command runs in, relative to the project root (or absolute,
+   * still inside it). Absent means the project root. Validated before the
+   * confirmation dialog: an out-of-root or non-existent directory is refused
+   * with no dialog, no registry entry, and no spawn (R5/ADR-9).
+   */
+  cwd?: string;
 }
 
 /** The structured payload returned by `myflow_bg_start`. */
@@ -761,6 +769,62 @@ export function bgNoUiInstruction(mode: string): string {
   ].join("\n");
 }
 
+/**
+ * Resolve and validate the optional `cwd` of a background command (R5/ADR-9).
+ *
+ * Three rules, all fail-closed and all checked **before** the confirmation
+ * dialog is shown, so a refusal has no side effects:
+ *
+ *  1. A relative path resolves against the project root; an absolute path is
+ *     taken as-is. `resolve` collapses `..` in both cases.
+ *  2. The result must stay inside the project root. The containment test is the
+ *     same `isWithinWriteScope` the `writesUnder` guard uses — by path
+ *     segment, case-insensitive on Windows — imported rather than copied, so a
+ *     later tightening cannot leave one of the two boundaries loose.
+ *  3. It must already be a directory. The registry, the logs, and the cursors
+ *     are all project-level, so a background task cannot meaningfully run
+ *     outside the project; and a cwd that does not exist would fail inside the
+ *     wrapper, where the user could no longer be told before it started.
+ *
+ * An absent (or blank) value means "the project root".
+ */
+export function resolveBgCwd(
+  root: string,
+  requested: unknown,
+): { ok: true; cwd: string } | { ok: false; error: string } {
+  const projectRoot = resolve(root);
+  const raw = typeof requested === "string" ? requested.trim() : "";
+  if (!raw) return { ok: true, cwd: projectRoot };
+
+  const target = resolve(projectRoot, raw);
+  if (!isWithinWriteScope(target, projectRoot, projectRoot)) {
+    return {
+      ok: false,
+      error:
+        `\`cwd\` must stay inside the project root (${projectRoot}), but ${target} is outside it. ` +
+        "Nothing was started.",
+    };
+  }
+
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(target);
+  } catch {
+    return {
+      ok: false,
+      error: `\`cwd\` must be an existing directory: ${target} does not exist. Nothing was started.`,
+    };
+  }
+  if (!stats.isDirectory()) {
+    return {
+      ok: false,
+      error: `\`cwd\` must be an existing directory: ${target} is not a directory. Nothing was started.`,
+    };
+  }
+
+  return { ok: true, cwd: target };
+}
+
 /** The JSON-schema parameter object for `myflow_bg_start`. */
 const BG_START_PARAMETERS = {
   type: "object",
@@ -777,6 +841,16 @@ const BG_START_PARAMETERS = {
     description: {
       type: "string",
       description: "Optional short label for the task, shown by myflow_bg_list.",
+    },
+    cwd: {
+      type: "string",
+      description:
+        "Optional working directory for the command. A relative path is resolved against the " +
+        "project root; an absolute path is accepted only if it is still inside it. It must be an " +
+        "existing directory. Anything outside the project root (`..` traversal, an absolute path " +
+        "elsewhere, a case-only trick) is refused before the confirmation dialog: nothing is " +
+        "started and no registry entry is written. Defaults to the project root. The dialog always " +
+        "shows this directory, because it is what actually changes the meaning of a relative command.",
     },
     unattended: {
       type: "boolean",
@@ -822,7 +896,9 @@ function startHumanText(
  *
  * The start sequence is fixed (`design.md` §2, R1):
  *
- *   1. confirm the command with the user (or refuse for lack of a UI),
+ *   0. validate the command and the `cwd` (a refusal here must not prompt),
+ *   1. confirm the command and its directory with the user (or refuse for lack
+ *      of a UI),
  *   2. spawn the detached wrapper and `unref()` it,
  *   3. write the registry entry,
  *   4. return.
@@ -865,6 +941,17 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
         typeof params?.description === "string" ? params.description.trim() : "";
 
       const root = findProjectRoot(ctx?.cwd ?? process.cwd()) ?? ctx?.cwd ?? process.cwd();
+
+      // `cwd` is validated *here*, before the dialog: showing a confirmation for
+      // a directory we are going to refuse would ask the user to approve
+      // something that never happens, and a rejection must leave no trace (no
+      // dialog, no registry entry, no spawn).
+      const targetCwd = resolveBgCwd(root, params?.cwd);
+      if (!targetCwd.ok) {
+        return errorResult(targetCwd.error, { via: "error" });
+      }
+      const cwd = targetCwd.cwd;
+
       const dir = backgroundDir(root);
       const contextKey = registration.deriveContextKey?.(ctx) ?? null;
       const unattended = params?.unattended === true;
@@ -875,7 +962,11 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
       // is recorded rather than treated as consent (R8).
       let confirmedBy: ConfirmedBy;
       if (ctx?.hasUI === true && typeof confirm === "function") {
-        const agreed = await confirm.call(ctx.ui, "以后台运行这个命令？", command);
+        // The dialog names the directory *always*, even when it is the project
+        // root: a shell makes a relative path in the command mean something
+        // different in every directory, so the user must be able to read where
+        // it will run instead of inferring it (R5, `implement.md` S-2).
+        const agreed = await confirm.call(ctx.ui, "以后台运行这个命令？", `目录：${cwd}\n\n${command}`);
         if (agreed !== true) {
           return textResult(
             { started: false, via: "cancelled" },
@@ -904,7 +995,12 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
       try {
         const child = spawnProcess(
           process.execPath,
-          [runner, "--id", id, "--log", log, "--exit", exit, "--", command],
+          // `--cwd` is the *validated, absolute* directory: the wrapper's own
+          // cwd stays the project root (so `--log`/`--exit` and this script's
+          // location are independent of it), and the command itself runs where
+          // the dialog said it would. It precedes `--` because everything after
+          // `--` is the command.
+          [runner, "--id", id, "--log", log, "--exit", exit, "--cwd", cwd, "--", command],
           { detached: true, stdio: "ignore", cwd: root },
         );
         child.unref();
@@ -945,12 +1041,13 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
 
       // Step 3: record the task. `log` and `exit_file` are stored relative to
       // the project root, the shape `design.md` §3.1 documents and
-      // `exitPathFor` resolves.
+      // `exitPathFor` resolves. `cwd` is the resolved absolute directory the
+      // command runs in (R5) — inside the project root, always.
       const entry: BackgroundEntry = {
         id,
         command,
         ...(description ? { description } : {}),
-        cwd: root,
+        cwd,
         pid: pid ?? 0,
         log: join(BACKGROUND_DIR, `${id}.log`),
         exit_file: join(BACKGROUND_DIR, `${id}.exit`),
