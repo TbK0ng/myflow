@@ -51,7 +51,7 @@ python3 .myflow/scripts/task.py current --source
 ### Correctness
 
 - [ ] Behavior matches the PRD / task requirements.
-- [ ] No regression in the six extension hooks or `myflow_subagent`.
+- [ ] No regression in the eight extension hooks or `myflow_subagent`.
 - [ ] Error paths fail loudly instead of returning misleading output.
 
 ### Contracts

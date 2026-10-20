@@ -106,11 +106,31 @@ Keep these consistent across files; change them together or not at all:
   permission boundary — a `bash`-capable agent can bypass it, and
   `--allow-unapproved` is the escape hatch that leaves
   `task.json.started_without_approval`.
+- **Background tasks**: `myflow_bg_start` / `myflow_bg_output` /
+  `myflow_bg_list` / `myflow_bg_stop` are the main session's tools for a command
+  that must outlive the session. Everything lives under
+  `.myflow/.runtime/background/`: `<taskId>.json` (registry entry, written only
+  by the tools, atomically), `<taskId>.log` (written by the shell itself),
+  `<taskId>.exit` (written by the detached wrapper
+  `.myflow/scripts/bg_runner.mjs`, the only observer of the exit code), and
+  `cursors/<contextKey>__<taskId>.json` (per-session read cursor). `taskId` is
+  `bg-<base36ms>-<4hex>`, never a pid. Three statuses are reachable — `running`,
+  `exited`, `stopped` — and a present `.exit` record always outranks pid
+  liveness, so a reused pid never reports as running; a dead pid with no `.exit`
+  self-heals to `exited` with no code. `confirmed_by` records `ui-confirm` or the
+  explicit bypass `no-ui-explicit`, which `list` surfaces as `unconfirmed`. The
+  command runs under a POSIX shell resolved as `MYFLOW_BG_SHELL` → the settings
+  `shellPath` → the Git for Windows bash → `bash` on `PATH`, with **no**
+  `cmd.exe` fallback: when nothing resolves the task is refused and nothing
+  runs. Sub-agents cannot use any of the four tools (allowlist, `tool_call`, and
+  each `execute`). `session_shutdown` must never kill a background task — that
+  is the whole point — and must stay idempotent.
 
 ## Extension Rules
 
-- All six hooks stay registered: `session_start`, `input`, `before_agent_start`,
-  `context`, `tool_call`, `session_before_compact`.
+- All eight hooks stay registered: `session_start`, `input`, `before_agent_start`,
+  `context`, `tool_call`, `session_before_compact`, `agent_before_settle`,
+  `session_shutdown`.
 - Inject context with `pi.sendMessage({ customType, content, display: false })`;
   never paste injected blocks into user-visible output.
 - Agents declare tool allowlists that exclude `myflow_subagent`, so a sub-agent
@@ -121,6 +141,14 @@ Keep these consistent across files; change them together or not at all:
   (writes `approval.json` only when the user agrees). Both refuse in their
   handler and again in `tool_call`; keep both lines, and do not put either tool
   in an agent allowlist.
+- Background tasks are main-session-only for the same reason plus one more: they
+  register in the *shared project* registry and outlive the process, so a child
+  would leave work nobody can attribute. The four `myflow_bg_*` tools refuse in
+  their handler, `tool_call` blocks them, and no agent allowlist may list them.
+- `session_shutdown` may run more than once (cancel, reload, session
+  replacement, process exit): claim an idempotence flag before doing anything,
+  release only what the session actually owns, never kill a background task,
+  and never throw — a throwing shutdown hook can block or corrupt the exit.
 - New tools use a plain JSON-schema `parameters` object (no TypeBox import). Pi
   validates it at runtime.
 - `agent_before_settle` holds a `myflow-check` sub-agent until
@@ -150,6 +178,16 @@ Keep these consistent across files; change them together or not at all:
   running `pi "/myflow-status"` from Git Bash sends a filesystem path, not the
   command. Verify commands from Node/RPC or use the TUI.
 
+- **`taskkill` must be called with an argv array**, never through Git Bash: MSYS
+  rewrites `/F` into `F:/` and the command fails with "invalid argument".
+  `terminateTree` in `background.ts` spawns it that way, and the stop tests must
+  not route the call through a shell either.
+- **The `bash` on `PATH` may be the WSL launcher.**
+  `C:\Windows\System32\bash.exe` (and `Sysnative`) is the WSL entry point, which
+  this project forbids invoking, so background shell resolution skips those
+  directories. It does **not** skip `SysWOW64` — a known gap. Prefer an explicit
+  `MYFLOW_BG_SHELL` or a settings `shellPath` when in doubt.
+
 - **Testing a launch on Windows**: a `.cmd` shim cannot observe a multi-line argv
   (cmd splits on the newline), so a test that inspects what was handed to `pi`
   breaks as soon as the prompt grows a newline. Assert the recorded state
@@ -175,6 +213,10 @@ Keep these consistent across files; change them together or not at all:
   no installed dependencies).
 - [ ] If the change alters what the model is told to do, note the
   skill/prompt/`workflow.md` file that must change too.
+- [ ] If the change touches the `myflow_bg_*` tools, read the "Background tasks"
+  contract above and the shell resolution in `.myflow/scripts/bg_runner.mjs`
+  before editing either side. The tools are the only writer of `<taskId>.json`;
+  the wrapper is the only writer of `<taskId>.log` and `<taskId>.exit`.
 
 ## Quality Check
 
@@ -188,4 +230,7 @@ Keep these consistent across files; change them together or not at all:
   and the verify gate.
 - [ ] No instruction file (skill, prompt, `workflow.md`) now describes
   something that does not exist.
+- [ ] Changing the background-task shell resolution or the `<taskId>.exit` shape
+  was mirrored into the `myflow_bg_start` tool description, the spec contract
+  (`.myflow/spec/harness/index.md`), and this file in the same change.
 - [ ] `git status` is clean apart from intended changes.
