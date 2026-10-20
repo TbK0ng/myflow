@@ -44,6 +44,9 @@ import {
 //   -3：成功分支不写 `ended_at`、或状态不置 `stopped` → 返回值/注册表断言变红。
 //   -4：`readEntry` 返回 null 时仍继续走 kill 路径 → 抛栈而非明确错误，用例变红。
 //   -5：进程仍活时也 `writeEntry({status:"stopped"})` → 磁盘对比断言 + `isError` 断言变红。
+//   -6：成功分支不读 `.exit`（直接用 `resolveStatus` 的 exit_code = null）→ 退出码断言变红。
+//   -7：删掉 `resolveStatus` 的 sticky `exited` 分支（D1）→ 已结束的条目被视为 running，
+//       `terminate` 被调用、无关探针进程被杀，两条安全断言变红。
 
 const ROOT = join(import.meta.dirname, "..");
 const RUNNER = join(ROOT, ".myflow", "scripts", "bg_runner.mjs");
@@ -465,6 +468,105 @@ test("F6 -5 失败不得谎报：进程仍活时不写 stopped，返回原始 st
       "失败时不得把条目改成 stopped",
     );
     assert.equal(readEntry(dir, id)?.status, "running");
+  } finally {
+    probe?.stop();
+    await cleanup(root, []);
+  }
+});
+
+test("F6 -6 wrapper 抢先在写：stop 采用已存在的 .exit 的 exit_code", async () => {
+  const root = makeProject();
+  let probe: { pid: number; stop: () => void } | undefined;
+  try {
+    const dir = backgroundDir(root);
+    probe = startProbe();
+    assert.ok(probe.pid > 0 && isAlive(probe.pid), "探针进程必须真的活着");
+
+    const id = "bg-stop-race-0006";
+    writeEntry(dir, makeEntry(dir, id, { pid: probe.pid, status: "running" }));
+
+    // 真实时序：`taskkill /T` 杀掉外壳后，wrapper 会先把 `.exit` 写下来，stop 的
+    // `readExitRecord` 才读到它。注入的 terminate 就在这一瞬间模拟它 —— 先写
+    // `.exit`（退出码 3、signal SIGTERM），再杀掉探针进程。
+    const stop = createBgStopTool({
+      deriveContextKey: () => CONTEXT_KEY,
+      isSubAgent: false,
+      terminate: (pid: number) => {
+        writeFileSync(
+          exitPath(dir, id),
+          JSON.stringify({
+            exit_code: 3,
+            signal: "SIGTERM",
+            at: new Date().toISOString(),
+            shell: "C:/Program Files/Git/bin/bash.exe",
+          }),
+        );
+        killTree(pid);
+        return { status: 0, stderr: "" };
+      },
+    }) as unknown as BgTool;
+
+    const result = await stop.execute("stop-6", { task_id: id }, undefined, undefined, fakeCtx(root));
+    assert.equal(result.isError, undefined, `stop 不应报错：${result.content[0]?.text}`);
+    assert.equal(result.details.stopped, true);
+    // 回退点：改成用 `resolved.exit_code`（强杀前的 null）→ 下面两条断言变红。
+    assert.equal(result.details.exit_code, 3, "有 .exit 时必须采用它的退出码，而不是 null");
+    assert.equal(result.details.signal, "SIGTERM", ".exit 的 signal 必须传出来");
+
+    const entry = readEntry(dir, id)!;
+    assert.equal(entry.status, "stopped");
+    assert.equal(entry.exit_code, 3, "注册表也必须记下真实退出码");
+  } finally {
+    probe?.stop();
+    await cleanup(root, []);
+  }
+});
+
+test("F6 -7 已自愈为 exited 的条目：stop 不碰那个 pid，探针必须仍活着（D1 安全断言）", async () => {
+  // 回退点：删掉 `resolveStatus` 的 sticky `exited` 分支 → `resolveStatus` 报 running，
+  // stop 会真的去 `taskkill /F /T` 一个被重用的 pid：`terminateCalls` 与 `isAlive` 断言变红。
+  const root = makeProject();
+  let probe: { pid: number; stop: () => void } | undefined;
+  try {
+    const dir = backgroundDir(root);
+    probe = startProbe();
+    assert.ok(probe.pid > 0 && isAlive(probe.pid), "探针进程必须真的活着");
+
+    const id = "bg-stop-sticky-0007";
+    // 条目已经被判结束（`list` 的自愈回写），但没有 `.exit`；pid 这里代表系统后来
+    // 重用给了一个**无关**的、仍然活着的进程。
+    writeEntry(
+      dir,
+      makeEntry(dir, id, {
+        pid: probe.pid,
+        status: "exited",
+        exit_code: null,
+        ended_at: "2026-01-03T00:00:00.000Z",
+      }),
+    );
+    const before = readFileSync(entryPath(dir, id), "utf-8");
+
+    let terminateCalls = 0;
+    const stop = createBgStopTool({
+      deriveContextKey: () => CONTEXT_KEY,
+      isSubAgent: false,
+      terminate: (pid: number) => {
+        terminateCalls += 1;
+        killTree(pid);
+        return { status: 0, stderr: "" };
+      },
+    }) as unknown as BgTool;
+
+    const result = await stop.execute("stop-7", { task_id: id }, undefined, undefined, fakeCtx(root));
+    assert.equal(result.isError, undefined, `已结束的任务不是错误：${result.content[0]?.text}`);
+    assert.equal(result.details.stopped, false);
+    assert.equal(result.details.already_finished, true);
+    assert.equal(result.details.status, "exited");
+
+    // 安全断言（本缺陷的核心）：根本不应尝试杀进程，无关进程必须还活着。
+    assert.equal(terminateCalls, 0, "已结束的任务不得调用杀进程");
+    assert.equal(isAlive(probe.pid), true, "被重用的 pid（无关进程）必须仍然活着");
+    assert.equal(readFileSync(entryPath(dir, id), "utf-8"), before, "幂等 stop 不得改写条目");
   } finally {
     probe?.stop();
     await cleanup(root, []);

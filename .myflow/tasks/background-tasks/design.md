@@ -159,6 +159,16 @@ bg_runner.mjs（`.myflow/scripts/` 里的独立 Node 脚本）
   `running` | `exited` | `stopped`。`unknown` **不可达** —— 它只出现在两个**拒绝/错误返回体**里
   （`bgOutputError`、`bgStopError`），以及类型定义中作为前向兼容的保留值。
   坏注册表文件不会被伪装成一个状态：它们进 `listEntries().warnings`（ADR-4）。
+- **判据顺序是固定的五档**（见 `resolveStatus`）：
+  ① `.exit` 存在 ⇒ `exited`（带记录的 `exit_code`/`failure`/`signal`）；
+  ② `status === "stopped"` ⇒ `stopped`；
+  ③ `status === "exited"` ⇒ `exited`（带条目里的 `exit_code`）；
+  ④ `isAlive(pid)` ⇒ `running`；
+  ⑤ 否则 ⇒ `exited` 且 `exit_code: null`（自愈）。
+  **已判定结束的条目粘住**：`exited` / `stopped` 不会因为 pid 后来被系统重用而复活成
+  `running`（派 2 与 3 都高于 4）。这同时保护 `myflow_bg_stop` —— 它不会对一个被重用的
+  pid 执行 `taskkill /F /T`（即不会杀掉无关进程）。`.exit` 仍高于粘贴档：记录晚到时
+  它的 `exit_code`/`failure`/`signal` 依然覆盖条目里的值。
 - `confirmed_by`：`ui-confirm` | `no-ui-explicit`（R8）。
 - `pid`：spawn 未给出 pid 时写 `0`（`pid ?? 0`）；`isAlive` 对 `pid <= 0` 恒为 false。
 - `log` / `exit_file` 以**项目根为基准的相对路径**存储；`exitPathFor` 既接受相对也接受绝对。
@@ -167,7 +177,11 @@ bg_runner.mjs（`.myflow/scripts/` 里的独立 Node 脚本）
   带 `spawn_error` 的条目在 `list` 里**永远不会**显示成 `running`（即使 pid 已被重用）。
 - 接口带索引签名，因此**容忍未知字段**：新写者不会弄坏旧读者。
 - 工具是 `<taskId>.json` 的**唯一写者**；wrapper 只写 `.log` 与 `.exit`（无竞态，见 ADR-4）。
-- 写入是原子的（`.tmp` → rename，`writeFileAtomic`）。
+- 写入是原子的（`.tmp` → rename，`writeFileAtomic`）。rename 对 `EPERM`/`EACCES`/`EBUSY`
+  有界重试 **50 × 20ms**（与 `bg_runner.mjs` 写 `.exit` 同一套数，只用于 Windows 上读者
+  持有文件造成的瞬时拒绝；其它错误立即抛出，且 `.tmp` 一定清理）。
+  `list` 的自愈回写失败**不影响本次结果**：本次仍返回 `resolveStatus` 的结论，只是不落盘、
+  不计入 `healed`（不得声称写过一个没写成的状态）。
 
 ### 3.2 `<taskId>.exit`（`writeExitRecord` / `spawnFailureRecord` / `shellUnavailableRecord`）
 
@@ -265,7 +279,7 @@ bg_runner.mjs（`.myflow/scripts/` 里的独立 Node 脚本）
 | --- | --- |
 | 入参 | `task_id`（必填） |
 | 行为 | Windows：`spawnSync("taskkill", ["/F","/T","/PID", String(pid)])`（参数数组，`windowsHide`）；其它平台：`process.kill(-pid)`，失败回退 `process.kill(pid)`（`terminateTree`） |
-| 幂等 | 已结束（`.exit` 存在或 `status` 为结束态）→ `{stopped:false, already_finished:true, ...}`，**不改**已有 `exit_code`、**不写**任何文件 |
+| 幂等 | 已结束（`.exit` 存在或 `status` 为结束态：`stopped` / `exited`）→ `{stopped:false, already_finished:true, ...}`，**不改**已有 `exit_code`、**不写**任何文件、**不调用杀进程**。已自愈为 `exited` 的条目同样视为已结束，`stop` 不会去碰那个 pid（它可能已被系统重用给无关进程） |
 | 判定 | **成功与否由 `isAlive` 复检决定，不由 kill 命令的退出码决定**：等最多 1000ms（每 25ms 一次）让进程消失 |
 | 成功 | `status: "stopped"`、写 `ended_at`；`exit_code` **优先取已存在的 `.exit`**（wrapper 抢先在写），否则用解析出的值 |
 | 失败 | 进程仍活 → `stopped: false, status: "running", ended_at: null` + 原始 `stderr`，**不写磁盘**（不得谎报已停） |
@@ -373,7 +387,7 @@ if (BG_TOOL_NAMES.has(toolEvent.toolName) && isSubAgent) {
 | **`syswow64` 未跳过** | `findOnPath` 只跳过 `system32` / `sysnative`。32 位进程视角下的 `SysWOW64\bash.exe`（同一个 WSL 启动器）仍可能被选中 |
 | **无法识别的 spawn 错误会被重试** | `isRetryableSpawnError` 对不认识的 `code`（包括 `ERR_*` 这类确定性错误）返回 `true`，所以它们会白等约 7.2s 才落 `.exit` |
 | **退出码可能为 `null`** | `stop` 强杀的、或 wrapper 自身崩溃的，只能标 `stopped`/`exited` 而**无退出码** |
-| **pid 重用** | 存活检测在极长时间后可能把别人的进程当成本任务的。缓解：`.exit` 优先；`list` 还会把带 `spawn_error` 的条目强制成 `exited`；仍标为已知残余风险（`output` 只调用 `resolveStatus`，不做这一层强制） |
+| **pid 重用** | 存活检测在极长时间后可能把别人的进程当成本任务的。**已修复的部分**：`.exit` 优先，且已记为 `exited`/`stopped` 的条目**粘住**（不再被报成 `running`，也不会被 `stop` 误杀）；`list` 还会把带 `spawn_error` 的条目强制成 `exited`。**仍存在的残余风险**：任务在**第一次被任何读者观察到之前** pid 就被重用 —— 那种情况下磁盘上没有任何记录能证明它已死，它会被当成 `running` |
 | **无沙箱** | 后台命令以当前用户权限跑，**没有任何权限系统**（横评 `GAP-PERM-*` 是独立任务）。确认门是**唯一**的把关 |
 | **确认门不是安全边界** | 与 plan 批准门同款：`unattended: true` 可绕过，只留痕 |
 | **不做资源限制** | 不限制 CPU/内存/进程数；不做超时强杀（长任务本来就该长跑） |

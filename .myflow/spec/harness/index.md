@@ -180,7 +180,10 @@ Payload tour and inventory:
     state): `<taskId>.json` (registry entry, written only by the tools, atomically
     via `.tmp` → rename), `<taskId>.log` (written by the shell's own
     `exec >> '<log>' 2>&1`), `<taskId>.exit` (written by the wrapper), and
-    `cursors/<contextKey>__<taskId>.json` (`{"offset": <bytes>}`).
+    `cursors/<contextKey>__<taskId>.json` (`{"offset": <bytes>}`). The rename is
+    retried up to 50 × 20ms on the transient Windows sharing codes (`EPERM` /
+    `EACCES` / `EBUSY`, the same schedule `bg_runner.mjs` uses for `.exit`); any
+    other error is thrown immediately and the `.tmp` is removed.
   - `taskId` is `bg-<base36 millisecond timestamp>-<4 hex digits>`, never derived
     from a pid (pids are reused).
   - A registry entry carries `id, command, description?, cwd, pid, log,
@@ -210,6 +213,16 @@ Payload tour and inventory:
   - A present `.exit` record outranks pid liveness: the status is `exited` even
     if the pid now belongs to something else. A dead pid with no `.exit`
     self-heals to `exited` with `exit_code: null`.
+  - A finished verdict is **sticky**. The precedence is fixed at five levels:
+    `.exit` → `status: "stopped"` → `status: "exited"` → `isAlive(pid)` →
+    self-heal to `exited`. An entry already recorded as `exited` or `stopped`
+    never flips back to `running` because its pid now reads alive, so a reused
+    pid can neither resurrect a task nor make `myflow_bg_stop` kill an unrelated
+    process. A `.exit` record arriving later still wins over the sticky branch
+    (its `exit_code` / `failure` / `signal` are the truth).
+  - A failed registry write-back must not fail a listing: `myflow_bg_list`
+    catches the write inside its self-heal step, still returns the resolved
+    status for this call, and reports `healed` only for entries it really wrote.
   - The tools are the **only** writers of `<taskId>.json`; the wrapper writes
     only its own `.log` and `.exit`. That is what makes one-file-per-task
     lock-free and safe across sessions.
@@ -230,8 +243,8 @@ Payload tour and inventory:
     task is **refused**, and no command runs.
 - **Breaks if**: a `cmd.exe` (or `/bin/sh`) fallback is added back; a descriptor
   is handed to the child instead of letting the shell redirect its own output;
-  the `.exit`-before-pid precedence is reordered; `session_shutdown` starts
-  killing tasks or loses its idempotence flag; a sub-agent allowlist gains one
+  the `.exit`-before-pid or sticky-`exited`-before-pid precedence is reordered;
+  `session_shutdown` starts killing tasks or loses its idempotence flag; a sub-agent allowlist gains one
   of the four tools; or `unknown` becomes a reachable status without this entry
   and the tool descriptions being updated in the same change.
 
@@ -247,7 +260,8 @@ Payload tour and inventory:
 | `syswow64` not skipped | `findOnPath` skips `system32` / `sysnative` (the WSL launcher) but not `SysWOW64`, so a 32-bit view can still select it. |
 | Unknown spawn errors are retried | `isRetryableSpawnError` treats an unrecognized `code` (including deterministic `ERR_*` ones) as transient, so they can wait ~7.2s before `.exit`. |
 | Exit code may be `null` | A task force-stopped by `myflow_bg_stop`, or whose wrapper died, is reported `stopped` / `exited` with no code. |
-| Pid reuse | Liveness is `process.kill(pid, 0)`. `.exit` outranks it, and `myflow_bg_list` additionally forces a task carrying `spawn_error` to `exited`, but a reused pid remains a residual risk (`myflow_bg_output` calls `resolveStatus` only and does not apply that override). |
+| Pid reuse | Liveness is `process.kill(pid, 0)`. Two things outrank it: a present `.exit` record, and a status already recorded as `exited` / `stopped` (a finished verdict is sticky). So a reused pid can neither resurrect a finished task nor make `myflow_bg_stop` kill an unrelated process. The residual risk is narrower than that: a task whose pid is reused **before any reader ever observed it** still reads as `running`, because nothing on disk records that it died. `myflow_bg_list` additionally forces a task carrying `spawn_error` to `exited`. |
+| Registry write-back can fail | A reader holding the entry open (or an unremovable `.tmp`) makes the self-heal write fail. `myflow_bg_list` still returns the resolved status for that call and does not count the entry as `healed`; the disk keeps the old status until a later write succeeds. |
 | No sandbox, no resource limits | A background command runs with the current user's full permissions; the confirmation dialog is the only gate, and it is not a security boundary (`unattended: true` bypasses it, leaving `confirmed_by: "no-ui-explicit"` in the registry). CPU/memory/process count are not limited and no timeout kills a long task. |
 | No log rotation | `.log` grows without bound; `prune` only deletes the files of *finished* tasks that ended more than 24 hours ago. |
 
