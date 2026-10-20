@@ -38,6 +38,8 @@ without a model call.
 | Before writing code | `myflow-before-dev` skill |
 | Implementation | `myflow_subagent` → `myflow-implement` |
 | Verification after code changes | `myflow_subagent` → `myflow-check` (or `myflow-check` skill) |
+| Long-running command / dev server / watch (must outlive the session) | `myflow_bg_start` (+ `myflow_bg_output` / `myflow_bg_list` / `myflow_bg_stop`) |
+| Read or stop a command you started in the background | `myflow_bg_output`, `myflow_bg_list`, `myflow_bg_stop` |
 | Preserve a lesson or contract | `myflow-update-spec` skill |
 | Discuss with a peer agent / spawn a worker | `myflow-channel` skill (`channel.py`) |
 | Bootstrap or refresh specs from the codebase | `myflow-spec-bootstrap` skill |

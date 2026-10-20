@@ -24,6 +24,12 @@ Payload tour and inventory:
       one-implementation rule: the hash and the "answered" count live only in
       `.myflow/scripts/task.py`, and every TS caller goes through
       `task.py gate-info`.
+- [ ] If you touch the four `myflow_bg_*` tools, read
+      "Background tasks: `myflow_bg_*`" below **and** the shell resolution in
+      `.myflow/scripts/bg_runner.mjs` (`resolveShellPath` /
+      `shellRejectionReason` / `shellArgsFor`) before changing either. The runner
+      is the only writer of `<id>.log` and `<id>.exit`; the tools are the only
+      writer of `<id>.json`.
 
 ## Contracts
 
@@ -149,6 +155,107 @@ Payload tour and inventory:
   (`task.json.started_without_approval: true`) and prints a warning, so a
   bypass is discoverable after the fact.
 
+### Background tasks: `myflow_bg_*`
+
+- **Producers**:
+  - `.myflow/scripts/bg_runner.mjs` — the detached wrapper. It resolves a POSIX
+    shell (`resolveShellPath`), refuses with `shellRejectionReason` when none
+    resolves, spawns the shell with argv (`shellArgsFor`), and writes the
+    `<taskId>.exit` record itself (`writeExitRecord` / `spawnFailureRecord` /
+    `shellUnavailableRecord`).
+  - `.pi/extensions/myflow/background.ts` — the registry (`newTaskId`,
+    `writeEntry` / `readEntry` / `listEntries`, `isAlive`, `resolveStatus`,
+    `prune`, cursors) and the four tool builders (`createBgStartTool`,
+    `createBgOutputTool`, `createBgListTool`, `createBgStopTool`) plus
+    `registerMyflowBackground` and `BG_TOOL_NAMES`.
+  - `.pi/extensions/myflow/index.ts` — registers the four tools with injected
+    `deriveContextKey` / `isSubAgent` / `onStarted`, blocks them in `tool_call`
+    for a sub-agent, and reports still-running tasks from `session_shutdown`.
+- **Consumers**: the model (`myflow_bg_start` / `myflow_bg_output` /
+  `myflow_bg_list` / `myflow_bg_stop`); `.pi/agents/*.md` tool allowlists, which
+  must omit all four so a sub-agent cannot start or manage a task; the
+  `tool_call` guard in `index.ts`.
+- **Value/shape**:
+  - Everything lives under `.myflow/.runtime/background/` (gitignored machine
+    state): `<taskId>.json` (registry entry, written only by the tools, atomically
+    via `.tmp` → rename), `<taskId>.log` (written by the shell's own
+    `exec >> '<log>' 2>&1`), `<taskId>.exit` (written by the wrapper), and
+    `cursors/<contextKey>__<taskId>.json` (`{"offset": <bytes>}`).
+  - `taskId` is `bg-<base36 millisecond timestamp>-<4 hex digits>`, never derived
+    from a pid (pids are reused).
+  - A registry entry carries `id, command, description?, cwd, pid, log,
+    exit_file, status, exit_code, started_at, ended_at,
+    started_by_context_key, confirmed_by, spawn_error?`. `log` / `exit_file` are
+    project-root-relative; `pid` is `0` when `spawn` reported no pid; extra
+    fields are tolerated by the reader.
+  - **Three reachable statuses**: `running` | `exited` | `stopped`. `unknown` is
+    in the type for forward compatibility and appears only in the two refusal
+    payloads (`bgOutputError`, `bgStopError`); `resolveStatus` never returns it,
+    and a registry file that cannot be parsed is reported through
+    `listEntries().warnings` instead of being given a status.
+  - `confirmed_by` is `ui-confirm` (the user saw the exact command) or
+    `no-ui-explicit` (no UI and `unattended: true` was passed). The second value
+    is a recorded bypass: `myflow_bg_start` echoes it, and `myflow_bg_list`
+    reports it as `unconfirmed`.
+  - `<taskId>.exit`: `{exit_code, signal, at, shell}` on a normal exit (`shell`
+    is always present), `+ retries` when creation was retried, and `error` only
+    when the shell could not be created (`exit_code: null`, `shell` = the
+    requested path) or the shell was refused (`exit_code: null`, `shell: null` or
+    the rejected `cmd.exe` path, message naming the search order). A *missing
+    command* is not in that list: the shell starts and exits `127` with no
+    `error`.
+  - Read cursors are per (session context key, task id); a missing, empty or
+    corrupt cursor file reads as offset `0`, which may re-read but never skips.
+- **Invariant**:
+  - A present `.exit` record outranks pid liveness: the status is `exited` even
+    if the pid now belongs to something else. A dead pid with no `.exit`
+    self-heals to `exited` with `exit_code: null`.
+  - The tools are the **only** writers of `<taskId>.json`; the wrapper writes
+    only its own `.log` and `.exit`. That is what makes one-file-per-task
+    lock-free and safe across sessions.
+  - `myflow_bg_start` must not await any child-process event: it returns as soon
+    as the entry is on disk, and the detached wrapper is the only observer of
+    the exit code. It must still attach an `'error'` listener (an unhandled
+    `'error'` event would crash Pi) and record `spawn_error` there.
+  - `session_shutdown` **never kills a background task** — that is the point of
+    the feature. It is idempotent (the `shutdownDone` flag is claimed first),
+    it only reports tasks from its own `startedBackgroundIds` set, it stays
+    silent with no UI, and it never throws.
+  - Main session only: agent allowlists omit the four tools, `tool_call` blocks
+    them for a sub-agent, and each `execute` re-checks `isSubAgent` before any
+    dialog, spawn, or write.
+  - The shell is resolved, never improvised: `MYFLOW_BG_SHELL` → the
+    `shellPath` in `~/.pi/agent/settings.json` → the Git for Windows bash →
+    `bash` on `PATH`. When nothing resolves — or it resolves to `cmd.exe` — the
+    task is **refused**, and no command runs.
+- **Breaks if**: a `cmd.exe` (or `/bin/sh`) fallback is added back; a descriptor
+  is handed to the child instead of letting the shell redirect its own output;
+  the `.exit`-before-pid precedence is reordered; `session_shutdown` starts
+  killing tasks or loses its idempotence flag; a sub-agent allowlist gains one
+  of the four tools; or `unknown` becomes a reachable status without this entry
+  and the tool descriptions being updated in the same change.
+
+**Known limits (measured/observable, not fixed):**
+
+| Limit | Behavior |
+| --- | --- |
+| No `cmd.exe` fallback | A machine with no POSIX shell cannot run background tasks: the task is refused, `.exit` records `exit_code: null` + `error`, and nothing executes. This is a choice, not a defect. |
+| Retry budget after a refused creation | The wrapper retries up to 8 attempts / ~7.2s (hard cap 10s) before writing `.exit`. The tool still returns immediately, but the exit status arrives that much later. |
+| `stop` vs `start` window | `start` spawns before writing the entry, so a `stop` in that window reports "no such task". The window is tiny; no compensation is attempted. |
+| Orphan window | If the tool crashes between `spawn` and `writeEntry`, the process runs with no registry entry and `list` cannot see it. No transactional compensation. |
+| `tail` single-line exception | `tail` truncates on line boundaries; the one exception is a single line longer than `max_bytes`, which is returned as a UTF-8-aligned fragment with `truncated: true`. |
+| `syswow64` not skipped | `findOnPath` skips `system32` / `sysnative` (the WSL launcher) but not `SysWOW64`, so a 32-bit view can still select it. |
+| Unknown spawn errors are retried | `isRetryableSpawnError` treats an unrecognized `code` (including deterministic `ERR_*` ones) as transient, so they can wait ~7.2s before `.exit`. |
+| Exit code may be `null` | A task force-stopped by `myflow_bg_stop`, or whose wrapper died, is reported `stopped` / `exited` with no code. |
+| Pid reuse | Liveness is `process.kill(pid, 0)`. `.exit` outranks it, and `myflow_bg_list` additionally forces a task carrying `spawn_error` to `exited`, but a reused pid remains a residual risk (`myflow_bg_output` calls `resolveStatus` only and does not apply that override). |
+| No sandbox, no resource limits | A background command runs with the current user's full permissions; the confirmation dialog is the only gate, and it is not a security boundary (`unattended: true` bypasses it, leaving `confirmed_by: "no-ui-explicit"` in the registry). CPU/memory/process count are not limited and no timeout kills a long task. |
+| No log rotation | `.log` grows without bound; `prune` only deletes the files of *finished* tasks that ended more than 24 hours ago. |
+
+The `Routing` table in `.myflow/workflow.md` names `myflow_bg_start` for
+long-running commands. That is orientation, not a gate: a background task is an
+execution facility the model reaches for when a command must outlive the
+session, and the invariants above are what keep it honest.
+
 ## Design Decisions
 
 ### Design Decision: bound the write scope, do not try to exclude writers
@@ -204,3 +311,7 @@ Payload tour and inventory:
       `.pi/prompts/myflow-continue.md`. No copy still describes `task.py start`
       as gated only on the context manifests.
 - [ ] No agent gained `bash` without revisiting the Design Decision above.
+- [ ] Changing the shell resolution (`resolveShellPath` /
+      `shellRejectionReason` / `shellArgsFor`) or the `<taskId>.exit` shape was
+      mirrored into the `myflow_bg_start` tool description, the "Background
+      tasks" contract above, and `harness-conventions.md` in the same change.

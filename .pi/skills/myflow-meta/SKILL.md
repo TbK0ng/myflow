@@ -1,13 +1,13 @@
 ---
 name: myflow-meta
-description: "Understand, modify, and copy the myflow harness for Pi: the six extension hooks, the myflow_subagent tool, the /myflow-status command, context injection and escape hatch, the task lifecycle and scripts, workflow.md state blocks, the harness conventions, and which files form the copyable payload. Use when asked to change, debug, extend, or install the myflow harness."
+description: "Understand, modify, and copy the myflow harness for Pi: the eight extension hooks, the myflow_subagent tool, the /myflow-status command, context injection and escape hatch, the task lifecycle and scripts, workflow.md state blocks, the harness conventions, and which files form the copyable payload. Use when asked to change, debug, extend, or install the myflow harness."
 ---
 
 # myflow Meta
 
 This repository **is** the myflow harness for Pi. This skill is the map for
 changing it. It describes only what exists here — there is one platform (Pi),
-this repository is the whole harness: one Pi extension, four scripts, the skills that drive them, and their tests.
+this repository is the whole harness: one Pi extension, five scripts, the skills that drive them, and their tests.
 
 ## Layout
 
@@ -17,6 +17,7 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
   extensions/myflow/subagent.ts     # myflow_subagent tool (single/parallel/chain)
   extensions/myflow/ask.ts          # myflow_ask_user tool (one choice question)
   extensions/myflow/approval.ts     # myflow_request_approval tool (writes approval.json)
+  extensions/myflow/background.ts   # four myflow_bg_* tools + the on-disk registry
   extensions/myflow/agents.ts       # agent discovery from .pi/agents
   extensions/myflow/status.ts       # status report builder (used by the command)
   extensions/myflow/*.ts            # pure helpers the extension imports: root lookup,
@@ -31,6 +32,7 @@ this repository is the whole harness: one Pi extension, four scripts, the skills
   worktree.yaml                     # parallel-session config + verify commands (project-owned)
   scripts/get_context.py            # session context (workflow + task + git)
   scripts/task.py                   # task lifecycle + session pointer
+  scripts/bg_runner.mjs             # detached background-task wrapper (records its own exit)
   scripts/worktree.py               # isolated parallel sessions (git worktrees)
   scripts/channel.py                # channel runtime (workers, messages, wait)
   spec/                             # this project's conventions (project-owned)
@@ -57,7 +59,7 @@ belong to the project.
 
 `.pi/extensions/myflow/` is self-contained: the extension, the tools, the
 command, the pure helpers, and the type declaration all live in that
-directory. Six hooks are always registered:
+directory. Eight hooks are always registered:
 
 | Hook | What it does |
 | --- | --- |
@@ -65,9 +67,10 @@ directory. Six hooks are always registered:
 | `input` | Reads the skip keyword, starts the turn cache. |
 | `before_agent_start` | Returns the `workflow-state` breadcrumb. |
 | `context` | Replaces a stale `task-context`, re-adds or strips the breadcrumb. |
-| `tool_call` | Blocks `myflow_subagent` inside a sub-agent (recursion guard), blocks `myflow_ask_user` / `myflow_request_approval` inside a sub-agent (main-session-only guard), and blocks `write`/`edit` outside a declared `writesUnder` scope. |
+| `tool_call` | Blocks `myflow_subagent` inside a sub-agent (recursion guard), blocks `myflow_ask_user` / `myflow_request_approval` inside a sub-agent (main-session-only guard), blocks the four `myflow_bg_*` tools inside a sub-agent (background tasks register in the shared project registry and outlive the process), and blocks `write`/`edit` outside a declared `writesUnder` scope. |
 | `session_before_compact` | Records the compaction timestamp so the breadcrumb is re-injected. |
 | `agent_before_settle` | Holds a `myflow-check` sub-agent until the configured verify commands pass (bounded retries). |
+| `session_shutdown` | Kills nothing: background tasks are project-level and must outlive the session. It is idempotent (one run per session), reports the tasks this session started that are still running (silent without a UI), and never throws. |
 
 Injected blocks are `custom` messages with `display: false`:
 `<session-context>`, `<task-context>`, `<workflow-state>`.
@@ -96,6 +99,19 @@ question through `ctx.ui.select` and appends `questions.jsonl`; the second
 confirms through `ctx.ui.confirm` and writes `approval.json` only on consent.
 With no interactive UI both return instructions instead of fabricating an answer
 or an approval. The gate's contracts live in `references/harness-conventions.md`.
+
+The four `myflow_bg_*` tools (`myflow_bg_start`, `myflow_bg_output`,
+`myflow_bg_list`, `myflow_bg_stop`) run a command that outlives the session.
+`background.ts` owns the registry (`<taskId>.json` under
+`.myflow/.runtime/background/`) and injects nothing back into `index.ts`;
+`scripts/bg_runner.mjs` is the detached wrapper that spawns the command through
+a resolved POSIX shell and records `<taskId>.exit` itself, which is the only way
+a later session can learn the exit code. `myflow_bg_start` shows the exact
+command in `ctx.ui.confirm` and refuses without a UI unless called with
+`unattended: true`, which is recorded as `confirmed_by: no-ui-explicit`.
+`session_shutdown` never kills these tasks: it only reports the ones this
+session started that are still running. The full contract lives in
+`references/harness-conventions.md`.
 
 `/myflow-status` is a real Pi command (no model call): it prints the active
 task, the workflow phase, the plan-approval state, and git state.
@@ -179,6 +195,7 @@ with this skill in `references/harness-conventions.md`.
 | A hook's behavior | `.pi/extensions/myflow/index.ts` |
 | `myflow_subagent` modes, progress, spawn flags | `.pi/extensions/myflow/subagent.ts` |
 | Choice questions, plan approval, the gate | `.pi/extensions/myflow/ask.ts`, `.pi/extensions/myflow/approval.ts`; enforcing side in `.myflow/scripts/task.py` |
+| Background tasks (start/output/list/stop) | `.pi/extensions/myflow/background.ts`; the wrapper in `.myflow/scripts/bg_runner.mjs` |
 | Which agent files exist / their tools | `.pi/agents/*.md`; discovery in `agents.ts` |
 | `/myflow-status` output | `.pi/extensions/myflow/status.ts` |
 | Task context budgets or trust rules | `.myflow/config.yaml`, `.pi/extensions/myflow/context-injection.ts` |
