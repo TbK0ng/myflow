@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
@@ -11,6 +11,7 @@ import {
   entryPath,
   exitPath,
   logPath,
+  pidPath,
   readEntry,
   writeEntry,
   type BackgroundEntry,
@@ -453,6 +454,104 @@ test("H1a list 展示 .exit.error 与 .exit.signal，且与 spawn_error 能区�
     assert.equal(rows[sigId].signal, "SIGKILL");
     assert.match(result.content[0].text, /232/, "原因必须出现在人读输出里");
     assert.match(result.content[0].text, /SIGKILL/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H6 — `starting` in the listing (ADR-10 / R6)
+//
+// A `starting` task is visible (that is the point: a half-started task must not
+// be invisible), it is not "finished" for filtering, it self-heals into
+// `exited` once the handshake timeout passes, and a residue that never started
+// is eventually pruned together with its `.pid`.
+// ---------------------------------------------------------------------------
+
+test("H6 -10 starting 行可见；超时自愈为 exited 并回写；prune 清掉 24h 前从未启动的残留", async () => {
+  // 回退点：
+  //  - 让 `resolveAndHeal` 不把 `nowMs` 传给 `resolveStatus` → 超时条目仍报 starting，
+  //    “磁盘被改成 exited”断言变红；
+  //  - 把 `starting` 排除在列表之外（或少传一行）→ 行数/状态断言变红；
+  //  - `prune` 不认 `starting` 残渣（或 `removeEntryFiles` 不删 `.pid`）→ 文件存在
+  //    性断言变红。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const now = Date.now();
+    const hour = 60 * 60 * 1000;
+    const iso = (ms: number) => new Date(ms).toISOString();
+
+    // (a) A fresh `starting` entry: visible, still `starting`, and it survives
+    // `include_finished: false` (it is not finished).
+    const young = makeEntry(dir, "bg-list-starting-0010a", {
+      status: "starting",
+      pid: 0,
+      started_at: iso(now - 1000),
+    });
+    seed(dir, young);
+
+    const tool = makeTool(KEY, () => now);
+    const first = await tool.execute("list-10a", {}, undefined, undefined, fakeCtx(root));
+    const youngRow = (first.details.tasks as BgListRow[]).find((row) => row.id === young.id);
+    assert.ok(youngRow, "starting 条目必须出现在列表里");
+    assert.equal(youngRow!.status, "starting");
+    assert.equal(youngRow!.pid, 0, "未确认的任务没有 pid");
+    assert.equal(readEntry(dir, young.id)?.status, "starting", "窗口内不得被回写");
+    assert.equal(first.details.healed, 0);
+
+    const runningOnly = await tool.execute(
+      "list-10b",
+      { include_finished: false },
+      undefined,
+      undefined,
+      fakeCtx(root),
+    );
+    assert.ok(
+      (runningOnly.details.tasks as BgListRow[]).some((row) => row.id === young.id),
+      "starting 不是“已结束”，include_finished:false 也要列出来",
+    );
+
+    // (b) A `starting` entry past the timeout: the wrapper never confirmed
+    // itself, so the task never started. `list` heals it to `exited` and writes
+    // that back (with an `ended_at`, so it can be pruned later).
+    const stale = makeEntry(dir, "bg-list-starting-0010b", {
+      status: "starting",
+      pid: 0,
+      started_at: iso(now - 2 * 60_000),
+    });
+    seed(dir, stale);
+    writeFileSync(pidPath(dir, stale.id), JSON.stringify({ pid: 0, at: iso(now) }));
+
+    const healedRun = await tool.execute("list-10c", {}, undefined, undefined, fakeCtx(root));
+    const staleRow = (healedRun.details.tasks as BgListRow[]).find((row) => row.id === stale.id);
+    assert.ok(staleRow);
+    assert.equal(staleRow!.status, "exited", "超时的 starting 必须自愈为 exited");
+    assert.equal(staleRow!.exit_code, null, "从未启动的任务没有退出码");
+    assert.equal(healedRun.details.healed, 1, "自愈必须计入 healed");
+    const healedEntry = readEntry(dir, stale.id)!;
+    assert.equal(healedEntry.status, "exited", "自愈必须回写磁盘");
+    assert.ok(
+      typeof healedEntry.ended_at === "string" && healedEntry.ended_at.length > 0,
+      "自愈的条目必须写下 ended_at，否则永远无法被 prune",
+    );
+
+    // (c) A 25h-old residue that never started is prunable even though it has no
+    // `.exit` and no `ended_at` — its `started_at` is the only date it has.
+    const residue = makeEntry(dir, "bg-list-starting-0010c", {
+      status: "starting",
+      pid: 0,
+      started_at: iso(now - 25 * hour),
+    });
+    seed(dir, residue);
+    writeFileSync(pidPath(dir, residue.id), JSON.stringify({ pid: 0, at: iso(now - 25 * hour) }));
+
+    const pruned = await tool.execute("list-10d", { prune: true }, undefined, undefined, fakeCtx(root));
+    assert.equal(pruned.details.pruned, 1, "必须删掉那条 24h 前从未启动的残渣");
+    assert.ok(!existsSync(entryPath(dir, residue.id)), "条目必须被删除");
+    assert.ok(!existsSync(logPath(dir, residue.id)), "日志必须被删除");
+    assert.ok(!existsSync(pidPath(dir, residue.id)), ".pid 握手必须随条目一起删除");
+    assert.ok(!(pruned.details.tasks as BgListRow[]).some((row) => row.id === residue.id));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

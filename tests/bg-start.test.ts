@@ -535,11 +535,19 @@ test("F3 -9 spawn 同步抛错 → 返回错误，且不写任何注册表条目
     assert.equal(result.isError, true);
     assert.match(String(result.details.error), /Could not start the background runner/);
     assert.equal(calls.length, 1, "确认之后尝试了 spawn");
-    assert.deepEqual(
-      listEntries(backgroundDir(root)).entries,
-      [],
-      "同步 spawn 失败必须在写条目之前返回，注册表不得残留条目",
-    );
+
+    // H6 契约变更：条目现在**先于** spawn 写下（ADR-8），所以同步失败必然留下一条
+    // 记录。旧断言要求“注册表为空”，它编码的是旧时序（spawn → 写条目），已不再成立。
+    // 新的期望更强：条目存在、被判为 `exited`、带 `spawn_error`、且 pid 仍是 0
+    // （没有任何进程被创建）。
+    // 回退点：删掉 catch 里的 `recordSpawnFailure(error)` → 条目留在 `starting`（或被
+    // 删除），下面两条断言变红。
+    const entries = listEntries(backgroundDir(root)).entries;
+    assert.equal(entries.length, 1, "先写条目后 spawn：同步失败必须留下一条已结束的记录");
+    const failure = entries[0];
+    assert.equal(failure.status, "exited", "失败不得留下 starting 条目");
+    assert.equal(failure.pid, 0, "没有任何进程被创建，pid 必须是未确认的 0");
+    assert.match(String(failure.spawn_error), /EPERM/);
   } finally {
     await cleanup(root, undefined);
   }
@@ -785,6 +793,57 @@ test("H5 -5 确认门文本包含 cwd（非根与等于根时都显示）", asyn
     assert.ok(messages[0].message.includes("pwd > marker.txt"), "确认文本必须仍然写出命令");
     // S-2：等于项目根时也显示，避免「看起来像在别处」的歧义。
     assert.ok(messages[1].message.includes(root), "cwd 等于项目根时也要显示目录");
+  } finally {
+    await cleanup(root, undefined);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H6 — `starting` + `.pid` 握手（ADR-8 / R6）
+//
+// 起点与终点都是顺序：条目必须在 spawn **之前**存在（`status:"starting"`、
+// `pid:0`），spawn 之后才回填 pid 与 `running`。回填必须发生在 `execute`
+// 返回之前，否则调用方会看到一个“已启动但还写着 starting”的任务。
+// ---------------------------------------------------------------------------
+
+test("H6 -11 spawn 被调用时条目已存在（starting/pid 0），返回后回填 running", async () => {
+  const root = makeProject();
+  try {
+    const dir = backgroundDir(root);
+
+    // 在 spawn 桩**内部**读盘：这是唯一能证明“先后顺序”的时刻。
+    // 回退点：把 `writeEntry(dir, entry)` 挪回 spawn 之后（旧时序）→ 这里读到 0 条
+    // 条目，`observed.status` 断言变红。
+    const observed: Array<{ count: number; status?: string; pid?: number }> = [];
+    const stub = (..._args: unknown[]) => {
+      const entries = listEntries(dir).entries;
+      observed.push({ count: entries.length, status: entries[0]?.status, pid: entries[0]?.pid });
+      const child = new EventEmitter() as EventEmitter & { unref: () => void; pid?: number };
+      child.pid = 4242;
+      child.unref = () => {};
+      return child;
+    };
+
+    const result = await makeTool({ spawnProcess: stub }).execute(
+      "call-h6-11",
+      { command: "echo hi" },
+      undefined,
+      undefined,
+      fakeCtx(root),
+    );
+
+    assert.equal(result.details.started, true);
+    assert.equal(observed.length, 1, "spawn 必须被调用一次");
+    assert.equal(observed[0].count, 1, "spawn 时注册表里必须已经有这一条");
+    assert.equal(observed[0].status, "starting", "spawn 时条目必须写着 starting");
+    assert.equal(observed[0].pid, 0, "spawn 时 pid 必须还是“未确认”的 0");
+
+    // 返回后回填：pid 来自 spawn，状态是 running。
+    const id = result.details.id as string;
+    const entry = readEntry(dir, id)!;
+    assert.equal(entry.status, "running", "回填必须发生在 execute 返回之前");
+    assert.equal(entry.pid, 4242);
+    assert.equal(result.details.pid, 4242);
   } finally {
     await cleanup(root, undefined);
   }

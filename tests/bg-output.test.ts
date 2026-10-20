@@ -736,3 +736,27 @@ test("H3 -4 未结束任务：不带 shell / retries", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("H6 -5 starting 任务：正常返回 status=starting，不报错也不带 .exit 字段", async () => {
+  // 回退点：把 `starting` 当错误（或当成已结束）→ `isError` / status 断言变红；
+  //        把 `starting` 加进 `isFinishedStatus` → wait 会立刻返回、状态变成 exited。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-h6-starting";
+    writeEntry(
+      dir,
+      makeEntry(dir, id, { status: "starting", pid: 0, started_at: new Date().toISOString() }),
+    );
+    // 日志可能还不存在（毫秒级窗口里外壳还没创建它）：读空是正常结果。
+    const result = await run(root, { task_id: id });
+    assert.equal(result.isError, undefined, "starting 不是错误");
+    assert.equal(result.details.status, "starting");
+    assert.equal(result.details.exit_code, null);
+    assert.equal(result.details.text, "");
+    assert.equal("shell" in result.details, false, "还没有 .exit 就没有权威 shell");
+    assert.equal("failure" in result.details, false, "starting 不是失败");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

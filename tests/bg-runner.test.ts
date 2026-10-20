@@ -1278,3 +1278,85 @@ test("H5 -6 --cwd 生效（命令在该目录执行），缺值是硬错误", ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// H6 — the `<id>.pid` handshake (ADR-8 / R6)
+//
+// The wrapper must write `<pidPath>` *before* it resolves the shell, creates the
+// log directory, or runs anything. The command therefore always runs in a world
+// where its own pid is already on disk: that is what closes the orphan window
+// (a crash can no longer leave a process nobody can address).
+// ---------------------------------------------------------------------------
+
+/** Quote a path for a POSIX shell, with forward slashes so `\` is not an escape. */
+function shPath(path: string): string {
+  return `'${path.split("\\").join("/").replace(/'/g, "'\''")}'`;
+}
+
+test("H6 -12 wrapper 先写 <id>.pid，再执行命令（命令执行时 .pid 已在，且 pid = wrapper pid）", async () => {
+  const dir = makeDir();
+  try {
+    const log = join(dir, "task.log");
+    const exit = join(dir, "task.exit");
+    const pidFile = join(dir, "task.pid");
+    const marker = join(dir, "marker.txt");
+
+    // 命令把**读到的 `.pid` 内容**写进 marker。异步起 wrapper 是为了拿到它真实的
+    // pid（MSYS 的 `$PPID` 在 Windows 上恒为 1，不可用），再与握手比对。
+    // 回退点：把 `writePidRecord` 挪到 `runCommand` 之后 → `cat` 在写 `.pid` 之前
+    // 执行，marker 为空，下面的 `.pid` 断言变红。
+    const command = `cat ${shPath(pidFile)} > ${shPath(marker)}`;
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.MYFLOW_BG_SHELL;
+    const child = spawn(
+      process.execPath,
+      [RUNNER, "--id", "bg-test", "--log", log, "--exit", exit, "--pid", pidFile, "--", command],
+      { env, stdio: "ignore" },
+    );
+    const wrapperPid = child.pid;
+    const [code] = await once(child, "exit");
+
+    assert.equal(code, 0, "命令成功时 wrapper 退出码为 0");
+    assert.ok(typeof wrapperPid === "number" && wrapperPid > 0);
+
+    const handshake = JSON.parse(readFileSync(marker, "utf-8"));
+    assert.equal(typeof handshake.pid, "number");
+    assert.ok(Number.isInteger(handshake.pid) && handshake.pid > 0, ".pid 里必须是真实 pid");
+    assert.equal(handshake.pid, wrapperPid, ".pid 里的 pid 必须是 wrapper 自己的 pid");
+    assert.equal(typeof handshake.at, "string");
+    assert.ok(!Number.isNaN(Date.parse(handshake.at)), ".pid.at 必须是合法 ISO 时间");
+
+    // 盘上留下的还是同一份握手：wrapper 不会删它，读侧靠它判活。
+    assert.equal(JSON.parse(readFileSync(pidFile, "utf-8")).pid, wrapperPid);
+    assert.equal(JSON.parse(readFileSync(exit, "utf-8")).exit_code, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("H6 -13 拒绝外壳时也已经写下 .pid（握手早于外壳解析）", () => {
+  const dir = makeDir();
+  try {
+    const log = join(dir, "task.log");
+    const exit = join(dir, "task.exit");
+    const pidFile = join(dir, "task.pid");
+
+    // 一个肯定会被拒绝的外壳（cmd.exe）：命令一个字都不会执行，但“wrapper 曾经
+    // 活着”仍必须留下证据，否则一个从未写 `.exit` 的坏任务无法与“从未启动”区分。
+    const result = runRunner(
+      ["--id", "bg-test", "--log", log, "--exit", exit, "--pid", pidFile, "--", "echo never"],
+      { env: { MYFLOW_BG_SHELL: "cmd.exe" } },
+    );
+    assert.notEqual(result.status, 0, "被拒绝的任务退出码非零");
+    assert.ok(existsSync(pidFile), "拒绝外壳时也必须留下 .pid 握手");
+    assert.ok(JSON.parse(readFileSync(pidFile, "utf-8")).pid > 0);
+    assert.equal(
+      JSON.parse(readFileSync(exit, "utf-8")).shell,
+      "cmd.exe",
+      "拒绝记录保留被拒的外壳路径（而不是伪装成已解析）",
+    );
+    assert.ok(!existsSync(log), "拒绝时不得创建日志文件");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
