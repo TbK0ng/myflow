@@ -34,6 +34,10 @@ import {
 //   -5：删掉 `spawn_error` 守卫 → 那条（pid 活着）被误报成 running；或行里不展示原因 → 文本断言变红。
 //   -6：listEntries 的 warnings 被吞掉 → warnings 计数与文本断言变红。
 //   -7：include_finished 反向（false 时反而全列）→ 过滤断言变红。
+//   -8：删掉 `resolveStatus` 里「已记 `exited`」那一档（D1）→ 自愈过的条目被复用 pid
+//       复活成 running 并回写磁盘，断言变红。
+//   -9：`resolveAndHeal` 不包 try/catch、或回写失败仍算 healed（D3）→ 整个 list 抛错 /
+//       healed 计数断言变红。
 
 const KEY = "pi_bglist";
 const OTHER_KEY = "pi_bglist_other";
@@ -352,6 +356,73 @@ test("F5 -7 include_finished:false 只列仍在跑的", async () => {
     assert.equal(tasksOf(all).length, 2, "默认 include_finished 为 true");
   } finally {
     probe?.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F5 -8 自愈过的 exited 粘住：pid 被复用后仍报 exited，且不得把 running 写回磁盘（D1）", async () => {
+  // 回退点：删掉 `resolveStatus` 的 sticky `exited` 分支 → 第二次 list 报 running,
+  // 并把 running 回写磁盘，两条断言都红。
+  const root = makeRoot();
+  let probe: { pid: number; stop: () => void } | undefined;
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-list-sticky-0015";
+
+    // 第一次：pid 已死、无 `.exit` → list 把它自愈成 exited 并回写磁盘。
+    seed(dir, makeEntry(dir, id, { status: "running", pid: 999_999_999 }));
+    const first = byId(tasksOf(await run(root)))[id];
+    assert.equal(first.status, "exited");
+    assert.equal(readEntry(dir, id)?.status, "exited", "前置条件：自愈已落盘");
+
+    // 然后那个旧 pid 被系统「重用」成一个无关的存活进程。
+    probe = startProbe();
+    assert.ok(probe.pid > 0, "探针进程必须真的起来");
+    const healed = readEntry(dir, id)!;
+    writeEntry(dir, { ...healed, pid: probe.pid });
+
+    // 第二次：已经判过结束的条目不得因为 pid 活着而复活。
+    const second = byId(tasksOf(await run(root)))[id];
+    assert.equal(second.status, "exited", "已判结束的条目必须粘住");
+    assert.equal(second.exit_code, null, "粘住时退出码仍是记录里的 NULL");
+    assert.equal(
+      readEntry(dir, id)?.status,
+      "exited",
+      "不得把 running 写回磁盘（否则下次 stop 会杀掉被重用的 pid）",
+    );
+  } finally {
+    probe?.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("F5 -9 回写失败不得炸掉 list：本次仍返回解析结果，但不计入 healed（D3）", async () => {
+  // 回退点：`resolveAndHeal` 不包 try/catch → execute 抛 EISDIR，result 拿不到；
+  // 回写失败仍返回 healed:true → healed 计数断言红。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-list-healfail-0016";
+    seed(dir, makeEntry(dir, id, { status: "running", pid: 999_999_999 }));
+
+    // 造一个确定性的写入失败：`<id>.json.tmp` 是个目录，writeFileSync 会以
+    // EISDIR 失败（不在 rename 的可重试集合里，不会白等 1s）。
+    const blocker = `${entryPath(dir, id)}.tmp`;
+    mkdirSync(blocker, { recursive: true });
+
+    const result = await run(root);
+    assert.equal(result.isError, undefined, "一次回写失败不得让整个 list 抛错");
+    const row = byId(tasksOf(result))[id];
+    assert.equal(row.status, "exited", "本次调用的结论仍必须正确");
+    assert.equal(result.details.healed, 0, "没写进磁盘就不能算 healed");
+    assert.equal(
+      readEntry(dir, id)?.status,
+      "running",
+      "回写真的失败了：磁盘上的条目保持原样（没有假装写过）",
+    );
+
+    rmSync(blocker, { recursive: true, force: true });
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

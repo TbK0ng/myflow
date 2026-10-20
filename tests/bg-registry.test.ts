@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -19,6 +19,7 @@ import {
   resolveStatus,
   writeCursor,
   writeEntry,
+  writeFileAtomic,
   type BackgroundEntry,
 } from "../.pi/extensions/myflow/background.ts";
 
@@ -265,6 +266,105 @@ test("bg registry -6: the per-session cursor round-trips and a missing cursor re
     // A corrupt cursor also degrades to 0 rather than throwing.
     writeFileSync(other, "{not json");
     assert.equal(readCursor(other), 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- D1 / D3 (review fixes) -------------------------------------------------
+
+test("bg registry -7: a recorded `exited` stays exited even when its pid reads alive (D1)", () => {
+  // 回退点：删掉 `resolveStatus` 里 `entry.status === "exited"` 那一档 →
+  // 下面的 pid 活分支把它报回 running，本用例红。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    mkdirSync(dir, { recursive: true });
+
+    // (a) A verdict already written to disk (a `list` self-heal, or the
+    // `spawn_error` listener) must stick. The pid is deliberately alive — that
+    // is the OS having reused it, and it is what used to resurrect the entry.
+    const sticky = makeEntry(dir, newTaskId(40), { status: "exited", pid: process.pid });
+    assert.equal(isAlive(sticky.pid), true, "precondition: the reused pid is alive");
+    assert.deepEqual(resolveStatus(dir, sticky), { status: "exited", exit_code: null });
+
+    // The recorded exit code survives the sticky branch instead of being lost.
+    const coded = makeEntry(dir, newTaskId(41), {
+      status: "exited",
+      exit_code: 3,
+      pid: process.pid,
+    });
+    assert.deepEqual(resolveStatus(dir, coded), { status: "exited", exit_code: 3 });
+
+    // (b) The sticky branch must not outrank a real `.exit` record: even with
+    // `status: "exited"` on disk, the record's code and reasons are the truth.
+    const withExit = makeEntry(dir, newTaskId(42), {
+      status: "exited",
+      exit_code: 3,
+      pid: process.pid,
+    });
+    writeFileSync(
+      exitPath(dir, withExit.id),
+      JSON.stringify({ exit_code: 7, signal: "SIGTERM", at: new Date().toISOString() }),
+    );
+    assert.deepEqual(resolveStatus(dir, withExit), {
+      status: "exited",
+      exit_code: 7,
+      signal: "SIGTERM",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("bg registry -8: an atomic write retries a transient rename failure and never leaves a .tmp (D3)", () => {
+  // 回退点：删掉 `writeFileAtomic` 的 rename 重试循环 → attempts 停在 1 且抛错，红；
+  // 删掉 catch 里的 `rmSync(tempPath)` → `.tmp` 残留断言红。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const target = entryPath(dir, "bg-atomic-0000");
+
+    // Two transient (Windows sharing) failures, then success. The sleep is
+    // injected so the retry schedule is asserted without waiting ~1s.
+    let attempts = 0;
+    const sleeps: number[] = [];
+    writeFileAtomic(target, '{"id":"bg-atomic-0000"}', {
+      rename: (from, to) => {
+        attempts += 1;
+        if (attempts < 3) {
+          const error = new Error("resource busy or locked") as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        }
+        renameSync(from, to);
+      },
+      sleep: (ms) => sleeps.push(ms),
+    });
+    assert.equal(attempts, 3, "a transient failure must be retried, not thrown");
+    assert.deepEqual(sleeps, [20, 20], "each retry waits the documented 20ms");
+    assert.equal(readFileSync(target, "utf-8"), '{"id":"bg-atomic-0000"}');
+    assert.ok(!existsSync(`${target}.tmp`), "a successful write leaves no .tmp behind");
+
+    // A permanent error is not retried and still cleans the temp file up.
+    let permanentAttempts = 0;
+    assert.throws(
+      () =>
+        writeFileAtomic(target, "payload", {
+          rename: () => {
+            permanentAttempts += 1;
+            const error = new Error("not a transient code") as NodeJS.ErrnoException;
+            error.code = "EISDIR";
+            throw error;
+          },
+          sleep: () => {
+            throw new Error("a permanent error must not be retried");
+          },
+        }),
+      /not a transient code/,
+    );
+    assert.equal(permanentAttempts, 1, "a non-transient code is attempted exactly once");
+    assert.ok(!existsSync(`${target}.tmp`), "a failed write still removes its .tmp");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

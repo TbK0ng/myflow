@@ -47,12 +47,15 @@
 | `4373b99` | `S3d` | 增加临时目录泄漏审计 |
 | `efd5106` | `P1` | **删掉 `cmd.exe` 兜底**（用户裁定：宁可拒绝，不要假装） |
 | `38cceb8` | `F7` | 接线：注册、子代理守卫、`session_shutdown` 行为 |
-| （本批） | `F8` | 契约副本同步（`design.md` / `implement.md` / spec / skills） |
+| `35d707b` | `F8` | 契约副本同步（`design.md` / `implement.md` / spec / skills） |
+| （本批） | `P2` | 复核修复：D1 自愈粘滞 + D3 回写健壮性（含测试、`design.md` / spec、本文件计数） |
 
 **顺序理由**：`F1` 是可独立单测的底座（没有它就没有退出码）；
 `F2` 是所有工具的共同依赖；`F3`–`F6` 每个是一个独立可测的功能点；
 `S2*`/`S3*` 是复核发现的机制缺陷，各自单独提交；`P1` 是用户裁定；
-`F7` 必须在工具齐了之后接线；`F8` 在代码定稿后写（否则文档描述未落地的东西）。
+`F7` 必须在工具齐了之后接线；`F8` 在代码定稿后写（否则文档描述未落地的东西）；
+`P2` 是第二轮复核发现的两个缺陷（D1 已结束条目可被复用 pid 复活、D3 注册表回写失败会
+炸掉 `list`），修在工具齐了之后、同一批内改代码 + 测试 + 契约。
 
 ---
 
@@ -84,9 +87,10 @@
 - `writeEntry` / `readEntry` / `listEntries`：
   - `listEntries` 必须**容忍坏文件**（写一半/非法 JSON）→ 计入 `warnings` 明细，**不抛**。
 - `isAlive(pid)`：`process.kill(pid, 0)`；`pid<=0` 或非整数 → false；`EPERM` 视为存活。
-- `resolveStatus(entry)`：**判据顺序固定** → ① `.exit` 存在 ⇒ `exited`（读其 `exit_code`，
+- `resolveStatus(entry)`：**判据顺序固定（五档）** → ① `.exit` 存在 ⇒ `exited`（读其 `exit_code`，
   并带出 `failure`/`signal`）；② `status === "stopped"` ⇒ `stopped`；
-  ③ `isAlive(pid)` ⇒ `running`；④ 否则 ⇒ `exited` 且 `exit_code: null`（自愈）。
+  ③ `status === "exited"` ⇒ `exited`（**已判定结束的条目粘住**，不因 pid 被重用而复活）；
+  ④ `isAlive(pid)` ⇒ `running`；⑤ 否则 ⇒ `exited` 且 `exit_code: null`（自愈）。
 - `prune(dir, now)`：删**已结束**且 `ended_at`（回退 `.exit.at`）早于 24h 的条目
   + 其 `.log`/`.exit`/`.tmp` + 相关游标；无法定日期的不删。
 - 游标：`cursorPath(projectRoot, contextKey, taskId)`、`readCursor`（缺失/坏 → 0）、`writeCursor`。
@@ -132,7 +136,7 @@
   只遍历本会话起过的 id，列出仍 `running` 的并 `ctx.ui.notify`（无 UI 静默跳过）；绝不外抛。
 - 工厂函数里**不得**起进程或定时器。
 
-### F8 — 契约副本同步（本批，纯文档）
+### F8 — 契约副本同步（已落地，见 `35d707b`，纯文档）
 | 文件 | 要加什么 |
 | --- | --- |
 | `.myflow/spec/harness/index.md` | 新 Contract `Background tasks: myflow_bg_*`：目录与四个文件契约、`taskId` 形状、三个可达状态、`confirmed_by`、wrapper 与退出记录、pid 自愈、**§8 的已知限制表原文**；Pre-Development Checklist 与 Quality Check 各加一条 |
@@ -141,6 +145,16 @@
 
 **验收**：grep 确认没有第二处描述与本设计冲突；文档契约测试（`skills-hygiene` / `workflow-invariant` /
 `scaffold`）全绿。
+
+### P2 — 复核修复：D1 自愈粘滞 + D3 回写健壮性（本批）
+- **D1（安全，中等）**：`resolveStatus` 在「`stopped`」与「`isAlive`」之间插入一档
+  `status === "exited"` ⇒ `exited`。已判定结束的条目**粘住**，因此旧 pid 被系统重用后既不会把它
+  报回 `running`，也不会让 `myflow_bg_stop` 对一个无关进程 `taskkill /F /T`。`.exit` 仍高于粘滞档。
+- **D3（健壮性，低）**：`writeFileAtomic` 的 rename 对 `EPERM`/`EACCES`/`EBUSY` 有界重试
+  50×20ms（`Atomics.wait` 同步睡，与 `bg_runner.mjs` 同法），其它错误仍立即抛出；
+  `resolveAndHeal` 只把这一次 `writeEntry` 包进 try/catch，失败时返回 `healed: false`
+  但本次的 `resolved` 照旧——一次回写失败不得炸掉整个 `list`。
+- **测试**：`F2 -7` / `F2 -8`、`F5 -8` / `F5 -9`、`F6 -7`（见 §3），每条都验证过「删掉对应判断即变红」。
 
 ---
 
@@ -173,7 +187,7 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | `S3 -2` | 被拒时按递增退避重试，穷尽 8 次且不超预算，错误可操作 |
 | `S3 -3` | 永远失败时有界放弃（真实等待，总耗时小于预算 + 余量） |
 
-### F2（`tests/bg-registry.test.ts`，6 条）
+### F2（`tests/bg-registry.test.ts`，8 条）
 | ID | 用例 |
 | --- | --- |
 | `-1` | `taskId` 形状符合正则，且大量生成不重复 |
@@ -182,8 +196,10 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | `-4` | `listEntries` 对坏 JSON 不抛，坏文件进 `warnings`，好条目仍在 |
 | `-5` | `prune` 只删「已结束且 >24h」及其 log/exit/游标，不动运行中的与新的 |
 | `-6` | 游标读写往返；不存在/坏 → offset 0 |
+| `-7` | **（P2/D1）** 已记 `status:"exited"` 且 pid 是 `process.pid`（活）→ 仍必须 `exited`；带 `exit_code` 时该值保留；同时构造 `.exit` 存在的情形证明新分支没有抢在 `.exit` 前面 |
+| `-8` | **（P2/D3）** `writeFileAtomic` 注入 `rename`：前两次 `EPERM`、第三次成功 → 尝试 3 次、每次等 20ms、无 `.tmp` 残留；`EISDIR` 这类确定性错误只尝试一次并同样清掉 `.tmp` |
 
-### F3（`tests/bg-start.test.ts`，9 条）
+### F3（`tests/bg-start.test.ts`，10 条）
 | ID | 用例 |
 | --- | --- |
 | `-1` | **立刻返回**：起一个长跑命令，断言工具在 **< 2000ms** 内返回（可测上界） |
@@ -195,6 +211,7 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | `-7` | 注入 `isSubAgent: true` → 工具内部守卫拒绝（无弹窗/无 spawn/无条目） |
 | `-8` | spawn 异步 `'error'` → 不崩，写入 `spawn_error` 并自愈为 `exited` |
 | `-9` | spawn 同步抛错 → 返回错误，且不写任何注册表条目 |
+| `-10` | `onStarted` 抛错被吞：已经起来的 start 仍返回成功（记账失败不得让已起的任务变成“失败”） |
 
 ### F4（`tests/bg-output.test.ts`，15 条）
 | ID | 用例 |
@@ -215,7 +232,7 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | `-14` | `tail` 单行超限：唯一例外是返回 UTF-8 对齐片段并标 `truncated` |
 | `H1a` | 展示启动失败/异常退出原因：`.exit.error` 与 `.exit.signal` |
 
-### F5（`tests/bg-list.test.ts`，8 条）
+### F5（`tests/bg-list.test.ts`，10 条）
 | ID | 用例 |
 | --- | --- |
 | `-1` | 能区分 `running` / `exited` / `stopped`，并各自给出正确的 `exit_code` |
@@ -225,9 +242,11 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | `-5` | `spawn_error` 可见，且不会被误报成 running |
 | `-6` | 坏文件如实报告：列表仍能列出其它条目，并报出坏条目数量 |
 | `-7` | `include_finished: false` 只列仍在跑的 |
+| `-8` | **（P2/D1）** 自愈后的 `exited` 粘住：先把一个 pid 已死的条目自愈落盘，再把 pid 换成**真实存活的无关探针**再 list 一次 → 仍必须 `exited`，且**不得**把 `running` 写回磁盘 |
+| `-9` | **（P2/D3）** 自愈回写失败（`<id>.json.tmp` 放成同名目录 → `EISDIR`）→ list 仍正常返回、该行仍为 `exited`、`healed` 为 0、磁盘保持原样；用例末尾清理该目录 |
 | `H1a` | 展示 `.exit.error` 与 `.exit.signal`，且与 `spawn_error` 能区分 |
 
-### F6（`tests/bg-stop.test.ts`，5 条）
+### F6（`tests/bg-stop.test.ts`，7 条）
 | ID | 用例 |
 | --- | --- |
 | `-1` | **杀进程树**：起一个会生成孙进程的命令 → stop 后**孙进程也死**（用存活检测断言，不看 taskkill 的输出） |
@@ -235,6 +254,8 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | `-3` | 成功后 `status === "stopped"` 且 `ended_at` 非空（返回值与注册表都写） |
 | `-4` | 不存在的 `task_id` → 明确错误，不抛栈 |
 | `-5` | 失败不得谎报：进程仍活时不写 stopped，返回原始 stderr |
+| `-6` | wrapper 抢先在写：`.exit` 已存在时 stop 采用它的 `exit_code`/`signal`（不是强杀前解析出的 null） |
+| `-7` | **（P2/D1，安全）** 条目 `status:"exited"`（无 `.exit`）、pid 是真实存活的无关探针 → stop 返回 `stopped:false`/`already_finished:true`、**不调** `terminate`、探针**仍活着**、条目一字未改 |
 
 ### F7（`tests/bg-lifecycle.test.ts`，6 条）
 | ID | 用例 |
@@ -259,7 +280,7 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | stop 杀进程树（Windows） | `F6 -1` |
 | list 区分三态 | `F5 -1` |
 | 每个功能点有回退即红测试 | 每批「删掉哪个判断会变红」自查 + 主会话抽查突变 |
-| 不破坏既有全量套件（F8 时为 **325/325**） | 每批全量测试 |
+| 不破坏既有全量套件（F8 时为 **325/325**，P2 时为 **332/332**） | 每批全量测试 |
 | 不引入第二个 `bash` 工具 | grep：新工具名都是 `myflow_bg_*` |
 | 每个功能点单独提交 | §1 的实际提交序列（**主会话执行提交**） |
 

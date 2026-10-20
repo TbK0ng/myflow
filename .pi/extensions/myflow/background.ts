@@ -31,7 +31,12 @@
  *   - A stop that force-kills the wrapper leaves `status: "stopped"` with no
  *     exit code; `exit_code` is therefore nullable everywhere.
  *   - Liveness is `process.kill(pid, 0)`, which can mistake a reused PID for the
- *     original task. A present `.exit` record always outranks it.
+ *     original task. Two things outrank it: a present `.exit` record, and an
+ *     entry already recorded as `exited`/`stopped` (a finished verdict is
+ *     sticky, so a reused pid can neither resurrect a task nor make a stop
+ *     kill an unrelated process). The residual risk is narrower: a task whose
+ *     pid was reused *before any reader ever observed it* still reads as
+ *     running, because nothing on disk records that it died.
  */
 
 import {
@@ -185,17 +190,67 @@ export function exitPath(dir: string, id: string): string {
 }
 
 /**
+ * Windows can refuse to replace a file that another process currently holds
+ * open (`EPERM`/`EACCES`/`EBUSY`) even though the reader only asked for read
+ * access. A concurrent `list`/`output` reading the registry is exactly that
+ * case, so a rename that fails for one of these transient reasons is retried
+ * briefly instead of being reported as a write failure. The wait is bounded by
+ * `RENAME_RETRIES * RENAME_RETRY_MS` (1s), the same schedule `bg_runner.mjs`
+ * uses for `<id>.exit`.
+ */
+const RENAME_RETRY_MS = 20;
+const RENAME_RETRIES = 50;
+const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/** Bounded synchronous sleep; `Atomics.wait` is the portable way to block. */
+function sleepSync(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+/**
+ * Test seams for the atomic write. Production callers pass nothing and get the
+ * real `rename` plus a real 20ms sleep; a test can inject a rename that fails
+ * transiently (to cover the retry loop) or a no-op sleep (to avoid waiting).
+ */
+export interface AtomicWriteDeps {
+  rename?: (from: string, to: string) => void;
+  sleep?: (milliseconds: number) => void;
+}
+
+/**
  * Write a file atomically: fill a sibling `.tmp`, then rename it into place.
  * A concurrent reader therefore sees the previous contents or the complete new
  * contents, never a half-written file (the same discipline `bg_runner.mjs`
  * applies to `<id>.exit`).
+ *
+ * The rename is retried for the transient Windows sharing errors above; any
+ * other error is thrown immediately, and the `.tmp` is cleaned up either way
+ * (D3: a reader holding the registry file must not turn a write-back into a
+ * hard failure).
  */
-function writeFileAtomic(path: string, data: string): void {
+export function writeFileAtomic(path: string, data: string, deps: AtomicWriteDeps = {}): void {
   mkdirSync(dirname(path), { recursive: true });
   const tempPath = `${path}.tmp`;
+  const rename = deps.rename ?? renameSync;
+  const sleep = deps.sleep ?? sleepSync;
   try {
     writeFileSync(tempPath, data, { encoding: "utf-8" });
-    renameSync(tempPath, path);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        rename(tempPath, path);
+        return;
+      } catch (error) {
+        const code =
+          error && typeof error === "object" && "code" in error
+            ? String((error as { code: unknown }).code)
+            : undefined;
+        if (attempt < RENAME_RETRIES && code !== undefined && TRANSIENT_RENAME_CODES.has(code)) {
+          sleep(RENAME_RETRY_MS);
+          continue;
+        }
+        throw error;
+      }
+    }
   } catch (error) {
     try {
       rmSync(tempPath, { force: true });
@@ -374,16 +429,22 @@ function normalizeReason(value: unknown): string | null {
 
 /**
  * Decide a task's state. The precedence is fixed and must not be reordered
- * (`design.md` §3.2, R9):
+ * (`design.md` §3.1, R9):
  *
  *   1. a present `.exit` record  => `exited`, with the recorded code;
  *   2. `entry.status === "stopped"` => `stopped` (a stop that raced the wrapper);
- *   3. the pid is alive          => `running`;
- *   4. otherwise                 => `exited` with `exit_code: null` (self-heal).
+ *   3. `entry.status === "exited"`  => `exited` (a verdict already reached stays);
+ *   4. the pid is alive          => `running`;
+ *   5. otherwise                 => `exited` with `exit_code: null` (self-heal).
  *
- * Rule 1 outranking rule 3 is the point: a `.exit` record is authoritative even
- * if the OS has since reused the pid, so a long-dead task never reports as
- * running. Rule 4 self-heals an entry whose process vanished without a record.
+ * Rules 1 and 3 both outrank rule 4, and for the same reason: a task that has
+ * already been judged finished must never come back to life because the OS
+ * reused its pid. Rule 3 is what makes a self-healed entry *sticky* — without
+ * it, `list` would write `exited` and the next read would flip the entry back
+ * to `running`, which would let `myflow_bg_stop` `taskkill` an unrelated
+ * process that inherited the pid (D1). Rule 1 still wins over rule 3, so a
+ * `.exit` record that arrives later overwrites a healed verdict's exit code.
+ * Rule 5 self-heals an entry whose process vanished without a record.
  *
  * Pure: it reads the disk but never writes. Whether to persist the healed state
  * is the caller's decision.
@@ -403,6 +464,12 @@ export function resolveStatus(dir: string, entry: BackgroundEntry): ResolvedStat
   }
   if (entry.status === "stopped") {
     return { status: "stopped", exit_code: normalizeExitCode(entry.exit_code) };
+  }
+  // A recorded `exited` is sticky: it is a verdict this harness already
+  // reached (a self-heal write-back, or the `spawn_error` listener), so pid
+  // liveness below must not resurrect it. See the precedence note above.
+  if (entry.status === "exited") {
+    return { status: "exited", exit_code: normalizeExitCode(entry.exit_code) };
   }
   if (isAlive(entry.pid)) {
     return { status: "running", exit_code: null };
@@ -1588,7 +1655,16 @@ function resolveAndHeal(
         ? recordedAt
         : new Date(nowMs).toISOString();
   }
-  writeEntry(dir, healedEntry);
+  try {
+    writeEntry(dir, healedEntry);
+  } catch {
+    // A failed write-back must not fail the whole listing (D3): the verdict
+    // above is still this call's correct answer, it just did not reach the
+    // disk. Saying `healed: true` would claim a persistence that did not
+    // happen, so it stays false. Only this one write is guarded — anything
+    // else that throws here is a real bug and must still surface.
+    return { resolved, entry: healedEntry, healed: false };
+  }
   return { resolved, entry: healedEntry, healed: true };
 }
 
@@ -1983,9 +2059,11 @@ export function createBgStopTool(registration: BgStopRegistration = {}): Record<
       const pid = typeof entry.pid === "number" ? entry.pid : 0;
       const resolved = resolveStatus(dir, entry);
 
-      // Idempotent path: the task already ended (an `.exit` record or a
-      // persisted `stopped`). Report the existing verdict and write nothing, so
-      // a repeated stop can never overwrite a real exit code with null.
+      // Idempotent path: the task already ended (an `.exit` record, a
+      // persisted `stopped`, or a sticky `exited`). Report the existing verdict
+      // and write nothing, so a repeated stop can never overwrite a real exit
+      // code with null — and, just as important, never `taskkill` a pid the OS
+      // may have handed to an unrelated process (D1).
       if (isFinishedStatus(resolved.status)) {
         const result: BgStopResult = {
           task_id: taskId,

@@ -40,6 +40,8 @@ import {
 //   -5：无 UI 放行时把 confirmed_by 写成 ui-confirm（或结果不回显）→ 文本/条目断言变红。
 //   -6：删掉空命令校验 → confirm / spawn 计数非 0。
 //   -7：删掉 bgSubAgentRefusal → 子代理用例出现副作用。
+//   -10：删掉 `onStarted` 调用的 try/catch → 成功的 start 变成被拒绝（promise
+//        reject），用例变红。
 
 const ROOT = join(import.meta.dirname, "..");
 const RUNNER = join(ROOT, ".myflow", "scripts", "bg_runner.mjs");
@@ -122,6 +124,29 @@ function stubSpawnThrowing(error: Error): {
   const fn = (...args: unknown[]) => {
     calls.push(args[0] as unknown as SpawnCall);
     throw error;
+  };
+  return { fn, calls };
+}
+
+/**
+ * 一个「创建成功」的 spawn 桩：返回 `ChildProcess` 形状的对象（`pid`、`unref()`，
+ * 以及 `EventEmitter` 的 `on`），但从不发 `'error'`、也从不真的起进程。
+ *
+ * 与 `stubSpawn()` 的区别是它有 `on`：真实代码在 spawn 之后会挂 `'error'` 监听器，
+ * 所以没有 `on` 的桩只能覆盖「在 spawn 处就返回」的拒绝路径。这个桩用于走到
+ * spawn 之后的两步（写条目、`onStarted`）。
+ */
+function stubSpawnSucceeding(pid = 4242): {
+  fn: (...args: unknown[]) => unknown;
+  calls: SpawnCall[];
+} {
+  const calls: SpawnCall[] = [];
+  const fn = (...args: unknown[]) => {
+    calls.push(args[0] as unknown as SpawnCall);
+    const child = new EventEmitter() as EventEmitter & { unref: () => void; pid?: number };
+    child.pid = pid;
+    child.unref = () => {};
+    return child;
   };
   return { fn, calls };
 }
@@ -510,6 +535,53 @@ test("F3 -9 spawn 同步抛错 → 返回错误，且不写任何注册表条目
       [],
       "同步 spawn 失败必须在写条目之前返回，注册表不得残留条目",
     );
+  } finally {
+    await cleanup(root, undefined);
+  }
+});
+
+test("F3 -10 onStarted 抛错被吞：已经起来的 start 仍是成功", async () => {
+  const root = makeProject();
+  try {
+    const { fn, calls } = stubSpawnSucceeding();
+    // 记账回调收到 id 后抛出。断言只在回调**之外**做：回调里的断言会被这层
+    // try/catch 一起吞掉，那正是本用例要防的那种「静默失败」。
+    const seen: string[] = [];
+    const tool = createBgStartTool({
+      deriveContextKey: () => CONTEXT_KEY,
+      isSubAgent: false,
+      runnerPath: RUNNER,
+      spawnProcess: fn as never,
+      onStarted: (id: string) => {
+        seen.push(id);
+        throw new Error("bookkeeping blew up");
+      },
+    }) as unknown as { execute: (...args: unknown[]) => Promise<ToolResult> };
+
+    const result = await tool.execute(
+      "call-10",
+      { command: "echo hi" },
+      undefined,
+      undefined,
+      fakeCtx(root),
+    );
+
+    // 回退点：删掉 `registration.onStarted(id)` 那一层 try/catch → 这个 await 直接
+    // reject（进程已经起了，工具却报失败），下面每条断言都拿不到。
+    assert.equal(
+      result.isError,
+      undefined,
+      `onStarted 抛错不得把已成功的 start 变成错误：${result.content[0]?.text}`,
+    );
+    assert.equal(result.details.started, true);
+    const id = result.details.id as string;
+    assert.equal(calls.length, 1, "确认之后必须真的调用 spawn");
+    assert.deepEqual(seen, [id], "onStarted 必须被调用一次，且拿到刚写下的 id");
+
+    // 条目已落盘：回调抛错没有回滚一个已经发生的启动。
+    const entry = readEntry(backgroundDir(root), id);
+    assert.ok(entry, "注册表条目必须存在（进程已经在跑了）");
+    assert.equal(entry!.status, "running");
   } finally {
     await cleanup(root, undefined);
   }
