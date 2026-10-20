@@ -28,8 +28,10 @@ Payload tour and inventory:
       "Background tasks: `myflow_bg_*`" below **and** the shell resolution in
       `.myflow/scripts/bg_runner.mjs` (`resolveShellPath` /
       `shellRejectionReason` / `shellArgsFor`) before changing either. The runner
-      is the only writer of `<id>.log` and `<id>.exit`; the tools are the only
-      writer of `<id>.json`.
+      is the only writer of `<id>.log`, `<id>.exit`, and `<id>.pid`; the tools
+      are the only writer of `<id>.json`. A change to the `.pid` handshake (its
+      timing, payload, or who reads it) touches `writePidRecord`,
+      `readPidFile` / `readPid`, and this spec in the same change.
 
 ## Contracts
 
@@ -158,8 +160,9 @@ Payload tour and inventory:
 ### Background tasks: `myflow_bg_*`
 
 - **Producers**:
-  - `.myflow/scripts/bg_runner.mjs` — the detached wrapper. It resolves a POSIX
-    shell (`resolveShellPath`), refuses with `shellRejectionReason` when none
+  - `.myflow/scripts/bg_runner.mjs` — the detached wrapper. It writes its own
+    `<taskId>.pid` handshake first (`writePidRecord`), resolves a POSIX shell
+    (`resolveShellPath`), refuses with `shellRejectionReason` when none
     resolves, spawns the shell with argv (`shellArgsFor`), and writes the
     `<taskId>.exit` record itself (`writeExitRecord` / `spawnFailureRecord` /
     `shellUnavailableRecord`).
@@ -179,8 +182,9 @@ Payload tour and inventory:
   - Everything lives under `.myflow/.runtime/background/` (gitignored machine
     state): `<taskId>.json` (registry entry, written only by the tools, atomically
     via `.tmp` → rename), `<taskId>.log` (written by the shell's own
-    `exec >> '<log>' 2>&1`), `<taskId>.exit` (written by the wrapper), and
-    `cursors/<contextKey>__<taskId>.json` (`{"offset": <bytes>}`). The rename is
+    `exec >> '<log>' 2>&1`), `<taskId>.exit` (written by the wrapper),
+    `<taskId>.pid` (the handshake, written by the wrapper),
+    and `cursors/<contextKey>__<taskId>.json` (`{"offset": <bytes>}`). The rename is
     retried up to 50 × 20ms on the transient Windows sharing codes (`EPERM` /
     `EACCES` / `EBUSY`, the same schedule `bg_runner.mjs` uses for `.exit`); any
     other error is thrown immediately and the `.tmp` is removed.
@@ -189,13 +193,27 @@ Payload tour and inventory:
   - A registry entry carries `id, command, description?, cwd, pid, log,
     exit_file, status, exit_code, started_at, ended_at,
     started_by_context_key, confirmed_by, spawn_error?`. `log` / `exit_file` are
-    project-root-relative; `pid` is `0` when `spawn` reported no pid; extra
-    fields are tolerated by the reader.
-  - **Three reachable statuses**: `running` | `exited` | `stopped`. `unknown` is
-    in the type for forward compatibility and appears only in the two refusal
-    payloads (`bgOutputError`, `bgStopError`); `resolveStatus` never returns it,
-    and a registry file that cannot be parsed is reported through
+    project-root-relative. `cwd` is the **resolved absolute** directory the
+    command runs in (R5), always inside the project root. `pid` is a cache of
+    what `spawn` returned: the entry is written with `pid: 0` **before** the
+    spawn and backfilled afterwards, so `0` means "no pid confirmed yet", never
+    "pid 0". **No reader trusts it directly** — every one goes through
+    `readPid`. Extra fields are tolerated by the reader.
+  - **Four reachable statuses**: `starting` | `running` | `exited` | `stopped`.
+    `unknown` is in the type for forward compatibility and appears only in the
+    two refusal payloads (`bgOutputError`, `bgStopError`); `resolveStatus` never
+    returns it, and a registry file that cannot be parsed is reported through
     `listEntries().warnings` instead of being given a status.
+  - `<taskId>.pid` is the wrapper's handshake: `{"pid": N, "at": "<ISO>"}`,
+    written atomically (`.tmp` → rename, the same 50 × 20ms retry on
+    `EPERM` / `EACCES` / `EBUSY` as `.exit`) by the process whose pid it names.
+    It is written **after `parseArgs` succeeds and before the shell is resolved,
+    the log directory created, or the command executed** — so a command can
+    never run unless a pid was recorded first. A write failure is fatal *for the
+    command* (fail-closed): the wrapper writes an `.exit` naming the failure and
+    runs nothing. The path is an explicit `--pid` argument; nothing derives it.
+    The file existing means "the wrapper was alive", not "the command runs"
+    (a refused shell also leaves one). `prune` deletes it with the entry.
   - `confirmed_by` is `ui-confirm` (the user saw the exact command) or
     `no-ui-explicit` (no UI and `unattended: true` was passed). The second value
     is a recorded bypass: `myflow_bg_start` echoes it, and `myflow_bg_list`
@@ -207,34 +225,84 @@ Payload tour and inventory:
     the rejected `cmd.exe` path, message naming the search order). A *missing
     command* is not in that list: the shell starts and exits `127` with no
     `error`.
+  - `ExitRecord` in `background.ts` admits those fields (`shell?: string | null`,
+    `retries?: number`) so a reader does not need a cast. There is exactly one
+    consumer: **`myflow_bg_output` attaches `shell` and `retries` only for a
+    finished task** (a `.exit` record exists). `shell` is included even when it
+    is `null` (a recorded refusal is a fact); `retries` is omitted entirely when
+    the field is absent — never `0`, never `undefined`.
   - Read cursors are per (session context key, task id); a missing, empty or
     corrupt cursor file reads as offset `0`, which may re-read but never skips.
+  - `myflow_bg_output` `mode: "tail"` truncates on line boundaries, so it never
+    returns half a line. The one exception is a single line longer than
+    `max_bytes`: dropping it would return nothing, so the UTF-8-aligned fragment
+    is returned with `truncated: true`. A delta cursor past the file end means a
+    rotated/recreated log, so it restarts at `0` and sets `reset: true`.
+  - Creation of the command's process is retried on a bounded backoff (up to 8
+    attempts / ~7.2s, hard cap 10s) and only for a *transient* refusal; a
+    deterministic failure is recorded immediately. The wrapper still returns
+    immediately to the tool, which never waits for any of this — the exit status
+    merely arrives later.
 - **Invariant**:
   - A present `.exit` record outranks pid liveness: the status is `exited` even
     if the pid now belongs to something else. A dead pid with no `.exit`
-    self-heals to `exited` with `exit_code: null`.
-  - A finished verdict is **sticky**. The precedence is fixed at five levels:
-    `.exit` → `status: "stopped"` → `status: "exited"` → `isAlive(pid)` →
-    self-heal to `exited`. An entry already recorded as `exited` or `stopped`
-    never flips back to `running` because its pid now reads alive, so a reused
-    pid can neither resurrect a task nor make `myflow_bg_stop` kill an unrelated
+    self-heals to `exited` with `exit_code: null`. `exit_code` is therefore
+    nullable everywhere: a task force-stopped by `myflow_bg_stop`, or one whose
+    wrapper died, is reported `stopped` / `exited` with no code.
+  - A finished verdict is **sticky**. `resolveStatus` has a fixed **six-level**
+    precedence: `.exit` → `status: "stopped"` → `status: "exited"` →
+    `isAlive(readPid(...))` → `starting` while the entry is at most
+    `STARTING_TIMEOUT_MS` (60s) old → self-heal to `exited` with
+    `exit_code: null`. An entry already recorded as `exited` or `stopped` never
+    flips back to `running` because its pid now reads alive, so a reused pid can
+    neither resurrect a task nor make `myflow_bg_stop` kill an unrelated
     process. A `.exit` record arriving later still wins over the sticky branch
-    (its `exit_code` / `failure` / `signal` are the truth).
+    (its `exit_code` / `failure` / `signal` are the truth). Level 4 outranks
+    level 5 on purpose: once a pid is confirmed alive the task is `running`, even
+    if the entry still says `starting`, so `stop` can address it.
+  - **The pid has one source**: `readPid(dir, entry)` = `<taskId>.pid`'s positive
+    integer, else the entry's `pid`, else `0`. The handshake is authoritative
+    because the wrapper writes it about itself before running anything; the
+    entry's `pid` is only the tool's cache and may still be `0`. `resolveStatus`,
+    `myflow_bg_stop`, `myflow_bg_list`'s rows, and `session_shutdown` all use it.
+  - **`starting` is a state, not a flag.** `myflow_bg_start` writes the entry as
+    `status: "starting"`, `pid: 0` *before* spawning and backfills `pid` +
+    `running` before returning, so the only window in which a reader sees
+    `starting` is "entry on disk, handshake not yet landed". `myflow_bg_output`
+    returns it normally (the log may be empty; it is not an error),
+    `myflow_bg_list` shows it as a row and persists the self-heal, and
+    `myflow_bg_stop` **refuses** it with an explicit "not addressable yet, retry"
+    error — no kill, no `stopped` write, never `terminate(0)` (pid 0 would mean
+    the whole process group). Once `.pid` appears the same task stops normally.
+  - **`cwd` is confined to the project root** (ADR-9), the same posture as
+    `writesUnder`: a relative value resolves against the root, an absolute value
+    is accepted only inside it, and containment is decided **by path segment,
+    case-insensitively on Windows, with `..` collapsed** by the shared
+    `isWithinWriteScope` / `normalizeWriterPath` from `agents.ts` (imported, not
+    copied). The directory must already exist and be a directory. Validation
+    happens **before** the confirmation dialog, so a refusal produces no dialog,
+    no registry entry, and no spawn. The dialog always shows the resolved
+    directory — including when it equals the project root — because a shell makes
+    a relative command mean something different in every directory. The entry
+    records the absolute path and the wrapper receives it as `--cwd` (a missing
+    `--cwd` value is a hard error, never "the wrapper's own cwd").
   - A failed registry write-back must not fail a listing: `myflow_bg_list`
     catches the write inside its self-heal step, still returns the resolved
     status for this call, and reports `healed` only for entries it really wrote.
   - The tools are the **only** writers of `<taskId>.json`; the wrapper writes
-    only its own `.log` and `.exit`. That is what makes one-file-per-task
-    lock-free and safe across sessions.
+    only its own `.log`, `.exit`, and `.pid`. That is what makes
+    one-file-per-task lock-free and safe across sessions.
   - `myflow_bg_start` must not await any child-process event: it returns as soon
     as the entry is on disk, and the detached wrapper is the only observer of
     the exit code. It must still attach an `'error'` listener (an unhandled
     `'error'` event would crash Pi) and record `spawn_error` there.
   - `session_shutdown` **never kills a background task** — that is the point of
     the feature. It is idempotent (the `shutdownDone` flag is claimed first),
-    it only reports tasks from its own `startedBackgroundIds` set, it stays
-    silent when no `ctx.ui.notify` is available (that, not `hasUI`, is the
-    predicate it checks), and it never throws.
+    it only reports tasks from its own `startedBackgroundIds` set, it never
+    throws, and it notifies only when **`ctx.hasUI !== false` and a
+    `ctx.ui.notify` function exists**. An explicit `hasUI: false` means silence
+    even if the host still handed us a `notify`; an absent `hasUI` counts as
+    "there is a UI".
   - Main session only: agent allowlists omit the four tools, `tool_call` blocks
     them for a sub-agent, and each `execute` re-checks `isSubAgent` before any
     dialog, spawn, or write.
@@ -242,29 +310,28 @@ Payload tour and inventory:
     `shellPath` in `~/.pi/agent/settings.json` → the Git for Windows bash →
     `bash` on `PATH`. When nothing resolves — or it resolves to `cmd.exe` — the
     task is **refused**, and no command runs.
-- **Breaks if**: a `cmd.exe` (or `/bin/sh`) fallback is added back; a descriptor
-  is handed to the child instead of letting the shell redirect its own output;
-  the `.exit`-before-pid or sticky-`exited`-before-pid precedence is reordered;
-  `session_shutdown` starts killing tasks or loses its idempotence flag; a sub-agent allowlist gains one
-  of the four tools; or `unknown` becomes a reachable status without this entry
-  and the tool descriptions being updated in the same change.
+- **Breaks if**: a `cmd.exe` (or `/bin/sh`) fallback is added back, or
+  `findOnPath` stops skipping **all three** WSL-launcher views (`system32`,
+  `sysnative`, `syswow64`); `isRetryableSpawnError` starts retrying Node's
+  deterministic `ERR_*` codes (or stops retrying `EAGAIN` / `ENOMEM` / `EMFILE` /
+  `ENFILE` and unknown/no-code errors); a descriptor is handed to the child
+  instead of letting the shell redirect its own output; a command can run
+  without `<taskId>.pid` first (the orphan window reopens); the
+  `.exit`-before-pid, sticky-`exited`-before-pid, or `isAlive`-before-`starting`
+  precedence is reordered; `cwd` is accepted without the project-root
+  containment test or is not shown in the confirmation dialog; `session_shutdown`
+  starts killing tasks, loses its idempotence flag, or decides "no UI" from the
+  presence of `notify`; a sub-agent allowlist gains one of the four tools; or
+  `unknown` becomes a reachable status without this entry and the tool
+  descriptions being updated in the same change.
 
-**Known limits (measured/observable, not fixed):**
+**Known limits (measured/observable, deliberately not fixed):**
 
 | Limit | Behavior |
 | --- | --- |
-| No `cmd.exe` fallback | A machine with no POSIX shell cannot run background tasks: the task is refused, `.exit` records `exit_code: null` + `error`, and nothing executes. This is a choice, not a defect. |
-| Retry budget after a refused creation | The wrapper retries up to 8 attempts / ~7.2s (hard cap 10s) before writing `.exit`. The tool still returns immediately, but the exit status arrives that much later. |
-| `stop` vs `start` window | `start` spawns before writing the entry, so a `stop` in that window reports "no such task". The window is tiny; no compensation is attempted. |
-| Orphan window | If the tool crashes between `spawn` and `writeEntry`, the process runs with no registry entry and `list` cannot see it. No transactional compensation. |
-| `tail` single-line exception | `tail` truncates on line boundaries; the one exception is a single line longer than `max_bytes`, which is returned as a UTF-8-aligned fragment with `truncated: true`. |
-| `syswow64` not skipped | `findOnPath` skips `system32` / `sysnative` (the WSL launcher) but not `SysWOW64`, so a 32-bit view can still select it. |
-| Unknown spawn errors are retried | `isRetryableSpawnError` treats an unrecognized `code` (including deterministic `ERR_*` ones) as transient, so they can wait ~7.2s before `.exit`. |
-| Exit code may be `null` | A task force-stopped by `myflow_bg_stop`, or whose wrapper died, is reported `stopped` / `exited` with no code. |
-| Pid reuse | Liveness is `process.kill(pid, 0)`. Two things outrank it: a present `.exit` record, and a status already recorded as `exited` / `stopped` (a finished verdict is sticky). So a reused pid can neither resurrect a finished task nor make `myflow_bg_stop` kill an unrelated process. The residual risk is narrower than that: a task whose pid is reused **before any reader ever observed it** still reads as `running`, because nothing on disk records that it died. `myflow_bg_list` additionally forces a task carrying `spawn_error` to `exited`. |
-| Registry write-back can fail | A reader holding the entry open (or an unremovable `.tmp`) makes the self-heal write fail. `myflow_bg_list` still returns the resolved status for that call and does not count the entry as `healed`; the disk keeps the old status until a later write succeeds. |
-| No sandbox, no resource limits | A background command runs with the current user's full permissions; the confirmation dialog is the only gate, and it is not a security boundary (`unattended: true` bypasses it, leaving `confirmed_by: "no-ui-explicit"` in the registry). CPU/memory/process count are not limited and no timeout kills a long task. |
-| No log rotation | `.log` grows without bound; `prune` only deletes the files of *finished* tasks that ended more than 24 hours ago. |
+| Pid identity | Liveness is `process.kill(pid, 0)`. Two things outrank it: a present `.exit` record, and a status already recorded as `exited` / `stopped` (a finished verdict is sticky). So a reused pid can neither resurrect a finished task nor make `myflow_bg_stop` kill an unrelated process. The residual risk is a task whose pid is reused **before any reader ever observed it**: nothing on disk records that it died, so the first read still says `running`. Proving identity needs an OS-level process-creation time (WMI on Windows, `/proc` on POSIX); that is only worth paying inside `stop`, never on `list`'s hot path, so it is deferred to its own task instead of being approximated here. `myflow_bg_list` additionally forces a task carrying `spawn_error` to `exited`. |
+| No log rotation | `.log` grows without bound; `prune` only deletes the files of *finished* tasks that ended more than 24 hours ago. The retention policy is undecided: truncating loses history, rolling adds a naming contract, so neither is chosen here. |
+| No sandbox, no resource limits | A background command runs with the current user's full permissions; the confirmation dialog is the only gate, and it is not a security boundary (`unattended: true` bypasses it, leaving `confirmed_by: "no-ui-explicit"` in the registry). CPU/memory/process count are not limited and no timeout kills a long task. This belongs to the permission system, not to the background-task feature. |
 
 The `Routing` table in `.myflow/workflow.md` names `myflow_bg_start` for
 long-running commands. That is orientation, not a gate: a background task is an
@@ -334,6 +401,11 @@ session, and the invariants above are what keep it honest.
       as gated only on the context manifests.
 - [ ] No agent gained `bash` without revisiting the Design Decision above.
 - [ ] Changing the shell resolution (`resolveShellPath` /
-      `shellRejectionReason` / `shellArgsFor`) or the `<taskId>.exit` shape was
-      mirrored into the `myflow_bg_start` tool description, the "Background
-      tasks" contract above, and `harness-conventions.md` in the same change.
+      `shellRejectionReason` / `shellArgsFor`), the `<taskId>.exit` shape, or the
+      `<taskId>.pid` handshake was mirrored into the `myflow_bg_start` tool
+      description, the "Background tasks" contract above, and
+      `harness-conventions.md` in the same change.
+- [ ] The reachable-status count is **four** (`starting`, `running`, `exited`,
+      `stopped`). Adding a state means updating `BackgroundTaskStatus`,
+      `resolveStatus`, `myflow_bg_list` / `myflow_bg_output` / `myflow_bg_stop`,
+      the tool descriptions, and this entry — all together.

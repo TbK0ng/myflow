@@ -11,6 +11,7 @@
  *   <taskId>.json   registry entry — written only by the tools (ADR-4)
  *   <taskId>.log    command output — written by `bg_runner.mjs` via the kernel
  *   <taskId>.exit   how the command ended — written by `bg_runner.mjs`
+ *   <taskId>.pid    the wrapper's own handshake — written by `bg_runner.mjs`
  *   cursors/<contextKey>__<taskId>.json   per-session read cursor (ADR-5)
  *
  * One file per task rather than one shared `tasks.json`: concurrent sessions
@@ -25,11 +26,6 @@
  * dependency-injection shape `ask.ts` and `approval.ts` use).
  *
  * Known limits, stated honestly (`design.md` §8):
- *   - There is an orphan window: if the tool crashes after spawning the wrapper
- *     but before `writeEntry`, the process runs with no registry entry and
- *     `listEntries` cannot see it. No transactional compensation is attempted.
- *   - A stop that force-kills the wrapper leaves `status: "stopped"` with no
- *     exit code; `exit_code` is therefore nullable everywhere.
  *   - Liveness is `process.kill(pid, 0)`, which can mistake a reused PID for the
  *     original task. Two things outrank it: a present `.exit` record, and an
  *     entry already recorded as `exited`/`stopped` (a finished verdict is
@@ -37,6 +33,16 @@
  *     kill an unrelated process). The residual risk is narrower: a task whose
  *     pid was reused *before any reader ever observed it* still reads as
  *     running, because nothing on disk records that it died.
+ *
+ * The orphan window is **closed**, not merely narrowed: the entry is written as
+ * `starting` before the spawn, and the wrapper writes its own `<taskId>.pid`
+ * before it can run anything, so a command never executes without a pid on
+ * disk (ADR-8). A `starting` entry that never produces a handshake self-heals
+ * to `exited` after `STARTING_TIMEOUT_MS`, and `myflow_bg_stop` refuses it
+ * instead of signalling pid 0.
+ *
+ * `exit_code` is nullable everywhere: a stop that force-kills the wrapper leaves
+ * `status: "stopped"` with no code, and a self-healed entry records `null`.
  */
 
 import {
@@ -1066,6 +1072,7 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
       "The command runs under a POSIX shell (`bash -lc`): the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's shellPath, then the Git for Windows bash, then `bash` on PATH. There is no cmd.exe fallback: when no POSIX shell resolves the task is refused and nothing runs.",
       "It is spawned directly with argv rather than through Node's shell option, so the command's quotes are parsed by bash semantics.",
       "Requires the user's confirmation; without an interactive UI it refuses unless `unattended: true` is passed, which is recorded as unconfirmed.",
+      "Optional `cwd` sets the directory the command runs in: relative paths resolve against the project root, an absolute path is accepted only inside it, and it must already exist; anything outside the project root is refused before the user is asked, leaving no trace. The confirmation dialog always shows that directory.",
     ].join(" "),
     promptSnippet: "Start a long-running command in the background",
     parameters: BG_START_PARAMETERS,
@@ -1713,7 +1720,7 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
     label: "Myflow Background Output",
     description: [
       "Read a background task's output, either an increment since this session's last delta read or its last lines.",
-      "Returns the task status and, once it has finished, its exit code.",
+      "Returns the task status and, once it has finished, its exit code, the shell that ran it, and how many creation retries it took.",
       "tail and peek never advance the read cursor; delta does unless peek is set.",
       "wait_ms (bounded) returns early as soon as there is new output or the task has ended.",
     ].join(" "),
@@ -2138,6 +2145,7 @@ export function createBgListTool(registration: BgListRegistration = {}): Record<
     description: [
       "List known background tasks with their status, exit code, pid, timestamps and how they were confirmed.",
       "Each entry is self-healed: a task whose process is gone and has no exit record is reported (and persisted) as exited.",
+      "status: starting means the registry entry exists but the wrapper has not confirmed a pid yet; it is not an error, and after 60 seconds without a pid the task is judged never started and reported as exited.",
       "Set include_finished: false to list only running tasks; set prune: true to also delete finished tasks older than 24 hours.",
       "Unreadable registry files are reported, not hidden, and an unconfirmed (no-ui-explicit) start is flagged.",
     ].join(" "),
@@ -2425,6 +2433,7 @@ export function createBgStopTool(registration: BgStopRegistration = {}): Record<
     description: [
       "Stop a background task by killing its whole process tree.",
       "Idempotent: stopping an already-finished task reports that it was finished and changes nothing.",
+      "A task still in status starting (pid not confirmed yet) is refused with an explicit error and nothing is killed or written; retry once it has a pid.",
       "It never reports success while the process survives; on failure it returns the raw kill error.",
       "Use myflow_bg_list to find task ids.",
     ].join(" "),
