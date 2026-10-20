@@ -1,9 +1,11 @@
 {
   "title": "brainstorm: 真后台长任务能力",
-  "status": "in_progress",
+  "status": "completed",
   "description": "为 myflow 加真后台长任务：起进程立刻返回、任务 id、读增量输出、停止、列表；每个功能点带测试后提交",
   "slug": "background-tasks",
   "parent": null,
   "created_at": "2026-10-14T15:09:29Z",
-  "started_at": "2026-10-20T17:24:32Z"
+  "started_at": "2026-10-20T17:24:32Z",
+  "finished_at": "2026-10-20T18:24:44Z",
+  "archived_at": "2026-10-20T18:24:44Z"
 }
