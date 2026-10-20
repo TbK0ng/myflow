@@ -111,9 +111,26 @@ export interface BackgroundEntry {
   [key: string]: unknown;
 }
 
-/** The parsed shape of a `<taskId>.exit` record written by `bg_runner.mjs`. */
+/**
+ * The parsed shape of a `<taskId>.exit` record written by `bg_runner.mjs`.
+ *
+ * The wrapper has always written `shell` (on every record) and `retries` (only
+ * when creation was retried); the type used to admit neither, so a reader could
+ * not see them without casting. They are here now because a reader exists:
+ * `myflow_bg_output` reports both once a task has finished (H3/R3).
+ */
 export interface ExitRecord {
   exit_code: number | null;
+  /**
+   * The shell that actually ran the command, or `null` for a refusal (no POSIX
+   * shell resolved, so nothing ran). `null` is a recorded fact, not "unknown".
+   */
+  shell?: string | null;
+  /**
+   * How many times the wrapper retried creation before this outcome. Absent
+   * when the first attempt succeeded, so an absent field means "no retries".
+   */
+  retries?: number;
   signal?: string | null;
   at?: string;
   error?: string;
@@ -425,6 +442,30 @@ function normalizeExitCode(value: unknown): number | null {
  */
 function normalizeReason(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/**
+ * Normalize the `.exit` record's `shell`.
+ *
+ * `null` survives normalization on purpose: the wrapper records a *refusal*
+ * (no POSIX shell resolved, nothing ran) as `shell: null`, which must stay
+ * distinguishable from "this record predates the field". A blank or non-string
+ * value is the latter and is reported as `null` too — the honest answer either
+ * way is "no shell name is on record".
+ */
+function normalizeExitShell(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/**
+ * Normalize the `.exit` record's `retries`. Returns `null` when the field is
+ * absent, which the caller turns into "omit the field" rather than `0`: the
+ * wrapper only writes `retries` once it has retried, so absence carries the
+ * same information as a zero would, without inventing a value.
+ */
+function normalizeRetryCount(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return Math.floor(value);
 }
 
 /**
@@ -1039,6 +1080,19 @@ export interface BgOutputResult {
   failure?: string;
   /** The signal that terminated the task, from the `.exit` record. Omitted when absent. */
   signal?: string;
+  /**
+   * The shell that actually ran the command, from the `.exit` record. Present
+   * only once a `.exit` record exists, because only the wrapper can say which
+   * shell it resolved — a task still running (or never started) has no
+   * authoritative value, and guessing one would be a lie.
+   */
+  shell?: string | null;
+  /**
+   * How many times the wrapper retried creation, from the `.exit` record.
+   * Omitted when the record has no `retries` (no retry happened); the field is
+   * never written as `undefined`, so `"retries" in details` stays meaningful.
+   */
+  retries?: number;
   /** Present only on a refusal/error result. */
   error?: string;
 }
@@ -1424,6 +1478,19 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
       // process that actually attempted the creation.
       const failure = resolved.failure ?? normalizeReason(entry.spawn_error) ?? undefined;
       const signal = resolved.signal;
+      // R3: the shell that actually ran and the retry count are only knowable
+      // from a `.exit` record, so they are attached only when one exists. A
+      // still-running task (`running`) or a not-yet-confirmed one (`starting`)
+      // has no authoritative value, and the entry's own fields are a cache that
+      // the wrapper never updates. Built once and spread into both result
+      // shapes below so `tail` and `delta` cannot disagree.
+      const exitRecord = readExitRecord(dir, entry);
+      const runnerFacts: { shell?: string | null; retries?: number } = {};
+      if (exitRecord) {
+        runnerFacts.shell = normalizeExitShell(exitRecord.shell);
+        const retries = normalizeRetryCount(exitRecord.retries);
+        if (retries !== null) runnerFacts.retries = retries;
+      }
 
       if (mode === "tail") {
         const { buffer, chunkStart } = readTailChunk(logFile, maxBytes);
@@ -1470,6 +1537,7 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
           text,
           ...(failure ? { failure } : {}),
           ...(signal ? { signal } : {}),
+          ...runnerFacts,
         };
         return textResult(result as unknown as Record<string, unknown>, outputHumanText(result));
       }
@@ -1513,6 +1581,7 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
         ...(reset ? { reset: true } : {}),
         ...(failure ? { failure } : {}),
         ...(signal ? { signal } : {}),
+        ...runnerFacts,
       };
       return textResult(result as unknown as Record<string, unknown>, outputHumanText(result));
     },
