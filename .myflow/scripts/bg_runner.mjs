@@ -14,7 +14,8 @@
  *
  * Layout (see `design.md` §2):
  *
- *   node bg_runner.mjs --id <taskId> --log <logPath> --exit <exitPath> -- <command...>
+ *   node bg_runner.mjs --id <taskId> --log <logPath> --exit <exitPath> \
+ *     --pid <pidPath> --cwd <dir> -- <command...>
  *
  *   - `<command...>` is reassembled into one string and handed to the resolved
  *     shell as a *single* argv element. It is deliberately **not** passed
@@ -25,7 +26,9 @@
  *     the command through verbatim.
  *   - The shell is resolved by `resolveShellPath`, in this fixed order:
  *     `MYFLOW_BG_SHELL` -> `~/.pi/agent/settings.json`'s `shellPath` -> the Git
- *     for Windows bash -> `bash` on `PATH`. The resolved absolute path is
+ *     for Windows bash -> `bash` on `PATH` (skipping the three Windows
+ *     `System32` / `Sysnative` / `SysWOW64` views, which hold WSL's launcher).
+ *     The resolved absolute path is
  *     recorded in `<exitPath>` under `shell`, on both the success and failure
  *     records, so "which shell ran this?" is always answerable after the fact.
  *   - There is deliberately **no `cmd.exe` fallback**, and a resolved `cmd.exe`
@@ -71,6 +74,16 @@
  *       The write is atomic (temp file + rename)
  *       so a concurrent reader never observes a half-written record
  *       (`design.md` §3.2).
+ *   - Before the shell, the log directory or the command is touched, this
+ *     script writes `--pid` (`<pidPath>`) as `{"pid":N,"at":"<ISO>"}`, also
+ *     atomically. That file is the *handshake*: it is the only proof that this
+ *     wrapper really started, written by the process whose pid it names. The
+ *     tool writes the registry entry (`status: "starting"`) before spawning, so
+ *     the sequence is "entry on disk -> spawn -> `.pid` on disk -> command". A
+ *     command therefore never runs unless a pid was recorded first, which is
+ *     what closes the orphan window (`design.md` ADR-8). The `.pid` file also
+ *     exists on a refusal (no usable shell): it records that the wrapper ran,
+ *     not that the command did.
  *
  * Contract, not a local choice:
  *
@@ -131,9 +144,9 @@ const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
  * for a total wait well under `SPAWN_RETRY_TOTAL_BUDGET_MS`.
  *
  * Only *transient/unknown* failures are retried. A missing program (`ENOENT`),
- * a bad argument (`EINVAL`), or a permission problem (`EACCES` / `EPERM`) will
- * fail identically no matter how many times it is attempted, so retrying those
- * just wastes time and hides the real error.
+ * a bad argument (`EINVAL`), a permission problem (`EACCES` / `EPERM`), or one
+ * of Node's own `ERR_*` codes will fail identically no matter how many times it
+ * is attempted, so retrying those just wastes time and hides the real error.
  */
 const MAX_SPAWN_RETRIES = 7;
 const SPAWN_RETRY_BASE_DELAY_MS = 250;
@@ -175,6 +188,13 @@ const NON_RETRYABLE_SPAWN_CODES = new Set(["ENOENT", "EINVAL", "EACCES", "EPERM"
  * no `code` at all cannot be classified, so the user's 232 lands here. The four
  * codes known to be deterministic are never retried.
  *
+ * Node's own `ERR_*` codes (`ERR_INVALID_ARG_TYPE`, `ERR_INVALID_CALLBACK`, …)
+ * are never retried either: they mean *the caller wrote the call wrong*, so no
+ * amount of waiting changes the outcome. Retrying them would only delay the
+ * real error by the whole ~7.2s budget. They are matched by prefix rather than
+ * listed in `NON_RETRYABLE_SPAWN_CODES`, because `ERR_*` is a namespace, not a
+ * handful of fixed members.
+ *
  * @param {unknown} error
  * @returns {boolean}
  */
@@ -184,6 +204,7 @@ export function isRetryableSpawnError(error) {
       ? /** @type {{ code?: unknown }} */ (error).code
       : undefined;
   if (typeof code !== "string" || code.trim() === "") return true;
+  if (code.startsWith("ERR_")) return false;
   if (RETRYABLE_SPAWN_CODES.has(code)) return true;
   if (NON_RETRYABLE_SPAWN_CODES.has(code)) return false;
   return true;
@@ -236,10 +257,16 @@ function findOnPath(name, platform, pathValue, exists) {
     // Never fall back to the WSL launcher. On Windows `%SystemRoot%\System32\bash.exe`
     // is the WSL entry point, which this project forbids invoking; a Git Bash
     // lives elsewhere on PATH (and its standard location is tried before this).
-    // `Sysnative` is the same thing seen by a 32-bit process.
+    //
+    // `Sysnative` and `SysWOW64` are the other two spellings of that same
+    // directory: `Sysnative` is the alias a 32-bit process uses to reach the
+    // 64-bit System32, and `SysWOW64` is the 32-bit view of System32 seen by a
+    // 64-bit process. All three resolve to the same `bash.exe` WSL entry point,
+    // so all three are skipped. This machine has no WSL installed and does not
+    // intend to: naming them here is a *refusal*, never a way to support WSL.
     if (platform === "win32") {
       const base = basename(directory).toLowerCase();
-      if (base === "system32" || base === "sysnative") continue;
+      if (base === "system32" || base === "sysnative" || base === "syswow64") continue;
     }
     for (const candidate of candidates) {
       const full = join(directory, candidate);
@@ -398,13 +425,16 @@ function sleepSync(milliseconds) {
  *
  * Unknown flags before `--` are a hard error rather than a silently ignored
  * typo: a mistyped `--exit` would otherwise make the wrapper "succeed" while
- * writing the record nowhere.
+ * writing the record nowhere. `--pid` and `--cwd` additionally treat a missing
+ * value as a hard error (see below), because both change what the wrapper
+ * promises: one is the handshake that proves the task started, the other is the
+ * directory the command runs in.
  *
  * @param {string[]} argv arguments after the executable, i.e. `process.argv.slice(2)`
- * @returns {{ id: string | null, log: string | null, exit: string | null, command: string | null }}
+ * @returns {{ id: string | null, log: string | null, exit: string | null, pid: string | null, cwd: string | null, command: string | null }}
  */
 export function parseArgs(argv) {
-  const options = { id: null, log: null, exit: null, command: null };
+  const options = { id: null, log: null, exit: null, pid: null, cwd: null, command: null };
   let index = 0;
   for (; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -427,6 +457,31 @@ export function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg === "--pid") {
+      // Same rule as `--cwd`: a missing value is a hard error. Silently
+      // skipping the pid handshake would reopen the orphan window while every
+      // other part of the start still looked successful.
+      const value = argv[index + 1];
+      if (typeof value !== "string" || value === "") {
+        throw new Error("--pid requires a value");
+      }
+      options.pid = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--cwd") {
+      // A missing value is a hard error, unlike the other flags: silently
+      // falling back to this process's cwd would run the command in a
+      // directory nobody asked for, and the confirmation the user saw named a
+      // different one. `--cwd` is therefore never "absent by accident".
+      const value = argv[index + 1];
+      if (typeof value !== "string" || value === "") {
+        throw new Error("--cwd requires a value");
+      }
+      options.cwd = value;
+      index += 1;
+      continue;
+    }
     throw new Error(`unknown argument: ${arg}`);
   }
 
@@ -436,22 +491,25 @@ export function parseArgs(argv) {
 }
 
 /**
- * Write the `.exit` record atomically: fill a sibling temp file, then rename it
- * over the destination. A reader therefore sees either the previous file or the
+ * Write a JSON record atomically: fill a sibling temp file, then rename it over
+ * the destination. A reader therefore sees either the previous file or the
  * complete new one, never a partial write. Renaming also replaces an existing
  * record wholesale (used by the atomicity test, which pre-seeds one).
  *
- * @param {string} exitPath destination path
+ * Both `<exitPath>` and `<pidPath>` go through this: they are the two files this
+ * wrapper writes, and both are read concurrently by the tools.
+ *
+ * @param {string} destination destination path
  * @param {Record<string, unknown>} payload record to persist
  */
-export function writeExitRecord(exitPath, payload) {
-  mkdirSync(dirname(exitPath), { recursive: true });
-  const tempPath = `${exitPath}.tmp`;
+export function writeJsonAtomic(destination, payload) {
+  mkdirSync(dirname(destination), { recursive: true });
+  const tempPath = `${destination}.tmp`;
   writeFileSync(tempPath, JSON.stringify(payload), { encoding: "utf-8" });
 
   for (let attempt = 0; ; attempt += 1) {
     try {
-      renameSync(tempPath, exitPath);
+      renameSync(tempPath, destination);
       return;
     } catch (error) {
       const code = error && typeof error === "object" ? error.code : undefined;
@@ -469,6 +527,31 @@ export function writeExitRecord(exitPath, payload) {
       throw error;
     }
   }
+}
+
+/**
+ * Write the `.exit` record atomically. Kept as its own export because it is the
+ * documented file contract (`design.md` §3.2) and the name tests refer to.
+ *
+ * @param {string} exitPath destination path
+ * @param {Record<string, unknown>} payload record to persist
+ */
+export function writeExitRecord(exitPath, payload) {
+  writeJsonAtomic(exitPath, payload);
+}
+
+/**
+ * Write the pid handshake atomically: `{"pid": <this process>, "at": <ISO>}`.
+ *
+ * Called before anything else can run a command (see the header contract). The
+ * payload names *this* process on purpose: the file is written by the wrapper
+ * for the wrapper, so a reader can tell "the wrapper is alive" from "the tool
+ * believes a pid was handed back by `spawn`".
+ *
+ * @param {string} pidPath destination path (`--pid`)
+ */
+export function writePidRecord(pidPath) {
+  writeJsonAtomic(pidPath, { pid: process.pid, at: isoTimestamp() });
 }
 
 function isoTimestamp() {
@@ -744,6 +827,34 @@ export function runWrapper(injected = {}) {
     return;
   }
 
+  // The pid handshake (ADR-8). This is deliberately the *first* thing written:
+  // before the shell is resolved, before the log directory exists, and long
+  // before a command can run. The tool has already written the registry entry
+  // (`status: "starting"`, `pid: 0`), so once this file exists the task is
+  // addressable by pid and can never be an invisible orphan. A failure to write
+  // it is fatal *for the command*: running anyway would restore exactly the
+  // orphan window this handshake exists to close.
+  if (options.pid) {
+    try {
+      writePidRecord(options.pid);
+    } catch (error) {
+      try {
+        writeExitRecord(options.exit, {
+          exit_code: null,
+          error:
+            `Cannot record the pid handshake at ${options.pid}: ${messageOf(error)}. ` +
+            "No command was executed.",
+          at: isoTimestamp(),
+          shell: null,
+        });
+      } catch {
+        /* the destination is unwritable; the exit code is the only signal left */
+      }
+      process.exitCode = EXIT_SPAWN_FAILED;
+      return;
+    }
+  }
+
   const exitPath = options.exit;
   // Resolve the shell once, up front: every `.exit` record (including the
   // no-command and log-directory failures below) then says which shell this
@@ -795,9 +906,14 @@ export function runWrapper(injected = {}) {
   // performs the redirection into the log), the argv it is spawned with, and
   // the bounded retry policy. `record` writes the `.exit` outcome; the wrapper
   // never sees the child directly.
+  //
+  // `--cwd` is where the *command* runs; this wrapper's own cwd stays whatever
+  // the caller picked (the project root), so `--log`/`--exit` paths and this
+  // script's own location are unaffected by it. `myflow_bg_start` resolves and
+  // validates the directory before spawning; the wrapper only forwards it.
   runCommand({
     command: options.command,
-    cwd: process.cwd(),
+    cwd: options.cwd ?? process.cwd(),
     logPath: options.log,
     shellPath,
     onOutcome: (payload, runnerCode) => record(payload, runnerCode),

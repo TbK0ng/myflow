@@ -1,0 +1,12 @@
+{
+  "approved_at": "2026-10-20T18:35:36Z",
+  "approved_by": "ui-confirm",
+  "session_id": null,
+  "plan_files": [
+    "prd.md",
+    "design.md",
+    "implement.md"
+  ],
+  "plan_hash": "sha256:fad1e14c25d33e12c48b8a01a3d86d6748d2afc44d1522dbaf106467f6604ef5",
+  "questions_asked": 3
+}

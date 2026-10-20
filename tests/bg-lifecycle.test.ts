@@ -49,6 +49,8 @@ import {
 //       `isAlive(pid)` 断言变红；删掉 `onStarted` → 提示不再出现。
 //   -5：去掉 `shutdownDone` 幂等标志 → 第二次触发再发一条通知，计数断言变红。
 //   -6：删掉递归守卫或 ASK 守卫 → 对应 block 断言变红。
+//   -7：把通知判据里的 `hasUI !== false` 去掉（只留 `ui.notify` 存在性） →
+//       `hasUI:false` 的 headless 语境反而发出 1 条通知，计数断言变红。
 
 const ROOT = join(import.meta.dirname, "..");
 const RUNNER = join(ROOT, ".myflow", "scripts", "bg_runner.mjs");
@@ -467,5 +469,44 @@ test("F7 -6 既有守卫未回归：递归守卫与 ASK 守卫照旧", async () 
     }
   } finally {
     await cleanup(root, []);
+  }
+});
+
+test("F7 -7 hasUI:false 时静默：即使宿主仍然提供 ui.notify", async () => {
+  const root = makeProject();
+  const pids: unknown[] = [];
+  try {
+    const { api, tools, notified, ctx } = makeMockAPI(root);
+    extension(api);
+    const { id, pid: wrapperPid } = await startRunningTask(root, tools);
+    pids.push(wrapperPid);
+
+    const entry = readEntry(backgroundDir(root), id);
+    assert.ok(entry, "the registry entry must exist after start");
+    assert.equal(resolveStatus(backgroundDir(root), entry!).status, "running");
+    assert.ok(isAlive(wrapperPid), "the task must be alive before shutdown");
+
+    // A headless host: `hasUI` is explicitly false, yet `ui.notify` is still
+    // installed — and it counts every call, so "silent" is observable.
+    const headlessCtx = {
+      ...(ctx as unknown as Record<string, unknown>),
+      hasUI: false,
+    } as unknown as HookContext;
+
+    // Revert point: drop the `hasUI === false` clause from the shutdown
+    // predicate (leaving only "is a notify function present") → this headless
+    // context still has `ui.notify`, so one notice is sent and the count
+    // assertion below turns red.
+    const handlers = (api as unknown as Record<string, unknown>).__handlers as Record<
+      string,
+      (event: unknown, c: HookContext) => Promise<unknown>
+    >;
+    await handlers.session_shutdown!({}, headlessCtx);
+
+    assert.equal(notified.length, 0, "hasUI:false must stay silent even when ui.notify exists");
+    // Silence is not killing: the whole point of the feature still holds.
+    assert.ok(isAlive(wrapperPid), "session_shutdown must NOT kill a background task");
+  } finally {
+    await cleanup(root, pids);
   }
 });

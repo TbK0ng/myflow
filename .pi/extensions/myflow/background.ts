@@ -11,6 +11,7 @@
  *   <taskId>.json   registry entry — written only by the tools (ADR-4)
  *   <taskId>.log    command output — written by `bg_runner.mjs` via the kernel
  *   <taskId>.exit   how the command ended — written by `bg_runner.mjs`
+ *   <taskId>.pid    the wrapper's own handshake — written by `bg_runner.mjs`
  *   cursors/<contextKey>__<taskId>.json   per-session read cursor (ADR-5)
  *
  * One file per task rather than one shared `tasks.json`: concurrent sessions
@@ -25,11 +26,6 @@
  * dependency-injection shape `ask.ts` and `approval.ts` use).
  *
  * Known limits, stated honestly (`design.md` §8):
- *   - There is an orphan window: if the tool crashes after spawning the wrapper
- *     but before `writeEntry`, the process runs with no registry entry and
- *     `listEntries` cannot see it. No transactional compensation is attempted.
- *   - A stop that force-kills the wrapper leaves `status: "stopped"` with no
- *     exit code; `exit_code` is therefore nullable everywhere.
  *   - Liveness is `process.kill(pid, 0)`, which can mistake a reused PID for the
  *     original task. Two things outrank it: a present `.exit` record, and an
  *     entry already recorded as `exited`/`stopped` (a finished verdict is
@@ -37,6 +33,16 @@
  *     kill an unrelated process). The residual risk is narrower: a task whose
  *     pid was reused *before any reader ever observed it* still reads as
  *     running, because nothing on disk records that it died.
+ *
+ * The orphan window is **closed**, not merely narrowed: the entry is written as
+ * `starting` before the spawn, and the wrapper writes its own `<taskId>.pid`
+ * before it can run anything, so a command never executes without a pid on
+ * disk (ADR-8). A `starting` entry that never produces a handshake self-heals
+ * to `exited` after `STARTING_TIMEOUT_MS`, and `myflow_bg_stop` refuses it
+ * instead of signalling pid 0.
+ *
+ * `exit_code` is nullable everywhere: a stop that force-kills the wrapper leaves
+ * `status: "stopped"` with no code, and a self-healed entry records `null`.
  */
 
 import {
@@ -56,6 +62,7 @@ import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { findProjectRoot } from "./find-project-root.ts";
+import { isWithinWriteScope } from "./agents.ts";
 
 /** The registry directory, relative to a project root. */
 export const BACKGROUND_DIR = join(".myflow", ".runtime", "background");
@@ -70,11 +77,29 @@ export const CURSOR_SEPARATOR = "__";
 export const PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The only four states a task may report. `unknown` is reserved for a registry
- * entry that cannot be trusted (and, in `list`, for a broken file); the tools
- * never resolve to it themselves.
+ * How long an entry may sit in `starting` before it is read as "never started".
+ *
+ * `starting` covers only the window between the tool writing the entry and the
+ * wrapper writing `<id>.pid` — milliseconds. The timeout is generous because it
+ * is a *self-heal deadline*, not a race: a task that never produced a pid must
+ * eventually become visible as finished instead of blocking `stop` forever
+ * (`design.md` §2.2). It is injected through `resolveStatus`'s `nowMs`, so the
+ * boundary is testable without sleeping.
  */
-export type BackgroundTaskStatus = "running" | "exited" | "stopped" | "unknown";
+export const STARTING_TIMEOUT_MS = 60_000;
+
+/**
+ * The four reachable states a task reports, plus `unknown` for an untrusted
+ * result.
+ *
+ * `starting` is the fourth *reachable* state: the registry entry exists but the
+ * wrapper has not confirmed its pid yet (`<id>.pid` missing, no live pid, and
+ * the entry is younger than `STARTING_TIMEOUT_MS`). It is a state, not
+ * "running with a flag", because `list` / `output` / `stop` all have to say
+ * something honest about it (ADR-10). `unknown` stays unreachable: the tools
+ * never resolve to it themselves, it only labels a refusal payload.
+ */
+export type BackgroundTaskStatus = "starting" | "running" | "exited" | "stopped" | "unknown";
 
 /**
  * How the start was confirmed. `ui-confirm` means the user saw and approved the
@@ -90,6 +115,13 @@ export interface BackgroundEntry {
   command: string;
   description?: string;
   cwd: string;
+  /**
+   * The pid `spawn` reported to the tool, cached at start time. **Never read it
+   * directly**: it stays `0` until the tool's write-back lands, and it is a
+   * value *about* a process, not a statement *by* that process. Use
+   * `readPid(dir, entry)`, which prefers the wrapper's own `<id>.pid`
+   * handshake (`design.md` §2.3).
+   */
   pid: number;
   log: string;
   exit_file: string;
@@ -111,9 +143,26 @@ export interface BackgroundEntry {
   [key: string]: unknown;
 }
 
-/** The parsed shape of a `<taskId>.exit` record written by `bg_runner.mjs`. */
+/**
+ * The parsed shape of a `<taskId>.exit` record written by `bg_runner.mjs`.
+ *
+ * The wrapper has always written `shell` (on every record) and `retries` (only
+ * when creation was retried); the type used to admit neither, so a reader could
+ * not see them without casting. They are here now because a reader exists:
+ * `myflow_bg_output` reports both once a task has finished (H3/R3).
+ */
 export interface ExitRecord {
   exit_code: number | null;
+  /**
+   * The shell that actually ran the command, or `null` for a refusal (no POSIX
+   * shell resolved, so nothing ran). `null` is a recorded fact, not "unknown".
+   */
+  shell?: string | null;
+  /**
+   * How many times the wrapper retried creation before this outcome. Absent
+   * when the first attempt succeeded, so an absent field means "no retries".
+   */
+  retries?: number;
   signal?: string | null;
   at?: string;
   error?: string;
@@ -187,6 +236,19 @@ export function logPath(dir: string, id: string): string {
 /** `<dir>/<id>.exit` — the conventional exit-record path. */
 export function exitPath(dir: string, id: string): string {
   return join(dir, `${id}.exit`);
+}
+
+/**
+ * `<dir>/<id>.pid` — the pid handshake, written by the *wrapper* (`design.md`
+ * §3.3 / ADR-8).
+ *
+ * The tools never write it: it is the wrapper's own statement that this pid
+ * belongs to the task, and it is written before the command can run. That is
+ * what makes it authoritative over the entry's `pid`, which is only the value
+ * `spawn` returned to the tool a moment later.
+ */
+export function pidPath(dir: string, id: string): string {
+  return join(dir, `${id}.pid`);
 }
 
 /**
@@ -372,6 +434,58 @@ export function isAlive(pid: unknown): boolean {
   }
 }
 
+/** A positive integer, or 0 for anything else (0 means "no pid known"). */
+function normalizePid(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return 0;
+  return value;
+}
+
+/**
+ * The pid recorded by the wrapper's handshake file, or 0 when it is missing,
+ * unreadable, or does not carry a positive integer.
+ *
+ * A corrupt/incomplete `.pid` is treated as absent rather than as an error: the
+ * wrapper writes it atomically, so this is only the defensive branch, and
+ * falling back to the entry's cached pid is strictly better than failing a
+ * status read.
+ */
+export function readPidFile(dir: string, id: string): number {
+  let text: string;
+  try {
+    text = readFileSync(pidPath(dir, id), "utf-8");
+  } catch {
+    return 0;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return 0;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return 0;
+  return normalizePid((parsed as Record<string, unknown>).pid);
+}
+
+/**
+ * The single place a task's pid is decided (`design.md` §2.3 / ADR-8).
+ *
+ * Priority: the wrapper's own `<id>.pid` handshake, then the entry's cached
+ * `pid`. The cache is *not* trusted first: it is `spawn`'s return value, which
+ * the tool writes after spawning, so a crash between spawn and that write-back
+ * leaves `pid: 0` in the entry even though the wrapper is running and has said
+ * so. Reading the handshake first is what makes `starting` resolve to `running`
+ * as soon as the wrapper confirms itself.
+ *
+ * Every caller (`resolveStatus`, `myflow_bg_stop`, and through it `list` /
+ * `output` / `session_shutdown`) goes through this function so the two sources
+ * can never disagree between tools. 0 means "no pid known", never "pid 0".
+ */
+export function readPid(dir: string, entry: BackgroundEntry): number {
+  const recorded = readPidFile(dir, entry.id);
+  if (recorded > 0) return recorded;
+  return normalizePid(entry.pid);
+}
+
 /**
  * The project root implied by a registry directory. `<root>/.myflow/.runtime/
  * background` walks up three levels. Used only to resolve a *relative*
@@ -428,14 +542,41 @@ function normalizeReason(value: unknown): string | null {
 }
 
 /**
- * Decide a task's state. The precedence is fixed and must not be reordered
- * (`design.md` §3.1, R9):
+ * Normalize the `.exit` record's `shell`.
  *
- *   1. a present `.exit` record  => `exited`, with the recorded code;
- *   2. `entry.status === "stopped"` => `stopped` (a stop that raced the wrapper);
- *   3. `entry.status === "exited"`  => `exited` (a verdict already reached stays);
- *   4. the pid is alive          => `running`;
- *   5. otherwise                 => `exited` with `exit_code: null` (self-heal).
+ * `null` survives normalization on purpose: the wrapper records a *refusal*
+ * (no POSIX shell resolved, nothing ran) as `shell: null`, which must stay
+ * distinguishable from "this record predates the field". A blank or non-string
+ * value is the latter and is reported as `null` too — the honest answer either
+ * way is "no shell name is on record".
+ */
+function normalizeExitShell(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/**
+ * Normalize the `.exit` record's `retries`. Returns `null` when the field is
+ * absent, which the caller turns into "omit the field" rather than `0`: the
+ * wrapper only writes `retries` once it has retried, so absence carries the
+ * same information as a zero would, without inventing a value.
+ */
+function normalizeRetryCount(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return Math.floor(value);
+}
+
+/**
+ * Decide a task's state. The precedence is fixed and must not be reordered
+ * (`design.md` §2.2, R9):
+ *
+ *   1. a present `.exit` record       => `exited`, with the recorded code;
+ *   2. `entry.status === "stopped"`   => `stopped` (a stop that raced the wrapper);
+ *   3. `entry.status === "exited"`    => `exited` (a verdict already reached stays);
+ *   4. the pid is alive               => `running`;
+ *   5. `entry.status === "starting"` and the entry is younger than
+ *      `STARTING_TIMEOUT_MS`          => `starting` (the handshake has not landed);
+ *   6. otherwise                      => `exited` with `exit_code: null`
+ *      (self-heal: a task that never started, or one whose process vanished).
  *
  * Rules 1 and 3 both outrank rule 4, and for the same reason: a task that has
  * already been judged finished must never come back to life because the OS
@@ -444,12 +585,29 @@ function normalizeReason(value: unknown): string | null {
  * to `running`, which would let `myflow_bg_stop` `taskkill` an unrelated
  * process that inherited the pid (D1). Rule 1 still wins over rule 3, so a
  * `.exit` record that arrives later overwrites a healed verdict's exit code.
- * Rule 5 self-heals an entry whose process vanished without a record.
+ *
+ * Rule 4 outranks rule 5 on purpose: once a pid is known and alive the task is
+ * *confirmed*, so an entry still saying `starting` (the write-back did not
+ * happen yet) must report `running`, not `starting` — otherwise `stop` would
+ * refuse to address a task that is plainly running.
+ *
+ * Rule 5 has to sit before rule 6, and its bound is what keeps `starting` from
+ * being a terminal state: a wrapper that died before writing `.pid` leaves an
+ * entry nobody can address, so after the timeout it self-heals to `exited`
+ * (`exit_code: null`: it never started).
+ *
+ * `nowMs` is an explicit parameter (never read from the clock here) so the
+ * timeout boundary and the future callers' clocks stay testable; production
+ * callers pass nothing and get `Date.now`.
  *
  * Pure: it reads the disk but never writes. Whether to persist the healed state
  * is the caller's decision.
  */
-export function resolveStatus(dir: string, entry: BackgroundEntry): ResolvedStatus {
+export function resolveStatus(
+  dir: string,
+  entry: BackgroundEntry,
+  nowMs: number = Date.now(),
+): ResolvedStatus {
   const record = readExitRecord(dir, entry);
   if (record) {
     const resolved: ResolvedStatus = {
@@ -471,8 +629,18 @@ export function resolveStatus(dir: string, entry: BackgroundEntry): ResolvedStat
   if (entry.status === "exited") {
     return { status: "exited", exit_code: normalizeExitCode(entry.exit_code) };
   }
-  if (isAlive(entry.pid)) {
+  // One pid source for every reader (`.pid` handshake first, then the entry).
+  if (isAlive(readPid(dir, entry))) {
     return { status: "running", exit_code: null };
+  }
+  if (entry.status === "starting") {
+    const startedAt = parseTimestamp(entry.started_at);
+    // An undateable `starting` entry cannot be timed out; treating it as
+    // `starting` forever would block `stop` on a task nobody can address, so
+    // only a *known* timestamp inside the window keeps the state.
+    if (startedAt !== null && nowMs - startedAt <= STARTING_TIMEOUT_MS) {
+      return { status: "starting", exit_code: null };
+    }
   }
   return { status: "exited", exit_code: null };
 }
@@ -516,10 +684,20 @@ export function writeCursor(path: string, offset: number): void {
   writeFileAtomic(path, JSON.stringify({ offset: normalized }));
 }
 
-/** Whether a task has ended. A `.exit` record or an ended status both count. */
-function isFinished(dir: string, entry: BackgroundEntry): boolean {
+/**
+ * Whether a task has ended. A `.exit` record or an ended status both count; a
+ * `starting` entry counts only once it is past `STARTING_TIMEOUT_MS`, because
+ * until then it is a task that may still confirm itself (and pruning it would
+ * race the wrapper).
+ */
+function isFinished(dir: string, entry: BackgroundEntry, nowMs: number): boolean {
   if (existsSync(exitPathFor(dir, entry))) return true;
-  return entry.status === "exited" || entry.status === "stopped";
+  if (entry.status === "exited" || entry.status === "stopped") return true;
+  if (entry.status === "starting") {
+    const startedAt = parseTimestamp(entry.started_at);
+    return startedAt === null || nowMs - startedAt > STARTING_TIMEOUT_MS;
+  }
+  return false;
 }
 
 function parseTimestamp(value: unknown): number | null {
@@ -530,16 +708,30 @@ function parseTimestamp(value: unknown): number | null {
 
 /**
  * When a task ended, in milliseconds: the entry's `ended_at`, falling back to
- * the `.exit` record's `at`. Null when neither dates the task, in which case
- * `prune` leaves it alone rather than guessing.
+ * the `.exit` record's `at`, then (for a `starting` entry that never started)
+ * to its `started_at`. Null when nothing dates the task, in which case `prune`
+ * leaves it alone rather than guessing.
  */
 function endedAtOf(dir: string, entry: BackgroundEntry): number | null {
   const fromEntry = parseTimestamp(entry.ended_at);
   if (fromEntry !== null) return fromEntry;
-  return parseTimestamp(readExitRecord(dir, entry)?.at);
+  const fromRecord = parseTimestamp(readExitRecord(dir, entry)?.at);
+  if (fromRecord !== null) return fromRecord;
+  // A never-confirmed `starting` entry has neither an `ended_at` nor a `.exit`:
+  // the moment it was written is the only date it has. Using it keeps such a
+  // residue prunable instead of frozen in the registry forever.
+  if (entry.status === "starting") return parseTimestamp(entry.started_at);
+  return null;
 }
 
-/** Delete an entry's `.json` / `.log` / `.exit` and every session's cursor for it. */
+/**
+ * Delete an entry's `.json` / `.log` / `.exit` / `.pid` and every session's
+ * cursor for it.
+ *
+ * The `.pid` handshake is the wrapper's file, but it belongs to this task, so it
+ * is deleted with it (and with their `.tmp` siblings, which a failed atomic
+ * write can leave behind).
+ */
 function removeEntryFiles(dir: string, entry: BackgroundEntry): void {
   const files = new Set([
     entryPath(dir, entry.id),
@@ -547,6 +739,8 @@ function removeEntryFiles(dir: string, entry: BackgroundEntry): void {
     exitPath(dir, entry.id),
     `${exitPath(dir, entry.id)}.tmp`,
     exitPathFor(dir, entry),
+    pidPath(dir, entry.id),
+    `${pidPath(dir, entry.id)}.tmp`,
   ]);
   for (const path of files) {
     rmSync(path, { force: true });
@@ -571,8 +765,9 @@ function removeEntryFiles(dir: string, entry: BackgroundEntry): void {
  * removed.
  *
  * `now` is an explicit parameter (never read from the clock here) so the 24h
- * boundary is testable. A running task is never touched, and a finished task
- * with no usable end date is left in place: something we cannot date is not
+ * boundary is testable. A running task is never touched, a `starting` task is
+ * left alone until its handshake timeout has passed, and a finished task with
+ * no usable end date is left in place: something we cannot date is not
  * something we should delete.
  */
 export function prune(dir: string, now: number): number {
@@ -580,7 +775,7 @@ export function prune(dir: string, now: number): number {
   const { entries } = listEntries(dir);
   let removed = 0;
   for (const entry of entries) {
-    if (!isFinished(dir, entry)) continue;
+    if (!isFinished(dir, entry, now)) continue;
     const endedAt = endedAtOf(dir, entry);
     if (endedAt === null || endedAt >= cutoff) continue;
     removeEntryFiles(dir, entry);
@@ -624,6 +819,13 @@ export interface BgStartParams {
   command?: string;
   description?: string;
   unattended?: boolean;
+  /**
+   * Directory the command runs in, relative to the project root (or absolute,
+   * still inside it). Absent means the project root. Validated before the
+   * confirmation dialog: an out-of-root or non-existent directory is refused
+   * with no dialog, no registry entry, and no spawn (R5/ADR-9).
+   */
+  cwd?: string;
 }
 
 /** The structured payload returned by `myflow_bg_start`. */
@@ -720,6 +922,62 @@ export function bgNoUiInstruction(mode: string): string {
   ].join("\n");
 }
 
+/**
+ * Resolve and validate the optional `cwd` of a background command (R5/ADR-9).
+ *
+ * Three rules, all fail-closed and all checked **before** the confirmation
+ * dialog is shown, so a refusal has no side effects:
+ *
+ *  1. A relative path resolves against the project root; an absolute path is
+ *     taken as-is. `resolve` collapses `..` in both cases.
+ *  2. The result must stay inside the project root. The containment test is the
+ *     same `isWithinWriteScope` the `writesUnder` guard uses — by path
+ *     segment, case-insensitive on Windows — imported rather than copied, so a
+ *     later tightening cannot leave one of the two boundaries loose.
+ *  3. It must already be a directory. The registry, the logs, and the cursors
+ *     are all project-level, so a background task cannot meaningfully run
+ *     outside the project; and a cwd that does not exist would fail inside the
+ *     wrapper, where the user could no longer be told before it started.
+ *
+ * An absent (or blank) value means "the project root".
+ */
+export function resolveBgCwd(
+  root: string,
+  requested: unknown,
+): { ok: true; cwd: string } | { ok: false; error: string } {
+  const projectRoot = resolve(root);
+  const raw = typeof requested === "string" ? requested.trim() : "";
+  if (!raw) return { ok: true, cwd: projectRoot };
+
+  const target = resolve(projectRoot, raw);
+  if (!isWithinWriteScope(target, projectRoot, projectRoot)) {
+    return {
+      ok: false,
+      error:
+        `\`cwd\` must stay inside the project root (${projectRoot}), but ${target} is outside it. ` +
+        "Nothing was started.",
+    };
+  }
+
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(target);
+  } catch {
+    return {
+      ok: false,
+      error: `\`cwd\` must be an existing directory: ${target} does not exist. Nothing was started.`,
+    };
+  }
+  if (!stats.isDirectory()) {
+    return {
+      ok: false,
+      error: `\`cwd\` must be an existing directory: ${target} is not a directory. Nothing was started.`,
+    };
+  }
+
+  return { ok: true, cwd: target };
+}
+
 /** The JSON-schema parameter object for `myflow_bg_start`. */
 const BG_START_PARAMETERS = {
   type: "object",
@@ -736,6 +994,16 @@ const BG_START_PARAMETERS = {
     description: {
       type: "string",
       description: "Optional short label for the task, shown by myflow_bg_list.",
+    },
+    cwd: {
+      type: "string",
+      description:
+        "Optional working directory for the command. A relative path is resolved against the " +
+        "project root; an absolute path is accepted only if it is still inside it. It must be an " +
+        "existing directory. Anything outside the project root (`..` traversal, an absolute path " +
+        "elsewhere, a case-only trick) is refused before the confirmation dialog: nothing is " +
+        "started and no registry entry is written. Defaults to the project root. The dialog always " +
+        "shows this directory, because it is what actually changes the meaning of a relative command.",
     },
     unattended: {
       type: "boolean",
@@ -779,16 +1047,20 @@ function startHumanText(
  * a stub context instead of a live Pi session; the registration function is the
  * production entry point (wired in F7).
  *
- * The start sequence is fixed (`design.md` §2, R1):
+ * The start sequence is fixed (`design.md` §2 / §4.1, R1):
  *
- *   1. confirm the command with the user (or refuse for lack of a UI),
- *   2. spawn the detached wrapper and `unref()` it,
- *   3. write the registry entry,
- *   4. return.
+ *   0. validate the command and the `cwd` (a refusal here must not prompt),
+ *   1. confirm the command and its directory with the user (or refuse for lack
+ *      of a UI),
+ *   2. write the registry entry as `starting` with `pid: 0`,
+ *   3. spawn the detached wrapper and `unref()` it,
+ *   4. write the pid back and mark the entry `running`,
+ *   5. return.
  *
- * Nothing between those steps awaits a child-process event: the tool returns as
- * soon as the entry is on disk. The wrapper — not this tool — waits for the
- * command and records its exit code.
+ * Steps 2 and 3 are in that order on purpose (ADR-8): the entry must exist
+ * before a process can exist. Nothing between those steps awaits a
+ * child-process event: the tool returns as soon as the entry is on disk. The
+ * wrapper — not this tool — waits for the command and records its exit code.
  */
 export function createBgStartTool(registration: BgToolRegistration = {}): Record<string, unknown> {
   return {
@@ -800,6 +1072,7 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
       "The command runs under a POSIX shell (`bash -lc`): the shell is resolved as MYFLOW_BG_SHELL, then ~/.pi/agent/settings.json's shellPath, then the Git for Windows bash, then `bash` on PATH. There is no cmd.exe fallback: when no POSIX shell resolves the task is refused and nothing runs.",
       "It is spawned directly with argv rather than through Node's shell option, so the command's quotes are parsed by bash semantics.",
       "Requires the user's confirmation; without an interactive UI it refuses unless `unattended: true` is passed, which is recorded as unconfirmed.",
+      "Optional `cwd` sets the directory the command runs in: relative paths resolve against the project root, an absolute path is accepted only inside it, and it must already exist; anything outside the project root is refused before the user is asked, leaving no trace. The confirmation dialog always shows that directory.",
     ].join(" "),
     promptSnippet: "Start a long-running command in the background",
     parameters: BG_START_PARAMETERS,
@@ -824,6 +1097,17 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
         typeof params?.description === "string" ? params.description.trim() : "";
 
       const root = findProjectRoot(ctx?.cwd ?? process.cwd()) ?? ctx?.cwd ?? process.cwd();
+
+      // `cwd` is validated *here*, before the dialog: showing a confirmation for
+      // a directory we are going to refuse would ask the user to approve
+      // something that never happens, and a rejection must leave no trace (no
+      // dialog, no registry entry, no spawn).
+      const targetCwd = resolveBgCwd(root, params?.cwd);
+      if (!targetCwd.ok) {
+        return errorResult(targetCwd.error, { via: "error" });
+      }
+      const cwd = targetCwd.cwd;
+
       const dir = backgroundDir(root);
       const contextKey = registration.deriveContextKey?.(ctx) ?? null;
       const unattended = params?.unattended === true;
@@ -834,7 +1118,11 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
       // is recorded rather than treated as consent (R8).
       let confirmedBy: ConfirmedBy;
       if (ctx?.hasUI === true && typeof confirm === "function") {
-        const agreed = await confirm.call(ctx.ui, "以后台运行这个命令？", command);
+        // The dialog names the directory *always*, even when it is the project
+        // root: a shell makes a relative path in the command mean something
+        // different in every directory, so the user must be able to read where
+        // it will run instead of inferring it (R5, `implement.md` S-2).
+        const agreed = await confirm.call(ctx.ui, "以后台运行这个命令？", `目录：${cwd}\n\n${command}`);
         if (agreed !== true) {
           return textResult(
             { started: false, via: "cancelled" },
@@ -853,17 +1141,99 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
       const id = newTaskId();
       const log = logPath(dir, id);
       const exit = exitPath(dir, id);
+      const pidFile = pidPath(dir, id);
       const runner = registration.runnerPath ?? join(root, BG_RUNNER_REL);
       const spawnProcess = registration.spawnProcess ?? spawn;
 
-      // Step 2: spawn the detached wrapper. `unref()` drops it from this
+      // Step 2: record the task BEFORE spawning it (ADR-8). The order is
+      // load-bearing, not cosmetic: `spawn` returns a pid only after the
+      // process exists, so "spawn then write" leaves a window where a crash
+      // produces an invisible, unaddressable process. Writing `starting` first
+      // means the registry always knows the task; the wrapper then confirms
+      // itself through `<id>.pid` before it runs anything, and `pid: 0` here is
+      // the honest "no pid confirmed yet" (never "pid 0").
+      //
+      // `log` and `exit_file` are stored relative to the project root, the shape
+      // `design.md` §3.1 documents and `exitPathFor` resolves. `cwd` is the
+      // resolved absolute directory the command runs in (R5) — inside the
+      // project root, always.
+      const entry: BackgroundEntry = {
+        id,
+        command,
+        ...(description ? { description } : {}),
+        cwd,
+        pid: 0,
+        log: join(BACKGROUND_DIR, `${id}.log`),
+        exit_file: join(BACKGROUND_DIR, `${id}.exit`),
+        status: "starting",
+        exit_code: null,
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        started_by_context_key: contextKey,
+        confirmed_by: confirmedBy,
+      };
+      try {
+        writeEntry(dir, entry);
+      } catch (error) {
+        // Nothing was spawned yet, so there is nothing to compensate for. Fail
+        // loudly instead of starting an untracked process.
+        return errorResult(
+          `Could not write the registry entry for a new background task: ${messageOf(error)}. ` +
+            "Nothing was started.",
+          { via: "error" },
+        );
+      }
+
+      /**
+       * Record a failed spawn on the entry that already exists, so the failure
+       * is diagnosable from `list` / `output` instead of leaving a `starting`
+       * entry that would only self-heal into an unexplained `exited`.
+       */
+      const recordSpawnFailure = (error: unknown): void => {
+        try {
+          const current = readEntry(dir, id);
+          if (!current) return;
+          writeEntry(dir, {
+            ...current,
+            status: "exited",
+            ended_at: new Date().toISOString(),
+            spawn_error: messageOf(error),
+          });
+        } catch {
+          // This runs outside the tool's control flow (a listener, or the tail
+          // of a failed start): a registry write that fails here must never
+          // become an uncaught exception.
+        }
+      };
+
+      // Step 3: spawn the detached wrapper. `unref()` drops it from this
       // process's event loop immediately; this tool deliberately registers no
       // `exit`/`close` listener, so it cannot accidentally wait on the child.
       let pid: number | null;
       try {
         const child = spawnProcess(
           process.execPath,
-          [runner, "--id", id, "--log", log, "--exit", exit, "--", command],
+          // `--cwd` is the *validated, absolute* directory: the wrapper's own
+          // cwd stays the project root (so `--log`/`--exit` and this script's
+          // location are independent of it), and the command itself runs where
+          // the dialog said it would. It precedes `--` because everything after
+          // `--` is the command. `--pid` is where the wrapper writes the
+          // handshake; the tool never writes that file itself.
+          [
+            runner,
+            "--id",
+            id,
+            "--log",
+            log,
+            "--exit",
+            exit,
+            "--pid",
+            pidFile,
+            "--cwd",
+            cwd,
+            "--",
+            command,
+          ],
           { detached: true, stdio: "ignore", cwd: root },
         );
         child.unref();
@@ -880,57 +1250,37 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
         // EventEmitter as an uncaught exception, which can take down the whole
         // Pi process. Without this listener a failed start is not just
         // undiagnosable; it is a crash.
-        child.on("error", (error: unknown) => {
-          try {
-            const current = readEntry(dir, id);
-            if (!current) return;
-            const failed: BackgroundEntry = {
-              ...current,
-              status: "exited",
-              ended_at: new Date().toISOString(),
-              spawn_error: messageOf(error),
-            };
-            writeEntry(dir, failed);
-          } catch {
-            // The listener runs outside the tool's control flow: a registry
-            // write that fails here must never become an uncaught exception.
-          }
-        });
+        child.on("error", recordSpawnFailure);
       } catch (error) {
+        // A synchronous throw means no process exists, but the `starting`
+        // entry already does. Turn it into a recorded `exited` failure: leaving
+        // it as `starting` would make `stop` refuse for a minute and then
+        // self-heal into a bare `exited` with no reason.
+        recordSpawnFailure(error);
         return errorResult(`Could not start the background runner: ${messageOf(error)}`, {
           via: "error",
         });
       }
 
-      // Step 3: record the task. `log` and `exit_file` are stored relative to
-      // the project root, the shape `design.md` §3.1 documents and
-      // `exitPathFor` resolves.
-      const entry: BackgroundEntry = {
-        id,
-        command,
-        ...(description ? { description } : {}),
-        cwd: root,
-        pid: pid ?? 0,
-        log: join(BACKGROUND_DIR, `${id}.log`),
-        exit_file: join(BACKGROUND_DIR, `${id}.exit`),
-        status: "running",
-        exit_code: null,
-        started_at: new Date().toISOString(),
-        ended_at: null,
-        started_by_context_key: contextKey,
-        confirmed_by: confirmedBy,
-      };
+      // Step 4: backfill the pid `spawn` handed back and mark the task running.
+      // This is the *second* atomic write on the same entry, and it happens
+      // before `execute` returns: every caller (and the existing tests) may
+      // read `status: "running"` as soon as the tool has answered. The wrapper
+      // may already have written `.pid`, which is fine — `readPid` prefers it.
+      const running: BackgroundEntry = { ...entry, pid: pid ?? 0, status: "running" };
       try {
-        writeEntry(dir, entry);
+        writeEntry(dir, running);
       } catch (error) {
+        // The process exists and the wrapper will still write `.pid`, so the
+        // task stays addressable; only the tool's cache is stale.
         return errorResult(
           `The background runner started (pid ${pid ?? "unknown"}) but its registry entry could ` +
-            `not be written: ${messageOf(error)}. The process is now untracked; stop it manually if needed.`,
+            `not be updated: ${messageOf(error)}. The task remains addressable through its pid file.`,
           { started: true, id, pid, log, confirmed_by: confirmedBy, via: "error" },
         );
       }
 
-      // Step 3b: tell the caller (the session's own bookkeeping). This is a
+      // Step 5: tell the caller (the session's own bookkeeping). This is a
       // notification after the fact — the entry is on disk and the process is
       // already running — so a throwing callback is swallowed rather than
       // turning a successful start into an error.
@@ -942,7 +1292,7 @@ export function createBgStartTool(registration: BgToolRegistration = {}): Record
         }
       }
 
-      // Step 4: return. No child-process event is awaited anywhere above.
+      // Step 6: return. No child-process event is awaited anywhere above.
       return textResult(
         { started: true, id, pid, log, confirmed_by: confirmedBy },
         startHumanText(id, pid, log, confirmedBy),
@@ -1039,6 +1389,19 @@ export interface BgOutputResult {
   failure?: string;
   /** The signal that terminated the task, from the `.exit` record. Omitted when absent. */
   signal?: string;
+  /**
+   * The shell that actually ran the command, from the `.exit` record. Present
+   * only once a `.exit` record exists, because only the wrapper can say which
+   * shell it resolved — a task still running (or never started) has no
+   * authoritative value, and guessing one would be a lie.
+   */
+  shell?: string | null;
+  /**
+   * How many times the wrapper retried creation, from the `.exit` record.
+   * Omitted when the record has no `retries` (no retry happened); the field is
+   * never written as `undefined`, so `"retries" in details` stays meaningful.
+   */
+  retries?: number;
   /** Present only on a refusal/error result. */
   error?: string;
 }
@@ -1357,7 +1720,7 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
     label: "Myflow Background Output",
     description: [
       "Read a background task's output, either an increment since this session's last delta read or its last lines.",
-      "Returns the task status and, once it has finished, its exit code.",
+      "Returns the task status and, once it has finished, its exit code, the shell that ran it, and how many creation retries it took.",
       "tail and peek never advance the read cursor; delta does unless peek is set.",
       "wait_ms (bounded) returns early as soon as there is new output or the task has ended.",
     ].join(" "),
@@ -1424,6 +1787,19 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
       // process that actually attempted the creation.
       const failure = resolved.failure ?? normalizeReason(entry.spawn_error) ?? undefined;
       const signal = resolved.signal;
+      // R3: the shell that actually ran and the retry count are only knowable
+      // from a `.exit` record, so they are attached only when one exists. A
+      // still-running task (`running`) or a not-yet-confirmed one (`starting`)
+      // has no authoritative value, and the entry's own fields are a cache that
+      // the wrapper never updates. Built once and spread into both result
+      // shapes below so `tail` and `delta` cannot disagree.
+      const exitRecord = readExitRecord(dir, entry);
+      const runnerFacts: { shell?: string | null; retries?: number } = {};
+      if (exitRecord) {
+        runnerFacts.shell = normalizeExitShell(exitRecord.shell);
+        const retries = normalizeRetryCount(exitRecord.retries);
+        if (retries !== null) runnerFacts.retries = retries;
+      }
 
       if (mode === "tail") {
         const { buffer, chunkStart } = readTailChunk(logFile, maxBytes);
@@ -1470,6 +1846,7 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
           text,
           ...(failure ? { failure } : {}),
           ...(signal ? { signal } : {}),
+          ...runnerFacts,
         };
         return textResult(result as unknown as Record<string, unknown>, outputHumanText(result));
       }
@@ -1513,6 +1890,7 @@ export function createBgOutputTool(registration: BgToolRegistration = {}): Recor
         ...(reset ? { reset: true } : {}),
         ...(failure ? { failure } : {}),
         ...(signal ? { signal } : {}),
+        ...runnerFacts,
       };
       return textResult(result as unknown as Record<string, unknown>, outputHumanText(result));
     },
@@ -1635,7 +2013,7 @@ function resolveAndHeal(
   entry: BackgroundEntry,
   nowMs: number,
 ): { resolved: ResolvedStatus; entry: BackgroundEntry; healed: boolean } {
-  let resolved = resolveStatus(dir, entry);
+  let resolved = resolveStatus(dir, entry, nowMs);
   if (hasSpawnError(entry) && resolved.status === "running") {
     resolved = { status: "exited", exit_code: null };
   }
@@ -1670,6 +2048,7 @@ function resolveAndHeal(
 
 /** Project an entry plus its resolved status into a list row. */
 function toListRow(
+  dir: string,
   entry: BackgroundEntry,
   resolved: ResolvedStatus,
   contextKey: string,
@@ -1682,7 +2061,10 @@ function toListRow(
     command_truncated: truncated,
     status: resolved.status,
     exit_code: resolved.exit_code,
-    pid: typeof entry.pid === "number" ? entry.pid : 0,
+    // The same pid source `resolveStatus` used (`.pid` handshake first): showing
+    // the entry's cached pid here would print `0` for a task the row calls
+    // `running`, which reads like a bug in the listing.
+    pid: readPid(dir, entry),
     started_at: typeof entry.started_at === "string" ? entry.started_at : "",
     ended_at: typeof entry.ended_at === "string" ? entry.ended_at : null,
     current_session: entry.started_by_context_key === contextKey,
@@ -1763,6 +2145,7 @@ export function createBgListTool(registration: BgListRegistration = {}): Record<
     description: [
       "List known background tasks with their status, exit code, pid, timestamps and how they were confirmed.",
       "Each entry is self-healed: a task whose process is gone and has no exit record is reported (and persisted) as exited.",
+      "status: starting means the registry entry exists but the wrapper has not confirmed a pid yet; it is not an error, and after 60 seconds without a pid the task is judged never started and reported as exited.",
       "Set include_finished: false to list only running tasks; set prune: true to also delete finished tasks older than 24 hours.",
       "Unreadable registry files are reported, not hidden, and an unconfirmed (no-ui-explicit) start is flagged.",
     ].join(" "),
@@ -1798,7 +2181,7 @@ export function createBgListTool(registration: BgListRegistration = {}): Record<
         const outcome = resolveAndHeal(dir, entry, clock());
         if (outcome.healed) healed += 1;
         if (!includeFinished && isFinishedStatus(outcome.resolved.status)) continue;
-        tasks.push(toListRow(outcome.entry, outcome.resolved, contextKey));
+        tasks.push(toListRow(dir, outcome.entry, outcome.resolved, contextKey));
       }
 
       const result: BgListResult = {
@@ -1960,6 +2343,28 @@ function bgStopError(message: string, taskId: string) {
   );
 }
 
+/** The human-readable refusal for a task that is not addressable yet (R7). */
+function bgStopStartingError(taskId: string, pid: number) {
+  const message =
+    `Task ${taskId} is still "starting": its wrapper has not confirmed a pid yet ` +
+    `(no <id>.pid, no live pid). It is not addressable yet — retry in a moment. ` +
+    "Nothing was killed and the registry entry was left untouched.";
+  return textResult(
+    {
+      task_id: taskId,
+      stopped: false,
+      already_finished: false,
+      status: "starting",
+      exit_code: null,
+      pid,
+      ended_at: null,
+      error: message,
+    },
+    message,
+    true,
+  );
+}
+
 /** The human-readable stop result for a successful or idempotent call. */
 function stopHumanText(result: BgStopResult): string {
   const code = result.exit_code === null ? "" : `, exit_code ${result.exit_code}`;
@@ -2011,6 +2416,10 @@ const BG_STOP_PARAMETERS = {
  *   - an already-finished task is a no-op that returns "already finished" and
  *     leaves the registry untouched, so a second stop never rewrites a real
  *     exit code;
+ *   - a `starting` task (entry written, no live pid confirmed yet) is refused
+ *     with an explicit "not addressable yet" error: nothing is killed and
+ *     nothing is written, because there is no pid to address — and "pid 0"
+ *     means the whole process group, not a task;
  *   - a running task has its whole process tree killed, then `isAlive` is
  *     re-checked; success writes `status: "stopped"` and `ended_at`, keeping an
  *     exit code the wrapper may have raced in with;
@@ -2024,6 +2433,7 @@ export function createBgStopTool(registration: BgStopRegistration = {}): Record<
     description: [
       "Stop a background task by killing its whole process tree.",
       "Idempotent: stopping an already-finished task reports that it was finished and changes nothing.",
+      "A task still in status starting (pid not confirmed yet) is refused with an explicit error and nothing is killed or written; retry once it has a pid.",
       "It never reports success while the process survives; on failure it returns the raw kill error.",
       "Use myflow_bg_list to find task ids.",
     ].join(" "),
@@ -2056,7 +2466,11 @@ export function createBgStopTool(registration: BgStopRegistration = {}): Record<
         );
       }
 
-      const pid = typeof entry.pid === "number" ? entry.pid : 0;
+      // One pid source for every reader (`design.md` §2.3): the wrapper's
+      // `<id>.pid` handshake first, then the entry's cached pid. The cache can
+      // still be `0` when the wrapper already wrote the handshake, so reading
+      // the entry directly would refuse to address a live task.
+      const pid = readPid(dir, entry);
       const resolved = resolveStatus(dir, entry);
 
       // Idempotent path: the task already ended (an `.exit` record, a
@@ -2076,6 +2490,16 @@ export function createBgStopTool(registration: BgStopRegistration = {}): Record<
           ...(resolved.signal ? { signal: resolved.signal } : {}),
         };
         return textResult(result as unknown as Record<string, unknown>, stopHumanText(result));
+      }
+
+      // Not addressable yet (R7): the entry exists but no pid has been
+      // confirmed. This is the window that used to make `stop` either miss the
+      // task entirely or — worse — signal "pid 0" (the process group). Refuse
+      // explicitly: no kill, no `stopped` write, so a later call (after `.pid`
+      // appears, or after the `starting` timeout self-heals the entry) still
+      // sees the truth.
+      if (resolved.status === "starting") {
+        return bgStopStartingError(taskId, pid);
       }
 
       const terminate = registration.terminate ?? terminateTree;

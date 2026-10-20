@@ -112,19 +112,27 @@ Keep these consistent across files; change them together or not at all:
   `.myflow/.runtime/background/`: `<taskId>.json` (registry entry, written only
   by the tools, atomically), `<taskId>.log` (written by the shell itself),
   `<taskId>.exit` (written by the detached wrapper
-  `.myflow/scripts/bg_runner.mjs`, the only observer of the exit code), and
-  `cursors/<contextKey>__<taskId>.json` (per-session read cursor). `taskId` is
-  `bg-<base36ms>-<4hex>`, never a pid. Three statuses are reachable — `running`,
-  `exited`, `stopped` — and a present `.exit` record always outranks pid
-  liveness, so a reused pid never reports as running; a dead pid with no `.exit`
-  self-heals to `exited` with no code. `confirmed_by` records `ui-confirm` or the
-  explicit bypass `no-ui-explicit`, which `list` surfaces as `unconfirmed`. The
-  command runs under a POSIX shell resolved as `MYFLOW_BG_SHELL` → the settings
-  `shellPath` → the Git for Windows bash → `bash` on `PATH`, with **no**
-  `cmd.exe` fallback: when nothing resolves the task is refused and nothing
-  runs. Sub-agents cannot use any of the four tools (allowlist, `tool_call`, and
-  each `execute`). `session_shutdown` must never kill a background task — that
-  is the whole point — and must stay idempotent.
+  `.myflow/scripts/bg_runner.mjs`, the only observer of the exit code),
+  `<taskId>.pid` (the wrapper's own handshake, written before any command can
+  run), and `cursors/<contextKey>__<taskId>.json` (per-session read cursor).
+  `taskId` is `bg-<base36ms>-<4hex>`, never a pid. Four statuses are reachable —
+  `starting`, `running`, `exited`, `stopped` — and a present `.exit` record
+  always outranks pid liveness, so a reused pid never reports as running; a dead
+  pid with no `.exit` self-heals to `exited` with no code. The pid has one
+  source: `<taskId>.pid`, else the entry's cached `pid`, else `0`. `starting`
+  means "entry on disk, handshake not yet landed"; it self-heals to `exited`
+  after 60s, `output` returns it normally, and `stop` refuses it with "not
+  addressable yet" instead of killing pid 0. `cwd` is optional and confined to
+  the project root (validated before the dialog, always shown in the dialog).
+  `confirmed_by` records `ui-confirm` or the explicit bypass `no-ui-explicit`,
+  which `list` surfaces as `unconfirmed`. The command runs under a POSIX shell
+  resolved as `MYFLOW_BG_SHELL` → the settings `shellPath` → the Git for Windows
+  bash → `bash` on `PATH`, with **no** `cmd.exe` fallback: when nothing resolves
+  the task is refused and nothing runs. Sub-agents cannot use any of the four
+  tools (allowlist, `tool_call`, and each `execute`). `session_shutdown` must
+  never kill a background task — that is the whole point — and must stay
+  idempotent; it stays silent when `hasUI === false`, not merely when `notify`
+  is absent.
 
 ## Extension Rules
 
@@ -183,10 +191,11 @@ Keep these consistent across files; change them together or not at all:
   `terminateTree` in `background.ts` spawns it that way, and the stop tests must
   not route the call through a shell either.
 - **The `bash` on `PATH` may be the WSL launcher.**
-  `C:\Windows\System32\bash.exe` (and `Sysnative`) is the WSL entry point, which
-  this project forbids invoking, so background shell resolution skips those
-  directories. It does **not** skip `SysWOW64` — a known gap. Prefer an explicit
-  `MYFLOW_BG_SHELL` or a settings `shellPath` when in doubt.
+  `C:\Windows\System32\bash.exe` is the WSL entry point, which this project
+  forbids invoking. Background shell resolution therefore skips all three
+  spellings of that directory — `System32`, `Sysnative`, `SysWOW64` — so a
+  resolved shell is never the launcher; prefer an explicit `MYFLOW_BG_SHELL` or
+  a settings `shellPath` when in doubt.
 
 - **Testing a launch on Windows**: a `.cmd` shim cannot observe a multi-line argv
   (cmd splits on the newline), so a test that inspects what was handed to `pi`
@@ -216,7 +225,8 @@ Keep these consistent across files; change them together or not at all:
 - [ ] If the change touches the `myflow_bg_*` tools, read the "Background tasks"
   contract above and the shell resolution in `.myflow/scripts/bg_runner.mjs`
   before editing either side. The tools are the only writer of `<taskId>.json`;
-  the wrapper is the only writer of `<taskId>.log` and `<taskId>.exit`.
+  the wrapper is the only writer of `<taskId>.log`, `<taskId>.exit`, and
+  `<taskId>.pid`.
 
 ## Quality Check
 
@@ -230,7 +240,8 @@ Keep these consistent across files; change them together or not at all:
   and the verify gate.
 - [ ] No instruction file (skill, prompt, `workflow.md`) now describes
   something that does not exist.
-- [ ] Changing the background-task shell resolution or the `<taskId>.exit` shape
-  was mirrored into the `myflow_bg_start` tool description, the spec contract
-  (`.myflow/spec/harness/index.md`), and this file in the same change.
+- [ ] Changing the background-task shell resolution, the `<taskId>.exit` shape,
+  or the `<taskId>.pid` handshake was mirrored into the `myflow_bg_start` tool
+  description, the spec contract (`.myflow/spec/harness/index.md`), and this
+  file in the same change.
 - [ ] `git status` is clean apart from intended changes.

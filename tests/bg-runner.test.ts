@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -14,6 +15,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { pathToFileURL } from "node:url";
 import {
+  isRetryableSpawnError,
   quoteForBash,
   resolveShellPath,
   runCommand,
@@ -457,6 +459,89 @@ test("H1b -2 确定性失败（ENOENT）不重试，只尝试一次并如实记�
   }
 });
 
+test("H2 -1 谓词层：ERR_* 是确定性错误，不重试；资源类/未知/无 code 仍重试", () => {
+  // 回退点（H2）：删掉 isRetryableSpawnError 里的 `code.startsWith("ERR_")` 提前返回
+  //   → 下面四条 ERR_* 断言都变红（它们会落到末尾的 `return true`）。
+  //   把 ERR_* 塞进 NON_RETRYABLE_SPAWN_CODES 是做不到的：前缀不是集合成员，
+  //   所以必须留这条单独判断。
+  const withCode = (code: string | undefined) =>
+    code === undefined ? {} : { code };
+
+  for (const code of [
+    "ERR_INVALID_ARG_TYPE",
+    "ERR_INVALID_CALLBACK",
+    "ERR_OUT_OF_RANGE",
+    "ERR_UNKNOWN_SIGNAL",
+  ]) {
+    assert.equal(
+      isRetryableSpawnError(withCode(code)),
+      false,
+      `${code} 是调用方写错，重试只会把错误延迟整个退避预算`,
+    );
+  }
+
+  // 可重试的一侧必须保持：资源耗尽、无法识别的 code（Windows 232 → UNKNOWN），
+  // 以及没有 code 的错误。
+  assert.equal(isRetryableSpawnError(withCode("EAGAIN")), true);
+  assert.equal(isRetryableSpawnError(withCode("ENOMEM")), true);
+  assert.equal(isRetryableSpawnError(withCode("UNKNOWN")), true);
+  assert.equal(isRetryableSpawnError(withCode("")), true, "空 code 无法分类，按可重试处理");
+  assert.equal(isRetryableSpawnError({}), true, "没有 code 的错误必须可重试（232 靠这条）");
+  assert.equal(isRetryableSpawnError(undefined), true);
+  assert.equal(isRetryableSpawnError(null), true);
+
+  // 既有确定性集合不能被这次改动挤掉。
+  for (const code of ["ENOENT", "EINVAL", "EACCES", "EPERM"]) {
+    assert.equal(isRetryableSpawnError(withCode(code)), false, `${code} 必须仍然不重试`);
+  }
+});
+
+test("H2 -2 行为层：同步抛 ERR_INVALID_ARG_TYPE 只尝试一次，且不退避等待", async () => {
+  // 回退点（H2）：删掉 ERR_ 前缀判断 → attempts 变成 9（1 + maxRetries 8）、
+  //   calls 变成 9、waits 不再为空，下面四条断言全变红。
+  const dir = makeDir();
+  try {
+    const log = join(dir, "err-code.log");
+
+    let calls = 0;
+    const spawnImpl = () => {
+      calls += 1;
+      // Node 在参数错误时是**同步抛**，不是发 'error' 事件；两条路径都必须不重试。
+      const error = new Error("The \"options\" argument must be of type object") as NodeJS.ErrnoException;
+      error.code = "ERR_INVALID_ARG_TYPE";
+      throw error;
+    };
+
+    let record: Record<string, unknown> | undefined;
+    let runnerCode: number | undefined;
+    const waits: number[] = [];
+    const outcome = await runCommand({
+      command: "never-runs",
+      logPath: log,
+      cwd: dir,
+      spawnImpl: spawnImpl as unknown as typeof spawn,
+      maxRetries: 8,
+      wait: (ms: number) => {
+        waits.push(ms);
+      },
+      onOutcome: (payload, code) => {
+        record = payload;
+        runnerCode = code;
+      },
+    });
+
+    assert.equal(outcome.attempts, 1, "ERR_INVALID_ARG_TYPE 必须只尝试一次");
+    assert.equal(calls, 1, "spawn 只应被调用一次");
+    assert.deepEqual(waits, [], "确定性错误不得触发任何退避等待");
+    assert.notEqual(runnerCode, 0, "被拒必须以非零退出码上报");
+    assert.equal(record?.exit_code, null);
+    assert.equal(record?.retries, undefined, "没有重试时省略 retries");
+    assert.match(String(record?.error), /ERR_INVALID_ARG_TYPE/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("bg runner -6: MYFLOW_BG_SHELL 覆盖被采用，并原样记进 .exit.shell", () => {
   // 回退点：resolveShellPath 不再读 MYFLOW_BG_SHELL → shell 字段不等于注入值；
   //         runCommand 忘了把 shell 写进成功记录 → shell 断言变红。
@@ -480,6 +565,8 @@ test("bg runner -6: MYFLOW_BG_SHELL 覆盖被采用，并原样记进 .exit.shel
 
 test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（override -> settings -> Git -> PATH -> null）", () => {
   // 回退点：任一候选顺序被调换、多写一套解析、或丢掉存在性检查 → 对应断言变红。
+  // 回退点（H1）：把 `syswow64` 从 findOnPath 的跳过集合删掉 → 下面 4d 的两条断言
+  //               变红（它们断言的是“拒绝 WSL 启动器的三个视图”，不是“支持 WSL”）。
   const gitBash = join("C:\\", "Program Files", "Git", "bin", "bash.exe");
   const noExists = () => false;
   const settingsFile = join("H:/home", ".pi", "agent", "settings.json");
@@ -584,6 +671,43 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
     "System32 里的 bash.exe 是 WSL 启动器，不得采用，也不得退回 cmd.exe",
   );
 
+  // 4d. System32 的三个视图都是同一个 WSL 启动器，必须一视同仁：
+  //     `System32`（64 位视角）/ `Sysnative`（32 位进程看 64 位 System32 的别名）
+  //     / `SysWOW64`（64 位进程看 32 位 System32 的视图）。前两个已被 4b/4c 覆盖，
+  //     这里补 SysWOW64：本机不装 WSL、也不打算装，所以它不是“待支持”，而是“必须拒绝”。
+  //     回退点：从 findOnPath 的跳过集合里删掉 'syswow64' → 下面两条断言变红。
+  const syswowLauncher = join("C:\\Windows\\SysWOW64", "bash.exe");
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: "C:\\Windows\\SysWOW64",
+      exists: (p) => p === syswowLauncher,
+      readFile: () => "",
+    }),
+    null,
+    "SysWOW64 里的 bash.exe 是 WSL 启动器的 32 位视图，不得采用",
+  );
+
+  // 4e. 同上，但真正的 Git Bash 排在 System32 三视图之后：必须跳过三个视图、取后者。
+  assert.equal(
+    resolveShellPath({
+      env: {},
+      platform: "win32",
+      homeDir: "H:/home",
+      pathValue: ["C:\\Windows\\SysWOW64", "C:\\Windows\\Sysnative", "C:\\Windows\\System32", "D:\\bin"].join(";"),
+      exists: (p) =>
+        p === syswowLauncher ||
+        p === join("C:\\Windows\\Sysnative", "bash.exe") ||
+        p === wslLauncher ||
+        p === pathBash,
+      readFile: () => "",
+    }),
+    pathBash,
+    "System32/Sysnative/SysWOW64 的 bash.exe 全部跳过，只采用真正的 Git Bash",
+  );
+
   // 5. 即使 %ComSpec% / COMSPEC 指着一个真实存在的 cmd.exe，也不得兜底。
   //    回退点：恢复 ComSpec 兜底 → 两条断言变红。
   for (const env of [
@@ -647,6 +771,35 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   // quoteForBash 的单测（回退点：改掉转义规则 → 断言变红）。
   assert.equal(quoteForBash("/a b/c"), "'/a b/c'");
   assert.equal(quoteForBash("a'b"), "'a'\\''b'");
+});
+
+test("bg runner -7b: 本机真实解析出的外壳是 Git Bash，且不是任何 WSL 启动器视图", () => {
+  // 这是本任务的机器契约（H1）：“本机只用 Git Bash”。它不是恒真断言：真的用默认参数
+  // 解析一遍，再按**路径段**检查结果，而不是只检查字符串里有没有 “system32”。
+  //
+  // 回退点：
+  //   - findOnPath 不再跳过 syswow64/system32/sysnative，而本机 PATH 上恰好有 WSL 启动器
+  //     → 下面的段断言变红；
+  //   - resolveShellPath 变成返回 null → “必须解析到外壳”变红。
+  const shell = resolveShellPath();
+  assert.equal(typeof shell, "string", "本机必须能解析到 POSIX 外壳（期望 Git Bash）");
+  assert.ok(shell && shell.length > 0, "解析结果不得为空字符串");
+  assert.ok(existsSync(shell), `解析出的外壳必须真实存在：${shell}`);
+
+  const segments = shell.split(/[\\/]+/).map((segment) => segment.toLowerCase());
+  for (const forbidden of ["system32", "sysnative", "syswow64"]) {
+    assert.ok(
+      !segments.includes(forbidden),
+      `本机外壳不得来自 WSL 启动器视图（${forbidden}）：${shell}`,
+    );
+  }
+
+  // 名字必须是 bash（POSIX 外壳），不能是 cmd.exe 或别的东西。
+  const name = segments[segments.length - 1];
+  assert.ok(
+    name === "bash.exe" || name === "bash",
+    `本机外壳必须是 bash（Git Bash），实际是：${shell}`,
+  );
 });
 
 // ---- P1: no cmd.exe fallback ----
@@ -1053,6 +1206,156 @@ test("S3 -3: 永远失败时有界放弃（真实等待，总耗时小于预算+
     );
     assert.match(String(record?.error), /refused to create the process after 8 attempts/);
     assert.match(String(record?.error), /UNKNOWN/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H5 — `--cwd`（R5）
+//
+// The wrapper's own cwd (where `--log` / `--exit` resolve from) and the
+// *command's* cwd are now separate: `myflow_bg_start` validates the directory
+// and passes it as `--cwd`, so a background command can run in a subdirectory
+// without moving the log/exit bookkeeping out of the project.
+// ---------------------------------------------------------------------------
+
+/** Quote `process.execPath` for a POSIX shell (its path may contain spaces). */
+function quotedNode(): string {
+  return `'${process.execPath.replace(/'/g, "'\''")}'`;
+}
+
+test("H5 -6 --cwd 生效（命令在该目录执行），缺值是硬错误", () => {
+  const dir = makeDir();
+  try {
+    const sub = join(dir, "app");
+    mkdirSync(sub, { recursive: true });
+    const log = join(dir, "task.log");
+    const exit = join(dir, "task.exit");
+
+    // 回退点：删掉 `cwd: options.cwd ?? process.cwd()` 里的 `options.cwd`（退回
+    // process.cwd()）→ `console.log(process.cwd())` 打印的是 dir，断言变红。
+    const result = runRunner(
+      [
+        "--id",
+        "bg-test",
+        "--log",
+        log,
+        "--exit",
+        exit,
+        "--cwd",
+        sub,
+        "--",
+        `${quotedNode()} -e "console.log(process.cwd())"`,
+      ],
+      { cwd: dir },
+    );
+
+    assert.equal(result.status, 0);
+    assert.equal(
+      readFileSync(log, "utf-8").trim(),
+      sub,
+      "命令必须在 --cwd 指定的目录里执行",
+    );
+    // 记账文件仍落在 wrapper 自己的 cwd 下（--log/--exit 是绝对路径，不受 --cwd 影响）。
+    assert.equal(JSON.parse(readFileSync(exit, "utf-8")).exit_code, 0);
+
+    // `--cwd` 缺值不得悄悄退回“当前目录”：否则命令会在一个确认门从未展示过的
+    // 目录里运行。硬错误 = 退出码 2，且不写 `.exit`（回退点：把缺值当 null → 正常启动）。
+    const missingCwdExit = join(dir, "missing.exit");
+    const missing = runRunner([
+      "--id",
+      "bg-test",
+      "--log",
+      join(dir, "missing.log"),
+      "--exit",
+      missingCwdExit,
+      "--cwd",
+    ]);
+    assert.equal(missing.status, 2, "`--cwd` 缺值必须是硬错误（EXIT_BAD_ARGS）");
+    assert.ok(!existsSync(missingCwdExit), "参数错误时不得写 .exit 记录");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H6 — the `<id>.pid` handshake (ADR-8 / R6)
+//
+// The wrapper must write `<pidPath>` *before* it resolves the shell, creates the
+// log directory, or runs anything. The command therefore always runs in a world
+// where its own pid is already on disk: that is what closes the orphan window
+// (a crash can no longer leave a process nobody can address).
+// ---------------------------------------------------------------------------
+
+/** Quote a path for a POSIX shell, with forward slashes so `\` is not an escape. */
+function shPath(path: string): string {
+  return `'${path.split("\\").join("/").replace(/'/g, "'\''")}'`;
+}
+
+test("H6 -12 wrapper 先写 <id>.pid，再执行命令（命令执行时 .pid 已在，且 pid = wrapper pid）", async () => {
+  const dir = makeDir();
+  try {
+    const log = join(dir, "task.log");
+    const exit = join(dir, "task.exit");
+    const pidFile = join(dir, "task.pid");
+    const marker = join(dir, "marker.txt");
+
+    // 命令把**读到的 `.pid` 内容**写进 marker。异步起 wrapper 是为了拿到它真实的
+    // pid（MSYS 的 `$PPID` 在 Windows 上恒为 1，不可用），再与握手比对。
+    // 回退点：把 `writePidRecord` 挪到 `runCommand` 之后 → `cat` 在写 `.pid` 之前
+    // 执行，marker 为空，下面的 `.pid` 断言变红。
+    const command = `cat ${shPath(pidFile)} > ${shPath(marker)}`;
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.MYFLOW_BG_SHELL;
+    const child = spawn(
+      process.execPath,
+      [RUNNER, "--id", "bg-test", "--log", log, "--exit", exit, "--pid", pidFile, "--", command],
+      { env, stdio: "ignore" },
+    );
+    const wrapperPid = child.pid;
+    const [code] = await once(child, "exit");
+
+    assert.equal(code, 0, "命令成功时 wrapper 退出码为 0");
+    assert.ok(typeof wrapperPid === "number" && wrapperPid > 0);
+
+    const handshake = JSON.parse(readFileSync(marker, "utf-8"));
+    assert.equal(typeof handshake.pid, "number");
+    assert.ok(Number.isInteger(handshake.pid) && handshake.pid > 0, ".pid 里必须是真实 pid");
+    assert.equal(handshake.pid, wrapperPid, ".pid 里的 pid 必须是 wrapper 自己的 pid");
+    assert.equal(typeof handshake.at, "string");
+    assert.ok(!Number.isNaN(Date.parse(handshake.at)), ".pid.at 必须是合法 ISO 时间");
+
+    // 盘上留下的还是同一份握手：wrapper 不会删它，读侧靠它判活。
+    assert.equal(JSON.parse(readFileSync(pidFile, "utf-8")).pid, wrapperPid);
+    assert.equal(JSON.parse(readFileSync(exit, "utf-8")).exit_code, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("H6 -13 拒绝外壳时也已经写下 .pid（握手早于外壳解析）", () => {
+  const dir = makeDir();
+  try {
+    const log = join(dir, "task.log");
+    const exit = join(dir, "task.exit");
+    const pidFile = join(dir, "task.pid");
+
+    // 一个肯定会被拒绝的外壳（cmd.exe）：命令一个字都不会执行，但“wrapper 曾经
+    // 活着”仍必须留下证据，否则一个从未写 `.exit` 的坏任务无法与“从未启动”区分。
+    const result = runRunner(
+      ["--id", "bg-test", "--log", log, "--exit", exit, "--pid", pidFile, "--", "echo never"],
+      { env: { MYFLOW_BG_SHELL: "cmd.exe" } },
+    );
+    assert.notEqual(result.status, 0, "被拒绝的任务退出码非零");
+    assert.ok(existsSync(pidFile), "拒绝外壳时也必须留下 .pid 握手");
+    assert.ok(JSON.parse(readFileSync(pidFile, "utf-8")).pid > 0);
+    assert.equal(
+      JSON.parse(readFileSync(exit, "utf-8")).shell,
+      "cmd.exe",
+      "拒绝记录保留被拒的外壳路径（而不是伪装成已解析）",
+    );
+    assert.ok(!existsSync(log), "拒绝时不得创建日志文件");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

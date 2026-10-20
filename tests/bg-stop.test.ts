@@ -19,6 +19,7 @@ import {
   entryPath,
   exitPath,
   isAlive,
+  pidPath,
   readEntry,
   writeEntry,
   type BackgroundEntry,
@@ -567,6 +568,87 @@ test("F6 -7 已自愈为 exited 的条目：stop 不碰那个 pid，探针必须
     assert.equal(terminateCalls, 0, "已结束的任务不得调用杀进程");
     assert.equal(isAlive(probe.pid), true, "被重用的 pid（无关进程）必须仍然活着");
     assert.equal(readFileSync(entryPath(dir, id), "utf-8"), before, "幂等 stop 不得改写条目");
+  } finally {
+    probe?.stop();
+    await cleanup(root, []);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H6 — `stop` vs `start` (R7 / ADR-8)
+//
+// The start tool now writes the entry *before* spawning, so there is a real
+// window in which a task exists but has no pid. `stop` must say so instead of
+// killing "pid 0" (the process group) or pretending the task is finished.
+// ---------------------------------------------------------------------------
+
+test("H6 -8 starting 且无 pid → 明确错误、不杀、不写；.pid 出现后同一任务可正常 stop", async () => {
+  // 回退点：
+  //  - 删掉 `resolved.status === "starting"` 守卫 → `terminate(0)` 被调用，
+  //    `terminateCalls === 0` 断言变红（真实实现下 `taskkill /PID 0` 会尝试杀进程组）；
+  //  - 守卫写 `status: "stopped"` → 磁盘字节断言变红；
+  //  - 让 stop 忽略 `.pid`（只看条目 pid）→ 后半段拿不到可寻址 pid，stop 报“starting”，
+  //    探针不会被杀、`stopped` 断言变红。
+  const root = makeProject();
+  let probe: { pid: number; stop: () => void } | undefined;
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-stop-starting-0008";
+    // 条目已写、pid 未确认：这正是 start 与 wrapper 之间的毫秒级窗口。
+    writeEntry(
+      dir,
+      makeEntry(dir, id, {
+        status: "starting",
+        pid: 0,
+        started_at: new Date().toISOString(),
+      }),
+    );
+    const before = readFileSync(entryPath(dir, id), "utf-8");
+
+    probe = startProbe();
+    assert.ok(probe.pid > 0 && isAlive(probe.pid), "探针进程必须真的活着");
+
+    let terminateCalls = 0;
+    const terminatePids: number[] = [];
+    const stop = createBgStopTool({
+      deriveContextKey: () => CONTEXT_KEY,
+      isSubAgent: false,
+      terminate: (pid: number) => {
+        terminateCalls += 1;
+        terminatePids.push(pid);
+        killTree(pid);
+        return { status: 0, stderr: "" };
+      },
+    }) as unknown as BgTool;
+
+    const refused = await stop.execute("stop-8a", { task_id: id }, undefined, undefined, fakeCtx(root));
+    assert.equal(refused.isError, true, "尚不可寻址的任务不是“已停止”");
+    assert.equal(refused.details.stopped, false);
+    assert.equal(refused.details.already_finished, false);
+    assert.equal(refused.details.status, "starting");
+    assert.match(String(refused.details.error), /starting/);
+    assert.match(String(refused.details.error), /retry/i);
+    assert.equal(terminateCalls, 0, "不得尝试杀任何进程（尤其不得 terminate(0)）");
+    assert.equal(isAlive(probe.pid), true, "无关进程必须仍然活着");
+    assert.equal(readFileSync(entryPath(dir, id), "utf-8"), before, "拒绝时不得改写条目");
+
+    // 握手到达：wrapper 写下 `.pid`。条目里仍然是 `starting`/pid 0，但任务从此可寻址。
+    writeFileSync(
+      pidPath(dir, id),
+      JSON.stringify({ pid: probe.pid, at: new Date().toISOString() }),
+    );
+
+    const stopped = await stop.execute("stop-8b", { task_id: id }, undefined, undefined, fakeCtx(root));
+    assert.equal(stopped.isError, undefined, `可寻址后必须能正常 stop：${stopped.content[0]?.text}`);
+    assert.equal(stopped.details.stopped, true);
+    assert.equal(stopped.details.status, "stopped");
+    assert.equal(stopped.details.pid, probe.pid, "必须用 .pid 握手里的 pid，而不是条目里的 0");
+    assert.equal(terminateCalls, 1);
+    assert.equal(await waitFor(() => !isAlive(probe.pid), 5_000), true, "探针必须已被杀掉");
+    assert.equal(readEntry(dir, id)?.status, "stopped");
+
+    // 一个字节都不许落在 `terminate(0)` 这样的调用上：kill 的参数必须是真实正 pid。
+    assert.deepEqual(terminatePids, [probe.pid], "terminate 只能收到 .pid 里的真实 pid（绝不 0）");
   } finally {
     probe?.stop();
     await cleanup(root, []);

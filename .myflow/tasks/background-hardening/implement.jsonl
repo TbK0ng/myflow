@@ -1,0 +1,2 @@
+{"file": ".myflow/spec/harness/index.md", "reason": "活契约：Background tasks 一节就是本任务要改的对象（状态机、.pid、cwd、ExitRecord、hasUI、Known limits）"}
+{"file": ".myflow/archive/2026-10/background-tasks/handoff.md", "reason": "上一任务的耐久结论：7 条待办的原话、环境陷阱（taskkill 参数数组、PATH 上的 WSL bash）、以及被复核确认的缺陷"}

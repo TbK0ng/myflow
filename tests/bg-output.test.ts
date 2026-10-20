@@ -47,6 +47,10 @@ import {
 //   -13：tail 不丢弃被 max_bytes 切开的半行（completeLines 改回 split）→ 首行是半行，断言变红；
 //         反过来「总是丢弃首行」→ 窗口正好落在行首时会多丢一整行，断言变红。
 //   -14：tail 的退化例外被去掉（partialFirstLine 时无条件丢弃首行）→ 单行超限返回空，断言变红。
+//   H3 -1：output 不再带出 `.exit.shell` / `.exit.retries` → 两条断言变红。
+//   H3 -2：把缺失的 retries 写成 `undefined`/`0` 占位 → `"retries" in details` 变红。
+//   H3 -3：把拒绝记录的 `shell: null` 省略（`?? ""` 兜底）→ shell/`in` 断言变红。
+//   H3 -4：无条件加 shell/retries（不看 .exit 是否存在）→ 运行中任务多出字段，断言变红。
 
 const KEY = "pi_bgoutput";
 
@@ -603,6 +607,155 @@ test("H1a output 展示启动失败/异常退出原因：.exit.error 与 .exit.s
     writeFileSync(logPath(dir, spawnErrId), "");
     const spawnErrResult = await run(root, { task_id: spawnErrId });
     assert.match(String(spawnErrResult.details.failure), /232/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// H3 — `myflow_bg_output` 让 `.exit` 说真话：`shell` 与实际重试次数
+//
+// `.exit` 一直写着这两个字段，只是 `ExitRecord` 类型没承认它们、也没有读者。
+// 现在 output 在任务**已结束**时把它们带出来。回退点见文件头 H3 行。
+// ---------------------------------------------------------------------------
+
+test("H3 -1 已结束：shell 与 retries 取自 .exit", async () => {
+  // 回退点：output 不再带出 .exit.shell / .exit.retries → 两条断言变红
+  //        （无论是因为字段没加、还是因为读的是 entry 的缓存值）。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-h3-shell";
+    // 条目里故意留一个不同的 cwd/pid 缓存：shell 必须来自 .exit，不是猜的。
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "built ok\n");
+    const shell = "C:/Program Files/Git/bin/bash.exe";
+    writeFileSync(
+      exitPath(dir, id),
+      JSON.stringify({ exit_code: 0, signal: null, at: new Date().toISOString(), shell, retries: 2 }),
+    );
+
+    const result = await run(root, { task_id: id, mode: "tail" });
+    assert.equal(result.details.status, "exited");
+    assert.equal(result.details.shell, shell, "shell 必须与 .exit 一致");
+    assert.equal(result.details.retries, 2, "retries 必须与 .exit 一致");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("H3 -2 .exit 没有 retries：返回体里不出现该字段", async () => {
+  // 回退点：把 retries 写成 `retries: undefined` 或 `retries: 0` 占位 →
+  //        `"retries" in details` 变 true，断言变红（这是「不出现」而不是「等于 undefined」）。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-h3-noretry";
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "done\n");
+    writeFileSync(
+      exitPath(dir, id),
+      JSON.stringify({
+        exit_code: 0,
+        signal: null,
+        at: new Date().toISOString(),
+        shell: "/usr/bin/bash",
+      }),
+    );
+
+    const result = await run(root, { task_id: id, mode: "tail" });
+    assert.equal(result.details.status, "exited");
+    assert.equal(result.details.shell, "/usr/bin/bash");
+    assert.equal("retries" in result.details, false, "没有重试就没有 retries 字段");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("H3 -3 拒绝记录：shell 为 null 且 retries 不出现", async () => {
+  // 回退点：把 shell 的 null 当成「没有值」而省略（或用 `?? ""` 兜底）→
+  //        `details.shell === null` 与 `"shell" in details` 变红。
+  //        拒绝是**记录下来的事实**（解析不到 POSIX 外壳，什么都没执行），
+  //        必须能与「记录里根本没有这个字段」区分开。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-h3-refused";
+    writeEntry(dir, makeEntry(dir, id));
+    writeFileSync(logPath(dir, id), "");
+    writeFileSync(
+      exitPath(dir, id),
+      JSON.stringify({
+        exit_code: null,
+        error: "no POSIX shell resolved (tried MYFLOW_BG_SHELL, shellPath, Git Bash, PATH)",
+        at: new Date().toISOString(),
+        shell: null,
+      }),
+    );
+
+    const result = await run(root, { task_id: id, mode: "tail" });
+    assert.equal(result.details.status, "exited");
+    assert.equal(result.details.exit_code, null);
+    assert.equal("shell" in result.details, true, "拒绝记录也要带 shell 字段");
+    assert.equal(result.details.shell, null, "拒绝路径的 shell 是 null，不是缺失");
+    assert.equal("retries" in result.details, false);
+    assert.match(String(result.details.failure), /no POSIX shell resolved/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("H3 -4 未结束任务：不带 shell / retries", async () => {
+  // 回退点（本批最关键的一条）：把 runnerFacts 改成无条件加入（例如
+  //        `shell: normalizeExitShell(exitRecord?.shell)`）→ 运行的条目没有 .exit，
+  //        却会返回 `shell: null`，这里的 `"shell" in details === false` 变红。
+  //        没有 .exit 就没有权威值，凭空给一个 null 等于谎称「被拒绝」。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const runningId = "bg-test-h3-running";
+    // pid = 本进程，保证 isAlive 为真 → resolveStatus 报 running 且没有 .exit。
+    writeEntry(dir, makeEntry(dir, runningId, { status: "running", pid: process.pid }));
+    writeFileSync(logPath(dir, runningId), "still going\n");
+
+    const running = await run(root, { task_id: runningId, mode: "tail" });
+    assert.equal(running.details.status, "running");
+    assert.equal("shell" in running.details, false, "运行中的任务没有权威 shell");
+    assert.equal("retries" in running.details, false, "运行中的任务没有权威 retries");
+
+    // 同一个判定对 delta 与 stopping 后的自愈条目同样成立：条目标成 exited 但
+    // 从未留下 .exit（自愈路径）时，也没有人可以声称用过哪个外壳。
+    const healedId = "bg-test-h3-healed";
+    writeEntry(dir, makeEntry(dir, healedId, { status: "exited", exit_code: null, pid: 999_999_999 }));
+    writeFileSync(logPath(dir, healedId), "");
+    const healed = await run(root, { task_id: healedId, mode: "delta" });
+    assert.equal(healed.details.status, "exited");
+    assert.equal("shell" in healed.details, false, "自愈的 exited 没有 .exit 就没有 shell");
+    assert.equal("retries" in healed.details, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("H6 -5 starting 任务：正常返回 status=starting，不报错也不带 .exit 字段", async () => {
+  // 回退点：把 `starting` 当错误（或当成已结束）→ `isError` / status 断言变红；
+  //        把 `starting` 加进 `isFinishedStatus` → wait 会立刻返回、状态变成 exited。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    const id = "bg-test-h6-starting";
+    writeEntry(
+      dir,
+      makeEntry(dir, id, { status: "starting", pid: 0, started_at: new Date().toISOString() }),
+    );
+    // 日志可能还不存在（毫秒级窗口里外壳还没创建它）：读空是正常结果。
+    const result = await run(root, { task_id: id });
+    assert.equal(result.isError, undefined, "starting 不是错误");
+    assert.equal(result.details.status, "starting");
+    assert.equal(result.details.exit_code, null);
+    assert.equal(result.details.text, "");
+    assert.equal("shell" in result.details, false, "还没有 .exit 就没有权威 shell");
+    assert.equal("failure" in result.details, false, "starting 不是失败");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

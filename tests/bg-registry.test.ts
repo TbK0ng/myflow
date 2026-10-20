@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   BACKGROUND_DIR,
+  STARTING_TIMEOUT_MS,
   backgroundDir,
   cursorPath,
   entryPath,
@@ -13,9 +14,11 @@ import {
   listEntries,
   logPath,
   newTaskId,
+  pidPath,
   prune,
   readCursor,
   readEntry,
+  readPid,
   resolveStatus,
   writeCursor,
   writeEntry,
@@ -365,6 +368,120 @@ test("bg registry -8: an atomic write retries a transient rename failure and nev
     );
     assert.equal(permanentAttempts, 1, "a non-transient code is attempted exactly once");
     assert.ok(!existsSync(`${target}.tmp`), "a failed write still removes its .tmp");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- H6 — the `.pid` handshake and the six-level precedence (ADR-8 / ADR-10) --
+
+/** Write the wrapper's pid handshake, exactly as `bg_runner.mjs` does. */
+function writePidHandshake(dir: string, id: string, pid: number): void {
+  writeFileSync(pidPath(dir, id), JSON.stringify({ pid, at: new Date().toISOString() }));
+}
+
+test("H6 registry -9: readPid prefers the .pid handshake, and resolveStatus has six levels", () => {
+  // 回退点：
+  //  - 删掉 `readPid` 的 `.pid` 分支（只看条目 pid）→ (a)/(b) 变红；
+  //  - 删掉 `resolveStatus` 的第 5 档（starting）→ (c) 变成 exited；
+  //  - 删掉超时判定（第 6 档之前的 `nowMs - startedAt`）→ (d) 变成 starting；
+  //  - 把 starting 档放到 isAlive 之前 → (a) 变成 starting。
+  const root = makeRoot();
+  try {
+    const dir = backgroundDir(root);
+    mkdirSync(dir, { recursive: true });
+    const startedAt = "2026-10-20T12:00:00.000Z";
+    const startedMs = Date.parse(startedAt);
+
+    // (a) The handshake confirms a task whose entry still says `starting`/pid 0:
+    // the wrapper got there, so the task is running, not "not addressable".
+    const handshakeOnly = makeEntry(dir, newTaskId(200), {
+      status: "starting",
+      pid: 0,
+      started_at: startedAt,
+    });
+    writePidHandshake(dir, handshakeOnly.id, process.pid);
+    assert.equal(readPid(dir, handshakeOnly), process.pid, "readPid 必须采用 .pid 里的 pid");
+    assert.deepEqual(resolveStatus(dir, handshakeOnly, startedMs + 1000), {
+      status: "running",
+      exit_code: null,
+    });
+
+    // (b) Conflict: the handshake outranks the entry's cached pid, in both
+    // directions. `.pid` alive + entry pid dead => running; `.pid` dead + entry
+    // pid alive => exited (no resurrection from a stale cache).
+    const handshakeWins = makeEntry(dir, newTaskId(201), {
+      status: "starting",
+      pid: 999_999_999,
+      started_at: startedAt,
+    });
+    writePidHandshake(dir, handshakeWins.id, process.pid);
+    assert.equal(readPid(dir, handshakeWins), process.pid);
+    assert.equal(resolveStatus(dir, handshakeWins, startedMs + 1000).status, "running");
+
+    const handshakeDead = makeEntry(dir, newTaskId(202), {
+      status: "starting",
+      pid: process.pid,
+      started_at: startedAt,
+    });
+    writePidHandshake(dir, handshakeDead.id, 999_999_999);
+    assert.equal(readPid(dir, handshakeDead), 999_999_999);
+    assert.deepEqual(resolveStatus(dir, handshakeDead, startedMs + 1000), {
+      status: "starting",
+      exit_code: null,
+    });
+
+    // Without a handshake the entry's cached pid is still used (the tool writes
+    // it right after `spawn`), so a normal task is unaffected.
+    const cached = makeEntry(dir, newTaskId(203), { status: "running", pid: process.pid });
+    assert.equal(readPid(dir, cached), process.pid);
+    assert.equal(resolveStatus(dir, cached).status, "running");
+
+    // A corrupt / non-integer / non-positive handshake is "no handshake".
+    writeFileSync(pidPath(dir, cached.id), "{not json");
+    assert.equal(readPid(dir, cached), process.pid, ".pid 损坏时回退到条目 pid");
+    writeFileSync(pidPath(dir, cached.id), JSON.stringify({ pid: 0 }));
+    assert.equal(readPid(dir, cached), process.pid, "pid 0 不代表任何进程");
+    writeFileSync(pidPath(dir, cached.id), JSON.stringify({ pid: "123" }));
+    assert.equal(readPid(dir, cached), process.pid, "非数字 pid 不算握手");
+
+    // (c) `starting` inside the window: no handshake, no live pid, younger than
+    // the timeout -> still starting (the wrapper may be about to confirm).
+    const young = makeEntry(dir, newTaskId(204), {
+      status: "starting",
+      pid: 0,
+      started_at: startedAt,
+    });
+    assert.deepEqual(resolveStatus(dir, young, startedMs + 1000), {
+      status: "starting",
+      exit_code: null,
+    });
+    assert.deepEqual(resolveStatus(dir, young, startedMs + STARTING_TIMEOUT_MS), {
+      status: "starting",
+      exit_code: null,
+    });
+
+    // (d) Past the timeout it self-heals: a wrapper that never wrote `.pid`
+    // never ran the command, so `exited` with a null code is the honest answer.
+    assert.deepEqual(resolveStatus(dir, young, startedMs + STARTING_TIMEOUT_MS + 1), {
+      status: "exited",
+      exit_code: null,
+    });
+
+    // (e) An undateable `starting` entry cannot be timed out, so it must not be
+    // reported as starting forever: it falls through to the self-heal.
+    const undated = makeEntry(dir, newTaskId(205), {
+      status: "starting",
+      pid: 0,
+      started_at: "not a timestamp",
+    });
+    assert.deepEqual(resolveStatus(dir, undated, startedMs), { status: "exited", exit_code: null });
+
+    // (f) The `.exit` record still outranks everything, handshake included.
+    const recorded = makeEntry(dir, newTaskId(206), { status: "starting", pid: 0, started_at: startedAt });
+    writePidHandshake(dir, recorded.id, process.pid);
+    writeFileSync(exitPath(dir, recorded.id), JSON.stringify({ exit_code: 4, signal: null, at: startedAt }));
+    assert.deepEqual(resolveStatus(dir, recorded, startedMs + 1000), { status: "exited", exit_code: 4 });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
