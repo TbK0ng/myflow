@@ -576,9 +576,16 @@ export default function extension(pi: ExtensionAPI): void {
         }
       }
 
-      // No UI means no one to notify: skip silently rather than log.
+      // No UI means no one to notify: skip silently rather than log. The
+      // predicate is an explicit `hasUI === false`, not "is a notify function
+      // present": a headless host may still hand us `ui.notify` (it becomes a
+      // no-op or lands in a log nobody reads), so presence alone does not prove
+      // an audience. `hasUI` on the adapter's own `HookContext` is optional and
+      // an older host/stub that omits it is read as "has UI" — only an explicit
+      // `false` silences the notice.
       const ui = ctx.ui;
-      if (running.length > 0 && ui && typeof ui.notify === "function") {
+      const hasUI = (ctx as { hasUI?: boolean }).hasUI !== false;
+      if (running.length > 0 && hasUI && ui && typeof ui.notify === "function") {
         const lines = running.map(({ id, command }) => {
           const shown =
             command.length > SHUTDOWN_COMMAND_CHARS
