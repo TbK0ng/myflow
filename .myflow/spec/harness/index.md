@@ -274,6 +274,9 @@ Payload tour and inventory:
     `myflow_bg_stop` **refuses** it with an explicit "not addressable yet, retry"
     error — no kill, no `stopped` write, never `terminate(0)` (pid 0 would mean
     the whole process group). Once `.pid` appears the same task stops normally.
+    A live pid also outranks the 60s timeout for `prune` (`isFinished` checks it
+    first): a `starting` entry whose `.pid` names a live process *did* start, so
+    it is retained with its log and handshake rather than reaped as a residue.
   - **`cwd` is confined to the project root** (ADR-9), the same posture as
     `writesUnder`: a relative value resolves against the root, an absolute value
     is accepted only inside it, and containment is decided **by path segment,

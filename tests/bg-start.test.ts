@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -659,6 +659,11 @@ test("H5 -1 cwd:'app' → 命令真的在 <root>/app 里执行（真进程）", 
 
 test("H5 -2 cwd:'../outside' → 拒绝，零副作用", async () => {
   const root = makeProject();
+  // 逃逸目标必须是一个**真实存在的目录**，否则放行/拒绝可能来自「不存在」而不是
+  // 包含判定（那样这条用例就测不到 `..` 折叠之后的那一步）。名字带上 root 的随机
+  // 后缀，保证与其它并行用例不撞，且在 finally 里精确删除。
+  const outside = join(dirname(root), `outside-${basename(root)}`);
+  mkdirSync(outside, { recursive: true });
   try {
     const { fn, calls } = stubSpawn();
     let confirms = 0;
@@ -671,10 +676,11 @@ test("H5 -2 cwd:'../outside' → 拒绝，零副作用", async () => {
       },
     });
 
-    // 回退点：删掉 resolveBgCwd 的包含判定 → `..` 逃逸被接受，confirm/spawn 非 0。
+    // 回退点：删掉 resolveBgCwd 的包含判定 → `..` 逃逸被接受（目标目录存在，
+    // 存在性/目录判定都会通过），confirm/spawn 计数非 0。
     const result = await makeTool({ spawnProcess: fn }).execute(
       "call-h5-2",
-      { command: "echo hi", cwd: "../outside" },
+      { command: "echo hi", cwd: `../${basename(outside)}` },
       undefined,
       undefined,
       ctx,
@@ -688,6 +694,7 @@ test("H5 -2 cwd:'../outside' → 拒绝，零副作用", async () => {
     assert.equal(calls.length, 0, "越界的 cwd 绝不能 spawn");
     assert.deepEqual(listEntries(backgroundDir(root)).entries, [], "拒绝不得写注册表条目");
   } finally {
+    rmSync(outside, { recursive: true, force: true });
     await cleanup(root, undefined);
   }
 });

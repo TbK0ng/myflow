@@ -11,7 +11,7 @@
 | 每次 dispatch 有 `timeoutMs`（默认 15 分钟） | `.myflow/workflow.md` | 每批只做一个工作项；超时就拆小重派，不重做 |
 | 测试必须清空 `MYFLOW_*` | spec Pre-Development Checklist | 固定命令见 §3 |
 | `taskkill` 只能从 Node 用参数数组调 | 已实测（Git Bash 改写 `/F`） | 测试不得经 Git Bash 转发 |
-| 基线 | 上一任务归档时 | **332 / 332** 绿；任何一批不得让它变红；本任务终态 **353 / 353** |
+| 基线 | 上一任务归档时 | **332 / 332** 绿；任何一批不得让它变红；本任务终态 **354 / 354** |
 | 每批完成后由**主会话**跑全量并提交 | 保证"提交 = 已验证" | 子代理不提交 |
 
 ## 1. 批次总览
@@ -114,7 +114,7 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | H3 | output 返回体的 `shell`/`retries` 与 `.exit` 一致；缺 `retries` 时字段不出现 | `H3 -1`、`H3 -2`、`H3 -3`（拒绝记录 `shell:null`）、`H3 -4`（未结束不带这两个字段） |
 | H4 | `hasUI:false` ⇒ 通知数 0，任务仍活 | `F7 -7` |
 | H5 | 真进程 `pwd` 落在 `app`；三类越界零副作用；确认门含 cwd | `H5 -1`（真进程）、`H5 -2`（`../`）、`H5 -3`（根外绝对）、`H5 -4`（不存在）、`H5 -5`（确认门文本）、`bg runner H5 -6`（`--cwd` 生效 + 缺值硬错误） |
-| H6 | spawn 时条目已是 `starting`；命令执行时 `.pid` 已在；六档各一条；超时自愈；stop 对 `starting` 不杀 | `H6 -11`（spawn 前条目已存在）、`H6 -12`（`.pid` 早于命令）、`H6 -13`（拒绝外壳也写 `.pid`）、`H6 registry -9`（七项：读序、冲突、六档、超时）、`H6 -8`（stop 拒绝 → `.pid` 后正常）、`H6 -10`（list 显示/自愈/prune）、`H6 -5`（output 对 `starting` 不报错） |
+| H6 | spawn 时条目已是 `starting`；命令执行时 `.pid` 已在；六档各一条；超时自愈；stop 对 `starting` 不杀；**握手写失败 fail-closed** | `H6 -11`（spawn 前条目已存在）、`H6 -12`（`.pid` 早于命令）、`H6 -13`（拒绝外壳也写 `.pid`）、`H6 -14`（`.pid` 写失败即不执行命令）、`H6 registry -9`（七项：读序、冲突、六档、超时）、`H6 -8`（stop 拒绝 → `.pid` 后正常）、`H6 -10`（list 显示/自愈/prune、活 pid 不得被 prune）、`H6 -5`（output 对 `starting` 不报错） |
 | H7 | 文档契约测试（`skills-hygiene` / `workflow-invariant` / `scaffold`）全绿 + §4 的 grep | 全量套件 |
 
 ## 4. 完成判据
@@ -128,7 +128,7 @@ env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLO
 | R5 | `H5 -1` … `H5 -5` + `bg runner H5 -6` |
 | R6 | `H6 -11` + `H6 -12` + `H6 -13` + `H6 registry -9` + `H6 -5` + `H6 -10` |
 | R7 | `H6 -8` |
-| 既有 332 不回归 | 每批全量（终态 **353 / 353**） |
+| 既有 332 不回归 | 每批全量（终态 **354 / 354**） |
 | 每项单独提交 | §1 的七批 |
 
 ## 5. Dispatch 模板

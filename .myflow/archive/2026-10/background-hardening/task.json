@@ -1,9 +1,11 @@
 {
   "title": "background-tasks hardening: the seven limits that are work items",
-  "status": "in_progress",
+  "status": "completed",
   "description": "修掉 background-tasks 的 7 条本不该当成'已知限制'的问题：syswow64、ERR_* 误重试、ExitRecord 类型、shutdown 的 hasUI 判据、cwd 参数、孤儿窗口、stop/start 竞态。每项带测试后单独提交。",
   "slug": "background-hardening",
   "parent": null,
   "created_at": "2026-10-20T18:28:59Z",
-  "started_at": "2026-10-20T18:35:39Z"
+  "started_at": "2026-10-20T18:35:39Z",
+  "finished_at": "2026-10-20T19:26:41Z",
+  "archived_at": "2026-10-20T19:26:41Z"
 }
