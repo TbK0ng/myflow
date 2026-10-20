@@ -233,7 +233,8 @@ Payload tour and inventory:
   - `session_shutdown` **never kills a background task** — that is the point of
     the feature. It is idempotent (the `shutdownDone` flag is claimed first),
     it only reports tasks from its own `startedBackgroundIds` set, it stays
-    silent with no UI, and it never throws.
+    silent when no `ctx.ui.notify` is available (that, not `hasUI`, is the
+    predicate it checks), and it never throws.
   - Main session only: agent allowlists omit the four tools, `tool_call` blocks
     them for a sub-agent, and each `execute` re-checks `isSubAgent` before any
     dialog, spawn, or write.
@@ -320,6 +321,13 @@ session, and the invariants above are what keep it honest.
       `harness-conventions.md`, and the `myflow-meta` / `myflow-brainstorm`
       skills. A stale rule statement anywhere is a bug.
 - [ ] A new refusal path has a test that fails when the guard is reverted.
+- [ ] Adding or removing a Pi hook updates **all three** copies in the same
+      change: `tests/scaffold.test.ts`'s exhaustive hook set (it fails otherwise),
+      the count and table in `.pi/skills/myflow-meta/SKILL.md`, and the list in
+      `references/harness-conventions.md`. The count is **eight**
+      (`session_start`, `input`, `before_agent_start`, `context`, `tool_call`,
+      `session_before_compact`, `agent_before_settle`, `session_shutdown`); it
+      read "six" over a seven-row table before this rule existed.
 - [ ] The approval gate's contract copies agree: `.myflow/workflow.md`, the
       `myflow-meta` harness conventions, the `myflow-brainstorm` skill, and
       `.pi/prompts/myflow-continue.md`. No copy still describes `task.py start`

@@ -87,9 +87,10 @@
 - `writeEntry` / `readEntry` / `listEntries`：
   - `listEntries` 必须**容忍坏文件**（写一半/非法 JSON）→ 计入 `warnings` 明细，**不抛**。
 - `isAlive(pid)`：`process.kill(pid, 0)`；`pid<=0` 或非整数 → false；`EPERM` 视为存活。
-- `resolveStatus(entry)`：**判据顺序固定** → ① `.exit` 存在 ⇒ `exited`（读其 `exit_code`，
+- `resolveStatus(entry)`：**判据顺序固定（五档）** → ① `.exit` 存在 ⇒ `exited`（读其 `exit_code`，
   并带出 `failure`/`signal`）；② `status === "stopped"` ⇒ `stopped`；
-  ③ `isAlive(pid)` ⇒ `running`；④ 否则 ⇒ `exited` 且 `exit_code: null`（自愈）。
+  ③ `status === "exited"` ⇒ `exited`（**已判定结束的条目粘住**，不因 pid 被重用而复活）；
+  ④ `isAlive(pid)` ⇒ `running`；⑤ 否则 ⇒ `exited` 且 `exit_code: null`（自愈）。
 - `prune(dir, now)`：删**已结束**且 `ended_at`（回退 `.exit.at`）早于 24h 的条目
   + 其 `.log`/`.exit`/`.tmp` + 相关游标；无法定日期的不删。
 - 游标：`cursorPath(projectRoot, contextKey, taskId)`、`readCursor`（缺失/坏 → 0）、`writeCursor`。
