@@ -9,8 +9,9 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -19,13 +20,57 @@ import { parseFrontmatter } from "../.pi/extensions/myflow/agents.ts";
 const ROOT = join(import.meta.dirname, "..");
 
 /**
- * The copyable payload. Everything a project needs to run the harness, and
- * nothing that belongs to the project itself (spec, tasks, runtime, config).
+ * The copyable payload manifest: the single source of truth for what may leave
+ * this repository. `tools/release.py` reads the same file — never duplicate the
+ * list here, or the two consumers drift apart.
+ *
+ * `dirs` and `trees` are both whole-tree copies; they are listed apart only so a
+ * reader can tell root-level directories from nested ones.
  */
-const PAYLOAD_DIRS = [".pi"];
-const PAYLOAD_TREES = [".myflow/scripts", ".myflow/agents"];
-const PAYLOAD_FILES = [".myflow/workflow.md"];
-const PAYLOAD_ROOTS = [join(ROOT, ".pi"), join(ROOT, ".myflow", "scripts"), join(ROOT, ".myflow", "agents")];
+const MANIFEST = JSON.parse(readFileSync(join(ROOT, "tools", "release-payload.json"), "utf-8")) as {
+  version: number;
+  dirs: string[];
+  trees: string[];
+  files: string[];
+  exclude: string[];
+};
+const PAYLOAD_TREES = [...MANIFEST.dirs, ...MANIFEST.trees];
+const PAYLOAD_FILES = [...MANIFEST.files];
+const PAYLOAD_ROOTS = PAYLOAD_TREES.map((tree) => join(ROOT, tree));
+
+/** One segment of an `exclude` pattern: `*` and `?` match inside a segment only. */
+function segmentMatches(pattern: string, segment: string): boolean {
+  const source = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]");
+  return new RegExp(`^${source}$`).test(segment);
+}
+
+/** Segment-wise fnmatch: a `**` segment matches any number of path segments. */
+function pathMatches(pattern: string[], path: string[]): boolean {
+  if (pattern.length === 0) return path.length === 0;
+  const [head, ...rest] = pattern;
+  if (head === "**") {
+    for (let take = 0; take <= path.length; take += 1) {
+      if (pathMatches(rest, path.slice(take))) return true;
+    }
+    return false;
+  }
+  return path.length > 0 && segmentMatches(head, path[0]) && pathMatches(rest, path.slice(1));
+}
+
+/**
+ * Whether a project-relative path (always `/`-separated) is filtered out by the
+ * manifest's `exclude` rules. Directories are matched as the path itself, so
+ * `**\/__pycache__/**` drops the directory before its contents are visited.
+ */
+function matchesExclude(relPath: string): boolean {
+  const segments = relPath.split("/");
+  return MANIFEST.exclude.some((rule) => pathMatches(rule.split("/"), segments));
+}
+
+function isExcluded(path: string, root: string = ROOT): boolean {
+  const relPath = relative(root, path).split(sep).join("/");
+  return relPath !== "" && !relPath.startsWith("..") && matchesExclude(relPath);
+}
 
 const SKILLS = [
   "myflow-meta",
@@ -41,16 +86,15 @@ const AGENTS = ["myflow-implement", "myflow-check", "myflow-research"];
 const RUNTIME_AGENTS = ["architect", "reviewer"];
 const PROMPTS = ["myflow-continue", "myflow-finish-work", "myflow-parallel"];
 
-function copyPayload(destination: string): void {
-  for (const dir of PAYLOAD_DIRS) {
-    cpSync(join(ROOT, dir), join(destination, dir), { recursive: true });
-  }
+/** Copy the payload described by the manifest, applying its `exclude` rules. */
+function copyPayload(destination: string, source: string = ROOT): void {
+  const filter = (path: string): boolean => !isExcluded(path, source);
   for (const tree of PAYLOAD_TREES) {
-    cpSync(join(ROOT, tree), join(destination, tree), { recursive: true });
+    cpSync(join(source, tree), join(destination, tree), { recursive: true, filter });
   }
   for (const file of PAYLOAD_FILES) {
     mkdirSync(dirname(join(destination, file)), { recursive: true });
-    cpSync(join(ROOT, file), join(destination, file));
+    cpSync(join(source, file), join(destination, file), { filter });
   }
 }
 
@@ -113,6 +157,75 @@ test("payload carries agents, prompts, skills, and scripts", () => {
     const { frontmatter } = parseFrontmatter(readFileSync(file, "utf-8"));
     assert.equal(frontmatter.name, name);
     assert.equal(typeof frontmatter.description, "string");
+  }
+});
+
+test("copied payload mirrors the manifest, and nothing machine-generated rides along", () => {
+  const destination = mkdtempSync(join(tmpdir(), "myflow-payload-"));
+  try {
+    copyPayload(destination);
+    // The expectation below is not a second manifest: it only reuses the
+    // harness's own inventory constants to prove the copy followed the manifest,
+    // so dropping an entry from `tools/release-payload.json` turns this red.
+    const expected = [
+      ...AGENTS.map((name) => `.pi/agents/${name}.md`),
+      ...PROMPTS.map((name) => `.pi/prompts/${name}.md`),
+      ...SKILLS.map((name) => `.pi/skills/${name}/SKILL.md`),
+      ".myflow/workflow.md",
+      ...["get_context.py", "task.py", "worktree.py", "channel.py"].map((name) => `.myflow/scripts/${name}`),
+      ...RUNTIME_AGENTS.map((name) => `.myflow/agents/${name}.md`),
+    ];
+    const copied = readdirSync(destination, { recursive: true })
+      .map((entry) => String(entry).split(sep).join("/"))
+      .sort();
+    assert.deepEqual(
+      expected.filter((path) => !copied.includes(path)),
+      [],
+      "the copied payload is missing manifest entries",
+    );
+    assert.deepEqual(
+      copied.filter((path) => path.includes("__pycache__") || path.endsWith(".pyc")),
+      [],
+      "machine-generated files must not be copied",
+    );
+  } finally {
+    rmSync(destination, { recursive: true, force: true });
+  }
+});
+
+test("copyPayload applies the manifest exclude rules to a seeded tree", () => {
+  const source = mkdtempSync(join(tmpdir(), "myflow-source-"));
+  const destination = mkdtempSync(join(tmpdir(), "myflow-payload-"));
+  try {
+    const seed = (relPath: string, content = "x"): void => {
+      mkdirSync(dirname(join(source, relPath)), { recursive: true });
+      writeFileSync(join(source, relPath), content);
+    };
+    seed(".pi/extensions/myflow/index.ts", "export default () => {};\n");
+    seed(".myflow/scripts/task.py", "print('x')\n");
+    seed(".myflow/scripts/__pycache__/task.cpython-310.pyc", "pyc");
+    seed(".myflow/scripts/debug.log", "log");
+    seed(".myflow/scripts/scratch.tmp", "tmp");
+    seed(".myflow/agents/architect.md", "---\nname: architect\n---\n");
+    seed(".myflow/workflow.md", "# workflow\n");
+
+    copyPayload(destination, source);
+
+    const copied = readdirSync(destination, { recursive: true })
+      .map((entry) => String(entry).split(sep).join("/"))
+      .sort();
+    assert.deepEqual(copied.filter((path) => /__pycache__|\.pyc$|\.log$|\.tmp$/.test(path)), []);
+    for (const kept of [
+      ".pi/extensions/myflow/index.ts",
+      ".myflow/scripts/task.py",
+      ".myflow/agents/architect.md",
+      ".myflow/workflow.md",
+    ]) {
+      assert.ok(copied.includes(kept), `expected ${kept} to be copied`);
+    }
+  } finally {
+    rmSync(source, { recursive: true, force: true });
+    rmSync(destination, { recursive: true, force: true });
   }
 });
 

@@ -1,0 +1,2 @@
+{"file": ".myflow/spec/harness/index.md", "reason": "校验基准：payload 定义与不进产物的清单是否与实现一致"}
+{"file": "tests/scaffold.test.ts", "reason": "校验基准：清单外置后，这个守卫的断言是否一字未改、是否仍能证明自包含"}

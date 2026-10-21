@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "dirs": [".pi"],
+  "trees": [".myflow/scripts", ".myflow/agents"],
+  "files": [".myflow/workflow.md"],
+  "exclude": ["**/__pycache__/**", "**/*.pyc", "**/.DS_Store", "**/*.tmp", "**/*.log"]
+}

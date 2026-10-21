@@ -1,0 +1,11 @@
+{
+  "title": "release packaging: a copyable myflow payload",
+  "status": "completed",
+  "description": "把 myflow 打包成可以完全迁移到其他项目的初始状态：纯 payload 目录 + zip + INSTALL + 可重复的 release.py + v0.2.0 tag",
+  "slug": "release-payload",
+  "parent": null,
+  "created_at": "2026-10-21T04:35:44Z",
+  "started_at": "2026-10-21T04:37:05Z",
+  "finished_at": "2026-10-21T04:49:03Z",
+  "archived_at": "2026-10-21T04:49:03Z"
+}
