@@ -15,14 +15,16 @@ boundaries, execution flows, dependency hubs, and impact-sensitive areas.
 
 ## How It Is Wired Here
 
-1. MCP server entry in `~/.pi/agent/mcp.json`:
+1. MCP server entry in `~/.pi/agent/mcp.json` (the `command` is the absolute
+   path to the binary on **your** machine — it is deliberately not a path from
+   the machine that authored this file):
 
    ```json
    {
      "mcpServers": {
        "codebase-memory-mcp": {
          "type": "stdio",
-         "command": "C:/Users/wocai/.local/bin/codebase-memory-mcp.exe",
+         "command": "/path/to/codebase-memory-mcp",
          "enabled": true
        }
      }
