@@ -40,6 +40,10 @@ this repository is the whole harness: one Pi extension, five scripts, the skills
   archive/<YYYY-MM>/<slug>/         # archived tasks
   .runtime/sessions/<key>.json      # active-task pointer per session
 tests/                              # harness development only (node --test)
+tools/                              # harness development only, never in the payload
+  release-payload.json              # the single source of truth for the payload list
+  release.py                        # builds dist/myflow-<version>/ + .zip; --check / --verify
+  INSTALL.md                        # installer instructions copied into every release
 ```
 
 ## Payload
@@ -52,7 +56,13 @@ To install the harness in another project, copy:
 
 Do **not** copy `.myflow/spec/`, `.myflow/tasks/`, `.myflow/archive/`,
 `.myflow/.runtime/`, `.myflow/config.yaml`, or `.myflow/worktree.yaml` — those
-belong to the project.
+belong to the project. `tests/`, `package.json`, `tsconfig.json`, and `tools/`
+are harness development and are not copied either.
+
+The payload list has exactly **one source**: `tools/release-payload.json`
+(`dirs` / `trees` / `files` / `exclude`). `tests/scaffold.test.ts` and
+`tools/release.py` both read it, so adding or removing a payload file is a
+manifest edit, never a second list in either consumer.
 `tests/scaffold.test.ts` fails if the payload ever depends on a file outside it.
 
 ## Runtime: the extension

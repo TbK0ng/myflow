@@ -15,6 +15,11 @@ harness itself, so they hold in every project that carries the payload.
 - `.myflow/scripts/`
 - `.myflow/agents/` — the channel runtime's worker definitions
 
+The payload list has exactly **one source**: `tools/release-payload.json`
+(`dirs` / `trees` / `files` / `exclude`). `tests/scaffold.test.ts` and
+`tools/release.py` both read that file, so adding or removing a payload file is
+a manifest edit — never a second list in either consumer.
+
 **Project-owned** — never copy between projects:
 
 - `.myflow/spec/` (this project's conventions), `.myflow/config.yaml`,
@@ -28,6 +33,9 @@ harness itself, so they hold in every project that carries the payload.
 **Harness development** — not needed to run the payload:
 
 - `tests/`, `package.json`, `tsconfig.json`
+- `tools/` — `release-payload.json` (the payload manifest), `release.py` (builds
+  a release from it), `INSTALL.md` (the installer instructions copied into the
+  release). None of these are copied into a target project.
 
 ## Stack And Constraints
 
