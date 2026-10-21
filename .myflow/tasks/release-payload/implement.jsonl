@@ -1,0 +1,3 @@
+{"file": ".pi/skills/myflow-meta/references/harness-conventions.md", "reason": "payload 的正确定义与 harness 开发/项目自有的分界；本任务要把 tools/ 定性为 dev-only"}
+{"file": "tests/scaffold.test.ts", "reason": "现有 payload 清单与 copyPayload 的实现；R1 要把它改成读 manifest 且断言不变"}
+{"file": ".myflow/spec/harness/index.md", "reason": "契约存储；release 相关的 payload 不变量要写进这里"}
