@@ -16,9 +16,9 @@ import {
   writeEntry,
   type BackgroundEntry,
   type BgListRow,
-} from "../.pi/extensions/myflow/background.ts";
+} from "../.pi/extensions/myflow/background/index.ts";
 
-// F5 — `myflow_bg_list`（`.pi/extensions/myflow/background.ts`）。
+// F5 — `myflow_bg_list`（`.pi/extensions/myflow/background/list.ts`）。
 //
 // 这些用例不跑真实 Pi：`createBgListTool` 把工具对象导出来，测试直接调
 // `execute(id, params, signal, onUpdate, fakeCtx)`。注册表条目与日志都是手工

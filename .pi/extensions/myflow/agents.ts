@@ -64,7 +64,7 @@ export function isSafeWriteScope(scope: string): boolean {
  * boundary, not mutual exclusion.
  *
  * It lives here, next to `isSafeWriteScope`, because two callers need the same
- * rule and one of them (`background.ts`) must not import `index.ts`: the
+ * rule and one of them (`background/`) must not import `index.ts`: the
  * `writesUnder` guard (`index.ts`, via `evaluateWriteScope`) and the
  * `myflow_bg_start` `cwd` test (R5/ADR-9). A second copy of this predicate is
  * exactly the kind of drift that lets one boundary be loosened alone.

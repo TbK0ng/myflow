@@ -21,9 +21,9 @@ import {
   logPath,
   readEntry,
   type BgToolRegistration,
-} from "../.pi/extensions/myflow/background.ts";
+} from "../.pi/extensions/myflow/background/index.ts";
 
-// F3 — `myflow_bg_start`（`.pi/extensions/myflow/background.ts`）。
+// F3 — `myflow_bg_start`（`.pi/extensions/myflow/background/start.ts`）。
 //
 // 这些用例不跑真实 Pi：`createBgStartTool` 把工具对象导出来，测试直接调
 // `execute(id, params, signal, onUpdate, fakeCtx)`。`confirm` 是桩，

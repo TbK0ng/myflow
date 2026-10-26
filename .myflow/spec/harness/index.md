@@ -180,7 +180,8 @@ Payload tour and inventory:
     `shellRejectionReason` when none resolves, spawns the shell with argv
     (`shellArgsFor`), and writes the `<taskId>.exit` record itself
     (`writeExitRecord` / `spawnFailureRecord` / `shellUnavailableRecord`).
-  - `.pi/extensions/myflow/background.ts` — the registry (`newTaskId`,
+  - `.pi/extensions/myflow/background/` — `registry.ts` holds the tools' on-disk
+    layer (`newTaskId`,
     `writeEntry` / `readEntry` / `listEntries`, `isAlive`, `resolveStatus`,
     `prune`, cursors) and the four tool builders (`createBgStartTool`,
     `createBgOutputTool`, `createBgListTool`, `createBgStopTool`) plus
@@ -239,7 +240,7 @@ Payload tour and inventory:
     the rejected `cmd.exe` path, message naming the search order). A *missing
     command* is not in that list: the shell starts and exits `127` with no
     `error`.
-  - `ExitRecord` in `background.ts` admits those fields (`shell?: string | null`,
+  - `ExitRecord` in `background/registry.ts` admits those fields (`shell?: string | null`,
     `retries?: number`) so a reader does not need a cast. There is exactly one
     consumer: **`myflow_bg_output` attaches `shell` and `retries` only for a
     finished task** (a `.exit` record exists). `shell` is included even when it
@@ -375,6 +376,14 @@ session, and the invariants above are what keep it honest.
 
 ## Gotchas
 
+> **Gotcha**: the shipped tree is English, the tests are not (yet).
+>
+> Everything that ships — comments, docs, tool descriptions, dialog text — is
+> English. The test files still carry Chinese prose and assertion messages from
+> when they were written, and translating them is churn that proves nothing.
+> New test prose is English, so the two converge instead of drifting apart; do
+> not add a second language to the shipped tree to match an old test.
+
 > **Gotcha**: "no declaration" and "blank declaration" mean deliberately
 > different things.
 >
@@ -398,6 +407,8 @@ session, and the invariants above are what keep it honest.
 
 ## Quality Check
 
+- [ ] No shipped file (extension, scripts, docs, skills) contains non-English
+      prose or user-facing text; the tests are the only allowed exception.
 - [ ] `npm run check` green (from the main session, or with the `MYFLOW_*`
       env vars cleared) — locally and in CI (`.github/workflows/ci.yml`, the one
       supported platform, `windows-latest`).

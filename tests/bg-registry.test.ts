@@ -24,9 +24,9 @@ import {
   writeEntry,
   writeFileAtomic,
   type BackgroundEntry,
-} from "../.pi/extensions/myflow/background.ts";
+} from "../.pi/extensions/myflow/background/index.ts";
 
-// F2 — the background-task registry (`.pi/extensions/myflow/background.ts`).
+// F2 — the background-task registry (`.pi/extensions/myflow/background/registry.ts`).
 //
 // These tests exercise only the pure on-disk layer: id minting, entry
 // read/write, the fixed status precedence, bad-file tolerance, 24h pruning and

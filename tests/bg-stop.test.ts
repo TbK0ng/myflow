@@ -23,9 +23,9 @@ import {
   readEntry,
   writeEntry,
   type BackgroundEntry,
-} from "../.pi/extensions/myflow/background.ts";
+} from "../.pi/extensions/myflow/background/index.ts";
 
-// F6 — `myflow_bg_stop`（`.pi/extensions/myflow/background.ts`）。
+// F6 — `myflow_bg_stop`（`.pi/extensions/myflow/background/stop.ts`）。
 //
 // 这些用例不跑真实 Pi：`createBgStopTool` 把工具对象导出来，测试直接调
 // `execute(id, params, signal, onUpdate, fakeCtx)`。

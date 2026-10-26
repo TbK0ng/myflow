@@ -23,7 +23,11 @@ start on another platform instead of half-working.
   extensions/myflow/subagent.ts     # myflow_subagent tool (single/parallel/chain)
   extensions/myflow/ask.ts          # myflow_ask_user tool (one choice question)
   extensions/myflow/approval.ts     # myflow_request_approval tool (writes approval.json)
-  extensions/myflow/background.ts   # four myflow_bg_* tools + the on-disk registry
+  extensions/myflow/background/      # the four myflow_bg_* tools + the on-disk registry
+    index.ts                         #   public surface: BG_TOOL_NAMES + registerMyflowBackground
+    registry.ts                      #   the on-disk layer (entry, pid, exit, cursor, prune)
+    tools.ts                         #   shared plumbing: registration, refusals, cwd check
+    {start,output,list,stop}.ts       #   one tool each
   extensions/myflow/agents.ts       # agent discovery from .pi/agents
   extensions/myflow/status.ts       # status report builder (used by the command)
   extensions/myflow/*.ts            # pure helpers the extension imports: root lookup,
@@ -120,7 +124,7 @@ or an approval. The gate's contracts live in `references/harness-conventions.md`
 
 The four `myflow_bg_*` tools (`myflow_bg_start`, `myflow_bg_output`,
 `myflow_bg_list`, `myflow_bg_stop`) run a command that outlives the session.
-`background.ts` owns the registry (`<taskId>.json` under
+`background/registry.ts` owns the registry (`<taskId>.json` under
 `.myflow/.runtime/background/`) and injects nothing back into `index.ts`;
 `scripts/bg_runner.mjs` is the detached wrapper that spawns the command through
 a resolved POSIX shell and records `<taskId>.exit` itself, which is the only way
@@ -213,7 +217,7 @@ with this skill in `references/harness-conventions.md`.
 | A hook's behavior | `.pi/extensions/myflow/index.ts` |
 | `myflow_subagent` modes, progress, spawn flags | `.pi/extensions/myflow/subagent.ts` |
 | Choice questions, plan approval, the gate | `.pi/extensions/myflow/ask.ts`, `.pi/extensions/myflow/approval.ts`; enforcing side in `.myflow/scripts/task.py` |
-| Background tasks (start/output/list/stop) | `.pi/extensions/myflow/background.ts`; the wrapper in `.myflow/scripts/bg_runner.mjs` |
+| Background tasks (start/output/list/stop) | `.pi/extensions/myflow/background/`; the wrapper in `.myflow/scripts/bg_runner.mjs` |
 | Which agent files exist / their tools | `.pi/agents/*.md`; discovery in `agents.ts` |
 | `/myflow-status` output | `.pi/extensions/myflow/status.ts` |
 | Task context budgets or trust rules | `.myflow/config.yaml`, `.pi/extensions/myflow/context-injection.ts` |

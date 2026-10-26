@@ -24,7 +24,7 @@ import {
   registerMyflowBackground,
   resolveStatus,
   type BgPi,
-} from "./background.ts";
+} from "./background/index.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export type { ExtensionAPI };
 
@@ -85,8 +85,8 @@ const PATH_SCOPED_WRITE_TOOLS = new Set(["write", "edit"]);
 
 /**
  * `normalizeWriterPath` / `isWithinWriteScope` moved to `./agents.ts` so
- * `background.ts` can run the same containment test for `cwd` (R5/ADR-9).
- * `background.ts` cannot import this module: `index.ts` already imports it, so
+ * `background/` can run the same containment test for `cwd` (R5/ADR-9).
+ * `background/` cannot import this module: `index.ts` already imports it, so
  * the reverse edge would be a cycle. These re-exports keep every existing
  * importer of `./index.ts` working unchanged.
  */

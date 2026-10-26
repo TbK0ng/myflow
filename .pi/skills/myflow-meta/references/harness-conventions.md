@@ -196,7 +196,7 @@ Keep these consistent across files; change them together or not at all:
 
 - **`taskkill` must be called with an argv array**, never through Git Bash: MSYS
   rewrites `/F` into `F:/` and the command fails with "invalid argument".
-  `terminateTree` in `background.ts` spawns it that way, and the stop tests must
+  `terminateTree` in `background/stop.ts` spawns it that way, and the stop tests must
   not route the call through a shell either.
 - **The `bash` on `PATH` may be the WSL launcher.**
   `C:\Windows\System32\bash.exe` is the WSL entry point, which this project

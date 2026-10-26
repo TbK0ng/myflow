@@ -22,9 +22,9 @@ import {
   writeCursor,
   writeEntry,
   type BackgroundEntry,
-} from "../.pi/extensions/myflow/background.ts";
+} from "../.pi/extensions/myflow/background/index.ts";
 
-// F4 — `myflow_bg_output`（`.pi/extensions/myflow/background.ts`）。
+// F4 — `myflow_bg_output`（`.pi/extensions/myflow/background/output.ts`）。
 //
 // 这些用例不跑真实 Pi：`createBgOutputTool` 把工具对象导出来，测试直接调
 // `execute(id, params, signal, onUpdate, fakeCtx)`。注册表条目与日志文件都是

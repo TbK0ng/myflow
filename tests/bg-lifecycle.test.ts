@@ -26,9 +26,9 @@ import {
   logPath,
   readEntry,
   resolveStatus,
-} from "../.pi/extensions/myflow/background.ts";
+} from "../.pi/extensions/myflow/background/index.ts";
 
-// F7 — 接线与生命周期（`.pi/extensions/myflow/index.ts` + `background.ts` 的注册面）。
+// F7 — 接线与生命周期（`.pi/extensions/myflow/index.ts` + `background/index.ts` 的注册面）。
 //
 // F1–F6 只导出了四个工具 builder，全仓没有第二个文件 import 它们，所以四个
 // `myflow_bg_*` 工具在真实会话里**不存在**。本文件锁死三件事：
