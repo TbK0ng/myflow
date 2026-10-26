@@ -17,7 +17,7 @@
  * under `node --test` without installing the Pi package.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { isAbsolute } from "node:path";
 import { dirname, join, resolve } from "node:path";
 
@@ -204,7 +204,7 @@ function loadAgentsFromDir(dir: string): AgentConfig[] {
   const agents: AgentConfig[] = [];
   if (!existsSync(dir)) return agents;
 
-  let entries: ReturnType<typeof readdirSync>;
+  let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch {

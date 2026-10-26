@@ -78,7 +78,7 @@ function makeMockAPI(root: string): {
   const tools: Array<Record<string, unknown>> = [];
   const commands: Record<string, { handler: (args: string, ctx: HookContext) => Promise<void> }> = {};
   const handlers: Record<string, (event: unknown, ctx: HookContext) => Promise<void>> = {};
-  const api: ExtensionAPI = {
+  const api = {
     on: (name: string, handler: (event: unknown, ctx: HookContext) => Promise<void>) => {
       handlers[name] = handler;
     },
@@ -96,7 +96,7 @@ function makeMockAPI(root: string): {
     sendMessage: (msg: Message) => {
       sent.push(msg);
     },
-  };
+  } as unknown as ExtensionAPI;
   const ctx: HookContext = {
     cwd: root,
     session: { id: "test", contextKey: "pi_session_test" },
@@ -511,7 +511,7 @@ function short(hash: string): string {
   return hash.split(":", 2)[1].slice(0, 8);
 }
 
-function runStatusCommand(root: string): string {
+function runStatusCommand(root: string): Promise<string> {
   const { api, sent, commands } = makeMockAPI(root);
   extension(api);
   return commands["myflow-status"]

@@ -52,7 +52,7 @@ export interface HookContext {
   };
   model?: { provider: string; id: string };
   thinkingLevel?: string;
-  ui?: { notify: (msg: string, level?: string) => void };
+  ui?: { notify: (msg: string, level?: "info" | "warning" | "error") => void };
 }
 
 /** Event payload for the `input` hook. */

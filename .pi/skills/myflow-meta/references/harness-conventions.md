@@ -238,13 +238,13 @@ Keep these consistent across files; change them together or not at all:
 
 ## Quality Check
 
-- [ ] `node --test tests/` passes.
+- [ ] `npm run check` passes (typecheck, then the suite).
 - [ ] The extension still loads from a payload-only copy
   (`tests/scaffold.test.ts`).
 - [ ] New behavior has a test that fails when the behavior is reverted.
 - [ ] `python3 .myflow/scripts/get_context.py` and `task.py current --source`
   still run from the project root.
-- [ ] `node --test tests/` covers `worktree.py` (create/list/verify/remove/prune)
+- [ ] The suite covers `worktree.py` (create/list/verify/remove/prune)
   and the verify gate.
 - [ ] No instruction file (skill, prompt, `workflow.md`) now describes
   something that does not exist.

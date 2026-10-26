@@ -51,13 +51,13 @@ type ExecResult = {
   isError?: boolean;
 };
 
-type ToolExec = (
+type ToolExec = { execute: (
   id: string,
   params: Record<string, unknown>,
   signal: AbortSignal | undefined,
   onUpdate: ((partial: unknown) => void) | undefined,
   ctx: Record<string, unknown>,
-) => Promise<ExecResult>;
+) => Promise<ExecResult> };
 
 /**
  * 一个最小但真实的工程：`.myflow/workflow.md`（`findProjectRoot` 的锚点）、

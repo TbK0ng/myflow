@@ -20,6 +20,7 @@ import {
   listEntries,
   logPath,
   readEntry,
+  type BgToolRegistration,
 } from "../.pi/extensions/myflow/background.ts";
 
 // F3 — `myflow_bg_start`（`.pi/extensions/myflow/background.ts`）。
@@ -159,7 +160,7 @@ function stubSpawnSucceeding(pid = 4242): {
 function makeTool(
   overrides: {
     isSubAgent?: boolean;
-    spawnProcess?: unknown;
+    spawnProcess?: (...args: unknown[]) => unknown;
     runnerPath?: string;
   } = {},
 ): { execute: (...args: unknown[]) => Promise<ToolResult> } {
@@ -168,7 +169,9 @@ function makeTool(
     isSubAgent: overrides.isSubAgent ?? false,
     runnerPath: overrides.runnerPath ?? RUNNER,
     ...(overrides.spawnProcess ? { spawnProcess: overrides.spawnProcess } : {}),
-  }) as unknown as { execute: (...args: unknown[]) => Promise<ToolResult> };
+  } as unknown as BgToolRegistration) as unknown as {
+    execute: (...args: unknown[]) => Promise<ToolResult>;
+  };
 }
 
 /**

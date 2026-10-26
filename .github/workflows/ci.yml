@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # One platform, because the harness supports exactly one: Windows with Git
+    # Bash. A matrix here would imply a portability claim the code no longer makes.
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # The scripts and the tests invoke `python3`; the Windows runner installs
+      # `python` only. A copy in a shim directory is the same interpreter under
+      # the spelling the harness calls.
+      - name: Make python3 resolvable
+        shell: pwsh
+        run: |
+          $shim = Join-Path $env:RUNNER_TEMP "python3-shim"
+          New-Item -ItemType Directory -Force -Path $shim | Out-Null
+          Copy-Item (Get-Command python).Source (Join-Path $shim "python3.exe")
+          $shim | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Prove the interpreter the harness calls
+        run: python3 --version
+
+      - run: npm ci
+
+      - name: Typecheck, then the suite
+        run: npm run check

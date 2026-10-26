@@ -8,12 +8,12 @@ Payload tour and inventory:
 
 ## Pre-Development Checklist
 
-- [ ] Run `node --test tests/` **from the main session**, not from inside a
+- [ ] Run `npm run check` (typecheck, then the suite) **from the main session**, not from inside a
       sub-agent. The suite is not hermetic w.r.t. `MYFLOW_AGENT_TYPE` /
       `MYFLOW_CONTEXT_ID`: when those leak in, ~14 unrelated tests fail because
       the extension sees itself as a sub-agent. Clear them before believing a
       failure:
-      `env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLOW_WRITES_UNDER node --test tests/`
+      `env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLOW_WRITES_UNDER npm run check`
 - [ ] Decide whether you are changing a **contract** (env key, frontmatter key,
       file format, tool schema) or only behavior inside one module. A contract
       change updates this file *and* every copy of the rule in the same change.
@@ -398,8 +398,9 @@ session, and the invariants above are what keep it honest.
 
 ## Quality Check
 
-- [ ] `node --test tests/` green (from the main session, or with the `MYFLOW_*`
-      env vars cleared).
+- [ ] `npm run check` green (from the main session, or with the `MYFLOW_*`
+      env vars cleared) — locally and in CI (`.github/workflows/ci.yml`, the one
+      supported platform, `windows-latest`).
 - [ ] Every copy of a changed rule was updated together: the `subagent.ts` tool
       description and error text, `.myflow/workflow.md` Dispatch Protocol,
       `harness-conventions.md`, and the `myflow-meta` / `myflow-brainstorm`

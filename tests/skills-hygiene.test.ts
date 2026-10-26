@@ -210,7 +210,7 @@ test("instruction files only reference script subcommands that exist", () => {
     // doc that names it — the exact drift this test hunts.
     subcommands.set(
       script,
-      new Set(content.matchAll(/add_parser\(\s*"([a-z_-]+)"/g).map((m) => m[1] as string)),
+      new Set(Array.from(content.matchAll(/add_parser\(\s*"([a-z_-]+)"/g), (m) => m[1] as string)),
     );
   }
 

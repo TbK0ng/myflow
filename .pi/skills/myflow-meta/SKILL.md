@@ -35,7 +35,7 @@ start on another platform instead of half-working.
 .myflow/
   agents/{architect,reviewer}.md      # channel runtime peers (design review, code review)
   workflow.md                       # phases, routing, per-turn state blocks
-  worktree.yaml                     # parallel-session config + verify commands (project-owned)
+  worktree.yaml                     # optional, project-owned: parallel sessions + verify commands
   scripts/get_context.py            # session context (workflow + task + git)
   scripts/task.py                   # task lifecycle + session pointer
   scripts/bg_runner.mjs             # detached background-task wrapper (records its own exit)
@@ -62,8 +62,10 @@ To install the harness in another project, copy:
 
 Do **not** copy `.myflow/spec/`, `.myflow/tasks/`, `.myflow/archive/`,
 `.myflow/.runtime/`, `.myflow/config.yaml`, or `.myflow/worktree.yaml` — those
-belong to the project. `tests/`, `package.json`, `tsconfig.json`, and `tools/`
-are harness development and are not copied either.
+belong to the project. Both config files are optional: every reader falls back
+to built-in defaults, so a project without them is configured, not broken.
+`tests/`, `package.json`, `tsconfig.json`, and `tools/` are harness development
+and are not copied either.
 
 The payload list has exactly **one source**: `tools/release-payload.json`
 (`dirs` / `trees` / `files` / `exclude`). `tests/scaffold.test.ts` and
@@ -231,7 +233,7 @@ with this skill in `references/harness-conventions.md`.
 ## Verify A Change
 
 ```bash
-node --test tests/
+npm run check                     # tsc --noEmit, then the suite
 python3 .myflow/scripts/get_context.py
 python3 .myflow/scripts/task.py current --source
 python3 .myflow/scripts/worktree.py config
@@ -241,7 +243,8 @@ python3 .myflow/scripts/channel.py list --all
 The extension must stay loadable by Pi from a payload-only copy: run
 `node --test tests/scaffold.test.ts` after changing anything under `.pi/` or
 under `.myflow/workflow.md` / `.myflow/scripts/`. Only `import type` from
-`@earendil-works/pi-coding-agent`, Node builtins otherwise, no `node_modules`.
+`@earendil-works/pi-coding-agent`, Node builtins otherwise, no runtime
+dependency on `node_modules`.
 
 ## Rules
 

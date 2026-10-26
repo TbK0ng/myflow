@@ -94,7 +94,7 @@ function makeApprovable(root: string): void {
   writeFileSync(join(taskDir(root), "questions.jsonl"), questionRow());
 }
 
-type ToolExec = (
+type ToolExec = { execute: (
   id: string,
   params: Record<string, unknown>,
   signal: AbortSignal | undefined,
@@ -104,7 +104,7 @@ type ToolExec = (
   content: Array<{ text: string }>;
   details: Record<string, unknown>;
   isError?: boolean;
-}>;
+}> };
 
 function makeTool(overrides: { isSubAgent?: boolean } = {}): ToolExec {
   return createApprovalTool({

@@ -7,7 +7,12 @@
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "allowJs": true,
+    "checkJs": false
   },
-  "include": [".pi/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    ".pi/**/*.ts",
+    "tests/**/*.ts"
+  ]
 }

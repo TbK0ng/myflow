@@ -35,7 +35,7 @@ cat .myflow/spec/index.md 2>/dev/null || echo "NO_SPEC"
 ## Step 3: Run Project Checks
 
 ```bash
-node --test tests/
+npm run check      # typecheck, then node --test "tests/*.test.ts"
 ```
 
 Fix every failure before continuing. Also re-run any command the change

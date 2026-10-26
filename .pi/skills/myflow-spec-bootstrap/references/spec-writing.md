@@ -70,7 +70,7 @@ Before finishing:
 
 ```bash
 grep -RIn "To be filled\|TODO: fill\|placeholder\|<package>\|<layer>" .myflow/spec
-node --test tests/
+npm run check
 ```
 
 Also check links, `index.md` files, and whether any spec still describes a

@@ -630,9 +630,9 @@ test("H6 -8 starting 且无 pid → 明确错误、不杀、不写；.pid 出现
     assert.equal(stopped.isError, undefined, `可寻址后必须能正常 stop：${stopped.content[0]?.text}`);
     assert.equal(stopped.details.stopped, true);
     assert.equal(stopped.details.status, "stopped");
-    assert.equal(stopped.details.pid, probe.pid, "必须用 .pid 握手里的 pid，而不是条目里的 0");
+    assert.equal(stopped.details.pid, probe!.pid, "必须用 .pid 握手里的 pid，而不是条目里的 0");
     assert.equal(terminateCalls, 1);
-    assert.equal(await waitFor(() => !isAlive(probe.pid), 5_000), true, "探针必须已被杀掉");
+    assert.equal(await waitFor(() => !isAlive(probe!.pid), 5_000), true, "探针必须已被杀掉");
     assert.equal(readEntry(dir, id)?.status, "stopped");
 
     // 一个字节都不许落在 `terminate(0)` 这样的调用上：kill 的参数必须是真实正 pid。

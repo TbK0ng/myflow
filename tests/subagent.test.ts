@@ -385,9 +385,9 @@ test("isWriteCapable/hasWriteScope: research is a bounded writer", () => {
   assert.equal(isSafeWriteScope("..\\escape"), false, "a backslash traversal is caught too");
   assert.equal(isSafeWriteScope("/abs/path"), false);
   assert.equal(isSafeWriteScope("C:\\abs"), false, "a drive-letter path is caught on every platform");
-  assert.equal(isWriteCapable({ name: "custom", systemPrompt: "", source: "project", filePath: "" }), true);
+  assert.equal(isWriteCapable({ name: "custom", description: "", systemPrompt: "", filePath: "" }), true);
   assert.equal(
-    isWriteCapable({ name: "reader", systemPrompt: "", source: "project", filePath: "", tools: ["read", "grep"] }),
+    isWriteCapable({ name: "reader", description: "", systemPrompt: "", filePath: "", tools: ["read", "grep"] }),
     false,
   );
 });

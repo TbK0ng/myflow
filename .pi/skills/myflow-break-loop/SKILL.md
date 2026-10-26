@@ -84,7 +84,7 @@ Do not stop at the table. Immediately:
 
 1. Update the spec files you listed.
 2. Add the regression test.
-3. Run `node --test tests/` and confirm it passes.
+3. Run `npm run check` and confirm it passes.
 4. Commit the code fix and the spec/test update together.
 
 > The analysis is worthless if it stays in chat. The value is in the spec
