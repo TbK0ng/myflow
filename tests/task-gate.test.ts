@@ -91,6 +91,8 @@ test("task.py start refuses a seeded-but-uncurated task with an actionable hint"
     assert.notEqual(result.status, 0, "a seeded-but-uncurated task must not start");
     assert.match(result.stderr, /no curated entries/);
     assert.match(result.stderr, /add-context/, "the hint must name the write entry");
+    assert.match(result.stderr, /Curate implement\.jsonl:.*add-context .* implement /);
+    assert.match(result.stderr, /Curate check\.jsonl:.*add-context .* check /, "both empty manifests get their own hint");
     assert.match(result.stderr, /--allow-empty-context/, "the hint must name the escape hatch");
 
     // Refused, not half-started: status and pointer are untouched.

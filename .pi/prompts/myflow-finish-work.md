@@ -15,18 +15,21 @@ Confirm you are finishing the task you think you are, and note the dirty files.
 
 ## Step 2: Verify
 
+Run the project's configured verify commands:
+
 ```bash
-node --test tests/
+python3 ./.myflow/scripts/worktree.py verify
 ```
 
-Then run any check the change affects:
+If it prints `no verify commands configured` (exit 0), this project has none;
+say so and continue. Then run any check the change affects:
 
 ```bash
 python3 ./.myflow/scripts/get_context.py
 python3 ./.myflow/scripts/task.py current --source
 ```
 
-Fix failures before continuing. Do not commit on a red test run.
+Fix failures before continuing. Do not commit on a red verify run.
 
 ## Step 3: Update Spec
 

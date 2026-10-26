@@ -82,6 +82,17 @@ test("worktree config: defaults and file values", () => {
   }
 });
 
+test("worktree config: a UTF-8 BOM does not hide the verify commands", () => {
+  // Windows editors commonly add a BOM; reading it as part of the first key
+  // used to disable the gate silently ("no verify commands configured", exit 0).
+  const project = makeRepo("\uFEFFverify:\n  - node --version\n");
+  try {
+    assert.match(worktree(project, ["verify"]), /verify passed/);
+  } finally {
+    cleanup(project);
+  }
+});
+
 test("worktree create: branch, copied files, and registry record", () => {
   const project = makeRepo(
     ["worktree_dir: ../worktrees", "copy:", "  - .myflow/keep.txt", "post_create:", "  - node --version"].join("\n") + "\n",

@@ -75,6 +75,10 @@ export interface ApprovalContext {
   cwd: string;
   mode?: string;
   hasUI?: boolean;
+  /** Pi's read-only session manager; supplies the id recorded in approval.json. */
+  sessionManager?: {
+    getSessionId?: () => string | undefined;
+  };
   ui?: {
     confirm?: (title: string, message: string) => Promise<boolean>;
   };
@@ -311,7 +315,7 @@ export function createApprovalTool(registration: ApprovalRegistration = {}): Rec
       const hashLabel = shortHash(gate.plan_hash);
       const agreed = await confirm.call(
         ctx.ui,
-        "批准这个 plan？",
+        "Approve this plan?",
         `Plan files: ${gate.plan_files.join(", ")}\nPlan hash: ${hashLabel}`,
       );
       if (agreed !== true) {
@@ -324,10 +328,13 @@ export function createApprovalTool(registration: ApprovalRegistration = {}): Rec
       // Field-for-field the shape `task.py`'s `_write_approval` writes, so
       // either writer produces a record the reader accepts. The hash and the
       // file list are taken verbatim from gate-info, never recomputed here.
+      // `PI_SESSION_ID` is only injected into shell tools, so prefer the id the
+      // extension context exposes; keep the env fallback for hosts that set it.
+      const sessionId = (ctx.sessionManager?.getSessionId?.() ?? process.env.PI_SESSION_ID ?? "").trim();
       const approval = {
         approved_at: isoTimestamp(),
         approved_by: APPROVED_BY,
-        session_id: (process.env.PI_SESSION_ID ?? "").trim() || null,
+        session_id: sessionId || null,
         plan_files: gate.plan_files,
         plan_hash: gate.plan_hash,
         questions_asked: gate.questions_answered,

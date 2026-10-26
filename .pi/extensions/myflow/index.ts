@@ -216,6 +216,27 @@ function getTaskContext(taskDir: string, projectRoot: string, agentType?: AgentT
   return buildTaskContext(projectRoot, taskDir, agentType);
 }
 
+/**
+ * Replace every custom message of one type with a single fresh copy, preserving
+ * its position. Empty content removes the type entirely. Used for the two
+ * session-scoped projections (`session-context`, `task-context`) so a refresh
+ * cannot leave duplicates behind.
+ */
+function projectCustomMessage(messages: Message[], customType: string, content: string): Message[] {
+  const replacement: Message | null = content
+    ? { role: "custom", customType, content, display: false, timestamp: Date.now() }
+    : null;
+  let replaced = false;
+  const projected = messages.flatMap((message) => {
+    if (message.customType !== customType) return [message];
+    if (replaced || !replacement) return [];
+    replaced = true;
+    return [replacement];
+  });
+  if (replacement && !replaced) projected.push(replacement);
+  return projected;
+}
+
 function runVerifyCommands(projectRoot: string): string | null {
   const script = join(projectRoot, ".myflow", "scripts", "worktree.py");
   if (!existsSync(script)) return null;
@@ -240,6 +261,11 @@ export default function extension(pi: ExtensionAPI): void {
   const isSubAgent = agentType !== null;
   let lastCompactionTs = 0;
   let lastInjectionTs = 0;
+  // Identity of the task snapshot the last session-context was built from
+  // (`<taskDir>|<status>`). `session-context` is sent once at session_start;
+  // when the active task is created, switched, archived, or changes phase, the
+  // context hook refreshes it instead of leaving a stale "no_task" snapshot.
+  let lastSessionSnapshot: string | null = null;
   let verifyAttempts = 0;
   // Background tasks this session started, by id. Ids only: the registry on
   // disk stays the source of truth and is read on demand — a session start
@@ -319,7 +345,8 @@ export default function extension(pi: ExtensionAPI): void {
       pi.sendMessage({ customType: "session-context", content: sessionCtx, display: false });
     }
 
-    const { taskDir } = resolveActiveTaskStatus(projectRoot, contextKey);
+    const { taskDir, status } = resolveActiveTaskStatus(projectRoot, contextKey);
+    lastSessionSnapshot = `${taskDir ?? ""}|${status}`;
     if (taskDir) {
       const taskCtx = getTaskContext(taskDir, projectRoot, agentType);
       if (taskCtx) pi.sendMessage({ customType: "task-context", content: taskCtx, display: false });
@@ -375,8 +402,16 @@ export default function extension(pi: ExtensionAPI): void {
 
     const contextKey = deriveContextKey(ctx);
     const messages = contextEvent.messages as Message[];
-    const { taskDir } = resolveActiveTaskStatus(projectRoot, contextKey);
+    const { taskDir, status } = resolveActiveTaskStatus(projectRoot, contextKey);
     const currentTaskContext = taskDir ? getTaskContext(taskDir, projectRoot, agentType) : "";
+    const sessionSnapshot = `${taskDir ?? ""}|${status}`;
+    // Sub-agents get only the task context (session_start returns before the
+    // session-context injection); do not project it into their requests.
+    const sessionContextChanged = !isSubAgent && sessionSnapshot !== lastSessionSnapshot;
+    const currentSessionContext = sessionContextChanged
+      ? buildSessionContext(projectRoot, contextKey)
+      : "";
+    if (sessionContextChanged) lastSessionSnapshot = sessionSnapshot;
 
     const taskContextIndexes = messages
       .map((message, index) => (message.customType === "task-context" ? index : -1))
@@ -388,35 +423,28 @@ export default function extension(pi: ExtensionAPI): void {
 
     let projectedMessages = messages;
     if (taskContextChanged) {
-      const replacement = currentTaskContext
-        ? {
-            role: "custom",
-            customType: "task-context",
-            content: currentTaskContext,
-            display: false,
-            timestamp: Date.now(),
-          }
-        : null;
-      let replaced = false;
-      projectedMessages = messages.flatMap((message) => {
-        if (message.customType !== "task-context") return [message];
-        if (replaced || !replacement) return [];
-        replaced = true;
-        return [replacement];
-      });
-      if (replacement && !replaced) projectedMessages.push(replacement);
+      projectedMessages = projectCustomMessage(projectedMessages, "task-context", currentTaskContext);
+    }
+    if (sessionContextChanged) {
+      projectedMessages = projectCustomMessage(projectedMessages, "session-context", currentSessionContext);
     }
 
     const cached = turnCache.get(projectRoot, contextKey);
     const skipping = !cached.workflowMsg;
 
-    if (!taskContextChanged && !skipping && lastInjectionTs > lastCompactionTs) return;
+    if (!taskContextChanged && !sessionContextChanged && !skipping && lastInjectionTs > lastCompactionTs) return;
 
     if (skipping) {
       const withoutBreadcrumb = projectedMessages.filter(
         (message) => !(message.role === "custom" && message.customType === "workflow-state"),
       );
-      if (withoutBreadcrumb.length === projectedMessages.length && !taskContextChanged) return;
+      if (
+        withoutBreadcrumb.length === projectedMessages.length &&
+        !taskContextChanged &&
+        !sessionContextChanged
+      ) {
+        return;
+      }
       lastInjectionTs = Date.now();
       return { messages: withoutBreadcrumb };
     }
@@ -427,7 +455,7 @@ export default function extension(pi: ExtensionAPI): void {
         projectedMessages[i].customType === "workflow-state"
       ) {
         lastInjectionTs = Date.now();
-        return taskContextChanged ? { messages: projectedMessages } : undefined;
+        return taskContextChanged || sessionContextChanged ? { messages: projectedMessages } : undefined;
       }
     }
 

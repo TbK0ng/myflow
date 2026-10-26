@@ -1,7 +1,20 @@
 node_modules/
+# Machine-local Pi state (`pi install -l` checkouts, `shellPath` settings); never shipped.
+.pi/git/
+.pi/npm/
+.pi/settings.json
 *.log
 .DS_Store
 __pycache__/
 .myflow/.runtime/
 .codebase-memory/
 dist/
+# mattpocock/skills output (setup, domain-modeling, to-spec/to-tickets, triage); local only, never shipped.
+/AGENTS.md
+/GLOSSARY.md
+/GLOSSARY-MAP.md
+/docs/adr/
+/docs/agents/
+/.scratch/
+/.out-of-scope/
+/to-questionnaire-*.md

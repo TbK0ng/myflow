@@ -1,0 +1,9 @@
+# Keep text files LF in every checkout. Without this, Windows'
+# core.autocrlf=true turns the prompt/skill Markdown into CRLF, and tests that
+# assert on raw file content fail on an otherwise clean checkout.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary

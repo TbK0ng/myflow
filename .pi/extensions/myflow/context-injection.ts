@@ -88,7 +88,7 @@ export function taskContextSignature(
 export function readContextInjectionLimits(projectRoot: string): ContextInjectionLimits {
   let config = "";
   try {
-    config = readFileSync(join(projectRoot, ".myflow", "config.yaml"), "utf-8");
+    config = readFileSync(join(projectRoot, ".myflow", "config.yaml"), "utf-8").replace(/^\uFEFF/, "");
   } catch {
     return { ...DEFAULT_CONTEXT_INJECTION_LIMITS };
   }
@@ -351,7 +351,7 @@ export function resolveTrustedRoots(projectRoot: string): string[] {
   let config: { trustedDirs: string[]; autoTrustSymlinks?: boolean } = { trustedDirs: [] };
   if (existsSync(configPath)) {
     try {
-      config = parseChannelTrustSection(readFileSync(configPath, "utf-8"));
+      config = parseChannelTrustSection(readFileSync(configPath, "utf-8").replace(/^\uFEFF/, ""));
     } catch {
       // ignore
     }

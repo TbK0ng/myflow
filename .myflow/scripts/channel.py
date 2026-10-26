@@ -146,7 +146,7 @@ def read_worker_guard() -> dict:
     if not CONFIG_PATH.is_file():
         return guard
     try:
-        lines = CONFIG_PATH.read_text(encoding="utf-8").splitlines()
+        lines = CONFIG_PATH.read_text(encoding="utf-8-sig").splitlines()
     except OSError:
         return guard
     in_channel = False
@@ -186,7 +186,7 @@ def read_events(name: str, scope: str) -> list[dict]:
         return []
     events: list[dict] = []
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
             if not line.strip():
                 continue
             try:
@@ -249,7 +249,7 @@ def read_workers(scope: str) -> list[dict]:
     if not path.is_file():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError):
         return []
     return data.get("workers", []) if isinstance(data, dict) else []
@@ -506,13 +506,16 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_send(args: argparse.Namespace) -> int:
     if not _require_channel(args.name, args.scope):
         return 1
-    text = args.text
+    # `--text` is the documented form; keep the positional form working too.
+    # Explicit sources win over positional words, and the precedence is
+    # deterministic when more than one is supplied.
+    text = args.text_opt
     if args.stdin:
         text = sys.stdin.read()
     elif args.text_file:
         text = Path(args.text_file).read_text(encoding="utf-8")
-    elif isinstance(text, list):
-        text = " ".join(text)
+    elif text is None:
+        text = " ".join(args.text)
     text = (text or "").strip()
     if not text:
         print("error: empty message", file=sys.stderr)
@@ -665,9 +668,12 @@ def cmd_spawn(args: argparse.Namespace) -> int:
         worker_env["MYFLOW_VERIFY_GATE"] = "1"
 
     if args.dry_run:
+        # Never dump the whole environment: it carries provider credentials and
+        # proxy configuration that must not leak into a plan or a CI log.
+        safe_env = {key: value for key, value in worker_env.items() if key.startswith("MYFLOW_")}
         print(
             json.dumps(
-                {"handle": handle, "command": command, "env": worker_env, "log": str(log_path), "since": since},
+                {"handle": handle, "command": command, "env": safe_env, "log": str(log_path), "since": since},
                 ensure_ascii=False,
             )
         )
@@ -823,6 +829,7 @@ def main() -> int:
     p_send = with_scope(sub.add_parser("send", help="append a message"))
     p_send.add_argument("name")
     p_send.add_argument("text", nargs="*", default=[], help="message text; long text should use --stdin or --text-file")
+    p_send.add_argument("--text", dest="text_opt", default=None, help="message text (equivalent to the positional form)")
     p_send.add_argument("--as", dest="as_handle", required=True)
     p_send.add_argument("--to", default=None)
     p_send.add_argument("--kind", default=None)

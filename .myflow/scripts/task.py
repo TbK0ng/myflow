@@ -222,7 +222,7 @@ def _context_max_file_bytes() -> int:
     if not config.is_file():
         return default
     try:
-        text = config.read_text(encoding="utf-8")
+        text = config.read_text(encoding="utf-8-sig")
     except OSError:
         return default
     in_section = False
@@ -671,11 +671,13 @@ def cmd_start(args: argparse.Namespace) -> int:
             verb = "has" if len(empty_manifests) == 1 else "have"
             print(f"error: {joined} {verb} no curated entries", file=sys.stderr)
             print("Sub-agents (implement/check) would run with zero spec context.", file=sys.stderr)
-            print(
-                f'  Curate:  python3 .myflow/scripts/task.py add-context {args.task_dir} '
-                'implement <path> "<why>"',
-                file=sys.stderr,
-            )
+            for name in empty_manifests:
+                action = name[: -len(".jsonl")]
+                print(
+                    f'  Curate {name}: python3 .myflow/scripts/task.py add-context {args.task_dir} '
+                    f'{action} <path> "<why>"',
+                    file=sys.stderr,
+                )
             print(f"  Verify:  python3 .myflow/scripts/task.py validate {args.task_dir}", file=sys.stderr)
             print("  Intentionally empty? Re-run start with --allow-empty-context", file=sys.stderr)
             return 1

@@ -3,5 +3,14 @@
   "dirs": [".pi"],
   "trees": [".myflow/scripts", ".myflow/agents"],
   "files": [".myflow/workflow.md"],
-  "exclude": ["**/__pycache__/**", "**/*.pyc", "**/.DS_Store", "**/*.tmp", "**/*.log"]
+  "exclude": [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/.DS_Store",
+    "**/*.tmp",
+    "**/*.log",
+    ".pi/git/**",
+    ".pi/npm/**",
+    ".pi/settings.json"
+  ]
 }

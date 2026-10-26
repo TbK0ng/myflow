@@ -259,6 +259,29 @@ test("B-4 四条前置齐备 + 用户同意 → 写 approval.json，plan_hash �
   }
 });
 
+test("B-4b ctx.sessionManager 的 session id 优先于环境变量", async () => {
+  const root = makeProject();
+  const previousSession = process.env.PI_SESSION_ID;
+  process.env.PI_SESSION_ID = "env-fallback";
+  try {
+    makeApprovable(root);
+    const ctx = fakeCtx(root, {
+      sessionManager: { getSessionId: () => "ctx-session" },
+    });
+
+    const result = await makeTool().execute("id", {}, undefined, undefined, ctx);
+
+    assert.equal(result.details.approved, true);
+    const written = JSON.parse(readFileSync(approvalPath(root), "utf-8"));
+    // 回退点：只读 PI_SESSION_ID（shell 工具才有）→ UI 工具写出的 session_id 恒为 null。
+    assert.equal(written.session_id, "ctx-session");
+  } finally {
+    if (previousSession === undefined) delete process.env.PI_SESSION_ID;
+    else process.env.PI_SESSION_ID = previousSession;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("B-5 用户拒绝（confirm=false）→ 目标文件不存在", async () => {
   const root = makeProject();
   try {

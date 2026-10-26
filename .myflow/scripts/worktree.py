@@ -98,7 +98,7 @@ def read_config() -> dict:
     if not CONFIG_PATH.is_file():
         return config
     try:
-        lines = CONFIG_PATH.read_text(encoding="utf-8").splitlines()
+        lines = CONFIG_PATH.read_text(encoding="utf-8-sig").splitlines()
     except OSError:
         return config
 

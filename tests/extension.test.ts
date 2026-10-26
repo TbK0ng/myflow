@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
@@ -8,6 +8,33 @@ import { fileURLToPath } from "node:url";
 import extension, { SKIP_BREADCRUMB_ENV } from "../.pi/extensions/myflow/index.ts";
 import type { ExtensionAPI, HookContext, Message } from "../.pi/extensions/myflow/index.ts";
 import { MYFLOW_AGENT_ENV, MYFLOW_VERIFY_GATE_ENV } from "../.pi/extensions/myflow/subagent.ts";
+
+/**
+ * This suite builds isolated temp projects and expects `get_context.py` to use
+ * the single `.myflow/.runtime/sessions/*.json` file (the mock ctx has no
+ * sessionManager). A real `pi -p "npm test"` injects PI_SESSION_ID into every
+ * shell command, which would make the helper look for a keyed session file that
+ * does not exist and render `CURRENT TASK: none`. Scrub the Pi session identity
+ * for this file and restore it afterwards; the production derivation is still
+ * covered by the task.py/get_context.py tests that set it explicitly.
+ */
+const PI_ENV_KEYS = ["PI_SESSION_ID", "PI_SESSION_FILE", "MYFLOW_CONTEXT_ID"] as const;
+const savedPiEnv = new Map<string, string | undefined>();
+
+before(() => {
+  for (const key of PI_ENV_KEYS) {
+    savedPiEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+});
+
+after(() => {
+  for (const key of PI_ENV_KEYS) {
+    const value = savedPiEnv.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-ext-"));
@@ -223,6 +250,66 @@ test("context: replaces stale task-context with current prd.md", async () => {
   assert.ok(taskMsg, "context must produce a task-context message");
   assert.ok(taskMsg!.content!.includes("# Demo PRD"), "task-context must contain current prd.md content");
   rmSync(root, { recursive: true, force: true });
+});
+
+test("context: refreshes session-context when the active task changes", async () => {
+  const root = makeProject();
+  const { api, sent } = makeMockAPI(root);
+  extension(api);
+  const handlers = getHandlers(api);
+  const ctx = getCtx(api);
+  await handlers.session_start({}, ctx);
+
+  const original = sent.find((m) => m.customType === "session-context");
+  assert.ok(original?.content?.includes("CURRENT TASK: .myflow/tasks/demo"), "startup context names the task");
+
+  // Archive/finish clears the pointer; the next context pass must not keep the
+  // startup snapshot's `CURRENT TASK: .myflow/tasks/demo` in front of the model.
+  writeFileSync(
+    join(root, ".myflow", ".runtime", "sessions", "pi_session_test.json"),
+    JSON.stringify({ current_task: null }),
+  );
+  const result = await (handlers.context as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+    { messages: sent.slice() },
+    ctx,
+  );
+  const projected = (result as { messages: Message[] } | undefined)?.messages ?? [];
+  const refreshed = projected.filter((m) => m.customType === "session-context");
+  assert.equal(refreshed.length, 1, "session-context must be replaced, not duplicated");
+  assert.match(refreshed[0]!.content!, /CURRENT TASK: none/);
+  assert.equal(
+    projected.filter((m) => m.customType === "task-context").length,
+    0,
+    "task-context must disappear with the task",
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("context: a sub-agent never receives session-context", async () => {
+  const root = makeProject();
+  const previous = process.env[MYFLOW_AGENT_ENV];
+  process.env[MYFLOW_AGENT_ENV] = "myflow-implement";
+  try {
+    const { api } = makeMockAPI(root);
+    extension(api);
+    const handlers = getHandlers(api);
+    const ctx = getCtx(api);
+    await handlers.session_start({}, ctx);
+    const result = await (handlers.context as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+      { messages: [] },
+      ctx,
+    );
+    const projected = (result as { messages: Message[] } | undefined)?.messages ?? [];
+    assert.equal(
+      projected.filter((m) => m.customType === "session-context").length,
+      0,
+      "sub-agents get task-context only",
+    );
+  } finally {
+    if (previous === undefined) delete process.env[MYFLOW_AGENT_ENV];
+    else process.env[MYFLOW_AGENT_ENV] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("context: re-injects the breadcrumb after compaction", async () => {

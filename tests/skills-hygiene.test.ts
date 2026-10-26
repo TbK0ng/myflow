@@ -68,7 +68,7 @@ test("prompt templates declare descriptions", () => {
   for (const name of ["myflow-continue", "myflow-finish-work"]) {
     const file = join(ROOT, ".pi", "prompts", `${name}.md`);
     assert.ok(existsSync(file), `missing prompt ${name}`);
-    assert.match(readFileSync(file, "utf-8"), /^---\n[\s\S]*?description:/);
+    assert.match(readFileSync(file, "utf-8"), /^---\r?\n[\s\S]*?description:/);
   }
 });
 

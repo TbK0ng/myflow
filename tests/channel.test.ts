@@ -80,18 +80,23 @@ test("channel send and messages: ordering, since, json, and empty rejection", ()
     channel(sandbox, ["create", "chat"]);
     assert.match(channel(sandbox, ["send", "chat", "--as", "me", "hello"]), /^#1 message me$/);
     channel(sandbox, ["send", "chat", "--as", "me", "--to", "worker", "--tag", "question", "second"]);
+    // `--text` is the documented form; it must not be read as a `--text-file`
+    // abbreviation (which used to crash with FileNotFoundError).
+    assert.match(channel(sandbox, ["send", "chat", "--as", "me", "--text", "via flag"]), /^#3 message me$/);
 
     const text = channel(sandbox, ["messages", "chat"]);
     assert.match(text, /#1 .* me -> all: hello/);
     assert.match(text, /#2 .* \[question\] me -> worker: second/);
+    assert.match(text, /#3 .* me -> all: via flag/);
 
     const since = channel(sandbox, ["messages", "chat", "--since", "1"]);
     assert.ok(!since.includes("hello"), "--since skips older events");
     assert.match(since, /second/);
 
     const json = JSON.parse(channel(sandbox, ["messages", "chat", "--json"]));
-    assert.equal(json.events.length, 2);
+    assert.equal(json.events.length, 3);
     assert.equal(json.events[1].to, "worker");
+    assert.equal(json.events[2].text, "via flag", "--text is message text, not a filename");
 
     assert.match(channel(sandbox, ["send", "chat", "--as", "me"], true), /empty message/);
     assert.match(channel(sandbox, ["messages", "missing"], true), /unknown channel/);
@@ -161,6 +166,11 @@ test("channel spawn --dry-run: builds a worker command from the runtime agent", 
 
     assert.equal(planned.env.MYFLOW_VERIFY_GATE, "1", "a review worker carries the verify-gate flag");
     assert.equal(planned.env.MYFLOW_SKIP_BREADCRUMB, "1");
+    assert.deepEqual(
+      Object.keys(planned.env).sort(),
+      ["MYFLOW_SKIP_BREADCRUMB", "MYFLOW_VERIFY_GATE"],
+      "dry-run must not dump the whole environment (provider keys live there)",
+    );
 
     // The flag is the launcher standing in for an agent type: without it a peer
     // check would settle without the verify gate ever running.
@@ -169,6 +179,7 @@ test("channel spawn --dry-run: builds a worker command from the runtime agent", 
       channel(sandbox, ["spawn", "peer", "--agent", "architect", "--dry-run"]),
     );
     assert.ok(!("MYFLOW_VERIFY_GATE" in peer.env), "a non-review worker stays ungated");
+    assert.deepEqual(Object.keys(peer.env).sort(), ["MYFLOW_SKIP_BREADCRUMB"]);
 
     assert.match(channel(sandbox, ["spawn", "review", "--agent", "nope", "--dry-run"], true), /no runtime agent definition/);
   } finally {
