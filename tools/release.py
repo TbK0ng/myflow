@@ -63,7 +63,7 @@ ABSOLUTE_NEEDLES = (
     "/home/",
 )
 
-#: The eight Pi hooks the extension must register, sorted.
+#: The Pi hooks the extension must register, sorted.
 EXPECTED_HOOKS = (
     "agent_before_settle",
     "before_agent_start",

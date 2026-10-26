@@ -1,6 +1,6 @@
 ---
 name: myflow-meta
-description: "Understand, modify, and copy the myflow harness for Pi: the eight extension hooks, the myflow_subagent tool, the /myflow-status command, context injection and escape hatch, the task lifecycle and scripts, workflow.md state blocks, the harness conventions, and which files form the copyable payload. Use when asked to change, debug, extend, or install the myflow harness."
+description: "Understand, modify, and copy the myflow harness for Pi: the extension hooks, the myflow_subagent tool, the /myflow-status command, context injection and escape hatch, the task lifecycle and scripts, workflow.md state blocks, the harness conventions, and which files form the copyable payload. Use when asked to change, debug, extend, or install the myflow harness."
 ---
 
 # myflow Meta
@@ -81,7 +81,7 @@ manifest edit, never a second list in either consumer.
 
 `.pi/extensions/myflow/` is self-contained: the extension, the tools, the
 command, the pure helpers, and the type declaration all live in that
-directory. Eight hooks are always registered:
+directory. These hooks are always registered:
 
 | Hook | What it does |
 | --- | --- |
@@ -173,6 +173,9 @@ python3 .myflow/scripts/task.py gate-info .myflow/tasks/<slug>   # read-only gat
 python3 .myflow/scripts/task.py current [--source] [--json]
 python3 .myflow/scripts/task.py archive .myflow/tasks/<slug> # completed + moves to archive/<YYYY-MM>/
 python3 .myflow/scripts/task.py add-subtask <parent> <child>
+python3 .myflow/scripts/task.py add-context <task> <implement|check> <path> "<why>"   # curate a manifest entry
+python3 .myflow/scripts/task.py validate <task>   # check the manifests have curated entries
+python3 .myflow/scripts/task.py finish   # clear the active-task pointer without changing status
 python3 .myflow/scripts/task.py list [--status <s>] [--json]
 ```
 

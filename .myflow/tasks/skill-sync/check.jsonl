@@ -1,0 +1,3 @@
+{"file": ".scratch/skill-sync/spec.md", "reason": "the acceptance criteria to verify against"}
+{"file": ".pi/skills/", "type": "directory", "reason": "every shipped skill: check no stale count or path remains"}
+{"file": "tests/scaffold.test.ts", "reason": "the new assertion must fail when the table is reverted"}

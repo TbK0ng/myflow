@@ -19,7 +19,8 @@ A spec entry is an **executable contract**, not a principle:
 - The *why*, so the rule survives when the code is refactored.
 
 If a rule is only a question to ask yourself, it belongs in
-`.myflow/spec/guides/`, not in a coding spec.
+`.myflow/spec/guides/` — an optional sibling directory, present only when the
+project has such questions — not in a coding spec.
 
 ## When To Update
 
@@ -63,6 +64,8 @@ entry point: which areas exist and how to use them.
 
 - `<area>/index.md` — the rules for that area, with a Pre-Development
   Checklist and a Quality Check section.
+- `guides/` — optional sibling directory for thinking questions rather than
+  executable contracts; absent unless the project has some.
 ```
 
 `myflow-spec-bootstrap` can replace it with a tree generated from the codebase.

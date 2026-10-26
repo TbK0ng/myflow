@@ -1,0 +1,1 @@
+{"at":"2026-10-26T16:34:35.069Z","tool":"myflow_ask_user","header":"实施范围","question":"spec 已定稿（4 个真实缺陷 + 1 个防回归测试）。按哪个范围实施？","options":["按 implement.md 全量做（6 处编辑 + hook 表一致性测试）","只改文档，跳过测试（快但如果 spec 对，会留下同一类漂移）","只做最痛的两项：hook 计数副本 + config 表"],"answer":"按 implement.md 全量做（6 处编辑 + hook 表一致性测试）","via":"ui-select"}

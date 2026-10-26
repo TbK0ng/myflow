@@ -1,0 +1,9 @@
+{
+  "title": "Sync the shipped skills with the harness",
+  "status": "in_progress",
+  "description": "Fix the drift a full audit found: hook-count copies, incomplete config table, missing lifecycle commands, an undefined guides/ directory. Add one test so hook drift fails CI.",
+  "slug": "skill-sync",
+  "parent": null,
+  "created_at": "2026-10-26T16:33:52Z",
+  "started_at": "2026-10-26T16:34:41Z"
+}

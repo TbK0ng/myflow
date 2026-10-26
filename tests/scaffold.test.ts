@@ -268,6 +268,34 @@ test("copied payload extension registers hooks, tool, and command", async () => 
       "session_start",
       "tool_call",
     ]);
+
+    // The hook table in the shipped myflow-meta skill is the canonical hook set;
+    // the conventions list restates the names. Both must match what registered.
+    const registered = Object.keys(handlers);
+    const metaSkill = readFileSync(join(destination, ".pi", "skills", "myflow-meta", "SKILL.md"), "utf-8");
+    const metaLines = metaSkill.split(/\r?\n/);
+    const tableStart = metaLines.findIndex((line) => line.startsWith("| Hook | What it does |"));
+    assert.ok(tableStart >= 0, "myflow-meta must carry the canonical hook table");
+    const tableHooks: string[] = [];
+    for (const line of metaLines.slice(tableStart + 1)) {
+      if (!line.startsWith("|")) break;
+      const row = /^\| `([a-z_]+)` \|/.exec(line);
+      if (row) tableHooks.push(row[1]);
+    }
+    const untabled = registered.filter((name) => !tableHooks.includes(name));
+    assert.deepEqual(untabled, [], `hook table in myflow-meta is missing: ${untabled.join(", ")}`);
+    const unregistered = tableHooks.filter((name) => !registered.includes(name));
+    assert.deepEqual(unregistered, [], `hook table in myflow-meta names unregistered hooks: ${unregistered.join(", ")}`);
+    const conventions = readFileSync(
+      join(destination, ".pi", "skills", "myflow-meta", "references", "harness-conventions.md"),
+      "utf-8",
+    );
+    const unconventioned = registered.filter((name) => !conventions.includes(`\`${name}\``));
+    assert.deepEqual(
+      unconventioned,
+      [],
+      `harness-conventions.md does not name these hooks: ${unconventioned.join(", ")}`,
+    );
     assert.ok(tools.some((tool) => tool.name === "myflow_subagent"), "myflow_subagent must register");
     assert.ok(commands["myflow-status"], "myflow-status must register");
   } finally {

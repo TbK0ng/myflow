@@ -423,7 +423,7 @@ test("myflow_subagent: emits progress before the child starts", async () => {
   }
 });
 
-test("extension registers myflow_subagent and all 6 hooks", () => {
+test("extension registers myflow_subagent and all registered hooks", () => {
   const { api, handlers, tools } = makeMockAPI();
   extension(api);
   assert.ok(handlers.session_start);

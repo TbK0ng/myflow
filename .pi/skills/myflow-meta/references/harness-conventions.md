@@ -144,7 +144,7 @@ Keep these consistent across files; change them together or not at all:
 
 ## Extension Rules
 
-- All eight hooks stay registered: `session_start`, `input`, `before_agent_start`,
+- Every hook in the `myflow-meta` table stays registered: `session_start`, `input`, `before_agent_start`,
   `context`, `tool_call`, `session_before_compact`, `agent_before_settle`,
   `session_shutdown`.
 - Inject context with `pi.sendMessage({ customType, content, display: false })`;
@@ -220,6 +220,8 @@ Keep these consistent across files; change them together or not at all:
 | `context_injection.max_total_bytes` | 131072 | Total task-context budget |
 | `channel.trusted_context_dirs` | `[]` | Extra roots JSONL-referenced files may live in |
 | `channel.auto_trust_myflow_symlinks` | `true` | Auto-trust a symlinked `.myflow/tasks` directory |
+| `channel.worker_guard.max_live_workers` | `3` | Cap on live workers; `spawn` refuses above it |
+| `channel.worker_guard.idle_timeout` | `900` | Seconds before the guard stops an idle worker |
 
 ## Pre-Development Checklist
 

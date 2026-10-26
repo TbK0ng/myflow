@@ -10,8 +10,8 @@ Payload tour and inventory:
 
 - [ ] Run `npm run check` (typecheck, then the suite) **from the main session**, not from inside a
       sub-agent. The suite is not hermetic w.r.t. `MYFLOW_AGENT_TYPE` /
-      `MYFLOW_CONTEXT_ID`: when those leak in, ~14 unrelated tests fail because
-      the extension sees itself as a sub-agent. Clear them before believing a
+      `MYFLOW_CONTEXT_ID`: when those leak in, unrelated tests fail because the
+      extension sees itself as a sub-agent. Clear them before believing a
       failure:
       `env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLOW_WRITES_UNDER npm run check`
 - [ ] Decide whether you are changing a **contract** (env key, frontmatter key,
@@ -417,13 +417,17 @@ session, and the invariants above are what keep it honest.
       `harness-conventions.md`, and the `myflow-meta` / `myflow-brainstorm`
       skills. A stale rule statement anywhere is a bug.
 - [ ] A new refusal path has a test that fails when the guard is reverted.
-- [ ] Adding or removing a Pi hook updates **all three** copies in the same
-      change: `tests/scaffold.test.ts`'s exhaustive hook set (it fails otherwise),
-      the count and table in `.pi/skills/myflow-meta/SKILL.md`, and the list in
-      `references/harness-conventions.md`. The count is **eight**
-      (`session_start`, `input`, `before_agent_start`, `context`, `tool_call`,
-      `session_before_compact`, `agent_before_settle`, `session_shutdown`); it
-      read "six" over a seven-row table before this rule existed.
+- [ ] Adding or removing a Pi hook updates, in the same change, the canonical
+      table in `.pi/skills/myflow-meta/SKILL.md` and the list in
+      `references/harness-conventions.md`. `tests/scaffold.test.ts` compares both
+      against the handlers the copied extension actually registers, so it fails
+      until they follow. No other file states a hook count; `myflow-check`
+      points at the table.
+- [ ] A new config key read by `.pi/extensions/myflow/` or `.myflow/scripts/` is
+      added to the Config Keys table in
+      `.pi/skills/myflow-meta/references/harness-conventions.md` in the same
+      change. A `channel.worker_guard` key also updates the `myflow-channel`
+      skill.
 - [ ] The approval gate's contract copies agree: `.myflow/workflow.md`, the
       `myflow-meta` harness conventions, the `myflow-brainstorm` skill, and
       `.pi/prompts/myflow-continue.md`. No copy still describes `task.py start`

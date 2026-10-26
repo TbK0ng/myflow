@@ -1,0 +1,10 @@
+{"file": ".scratch/skill-sync/spec.md", "reason": "the source spec: audit findings and decisions"}
+{"file": ".pi/skills/myflow-meta/SKILL.md", "reason": "canonical hook table + lifecycle command block to edit"}
+{"file": ".pi/skills/myflow-meta/references/harness-conventions.md", "reason": "Config Keys table + hook list to edit"}
+{"file": ".pi/skills/myflow-check/SKILL.md", "reason": "the third hook-count copy to fix"}
+{"file": ".pi/skills/myflow-before-dev/SKILL.md", "reason": "unconditional guides/ read to make tolerant"}
+{"file": ".pi/skills/myflow-update-spec/SKILL.md", "reason": "guides/ definition to state as optional"}
+{"file": ".myflow/spec/index.md", "reason": "Layout section to extend with optional guides/"}
+{"file": ".myflow/spec/harness/index.md", "reason": "Quality Check to extend with the config-key rule"}
+{"file": "tests/scaffold.test.ts", "reason": "the test that builds the real handler set; extend it"}
+{"file": "tests/subagent.test.ts", "reason": "stale test title to retitle"}
