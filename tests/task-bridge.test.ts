@@ -350,17 +350,11 @@ test("task.py start with a case-varied target follows the platform filesystem", 
       env: { ...process.env, PI_SESSION_ID: "case-ptr" },
     });
     const sessionFile = join(root, ".myflow", ".runtime", "sessions", "pi_case-ptr.json");
-    if (process.platform === "win32") {
-      // NTFS folds case: the same directory is reached, and the pointer stays
-      // inside tasks/ whichever casing was typed.
-      assert.equal(result.status, 0, result.stderr);
-      const pointer = JSON.parse(readFileSync(sessionFile, "utf-8")).current_task as string;
-      assert.equal(pointer.replaceAll("\\", "/").toLowerCase(), ".myflow/tasks/case-task");
-    } else {
-      // POSIX is case-sensitive: the case-varied path is a different, absent
-      // directory, so the start is rejected.
-      assert.notEqual(result.status, 0, "POSIX is case-sensitive: the target does not exist");
-    }
+    // NTFS folds case: the same directory is reached, and the pointer stays
+    // inside tasks/ whichever casing was typed.
+    assert.equal(result.status, 0, result.stderr);
+    const pointer = JSON.parse(readFileSync(sessionFile, "utf-8")).current_task as string;
+    assert.equal(pointer.replaceAll("\\", "/").toLowerCase(), ".myflow/tasks/case-task");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -120,19 +120,7 @@ function isAlive(pid: number): boolean {
  * tree even across the detached boundary.
  */
 function killTree(pid: number): void {
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      /* already gone */
-    }
-  }
+  spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
 }
 
 /** Every number nested anywhere in `value` (a passed fd is exactly such a number). */
@@ -575,7 +563,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: { MYFLOW_BG_SHELL: "X:/nowhere/bash.exe" },
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: "",
       exists: noExists,
@@ -588,7 +575,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: {},
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: "",
       exists: (p) => p === "H:/home/custom/shell.exe" || p === settingsFile,
@@ -602,7 +588,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: {},
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: "",
       exists: (p) => p === settingsFile,
@@ -616,7 +601,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: {},
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: "",
       exists: (p) => p === gitBash,
@@ -630,7 +614,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: {},
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: "C:\\tools;D:\\bin",
       exists: (p) => p === pathBash,
@@ -645,7 +628,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: {},
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: "C:\\Windows\\System32;D:\\bin",
       exists: (p) => p === wslLauncher || p === pathBash,
@@ -661,7 +643,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: {},
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: "C:\\Windows\\System32",
       exists: (p) => p === wslLauncher,
@@ -680,7 +661,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: {},
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: "C:\\Windows\\SysWOW64",
       exists: (p) => p === syswowLauncher,
@@ -694,7 +674,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
   assert.equal(
     resolveShellPath({
       env: {},
-      platform: "win32",
       homeDir: "H:/home",
       pathValue: ["C:\\Windows\\SysWOW64", "C:\\Windows\\Sysnative", "C:\\Windows\\System32", "D:\\bin"].join(";"),
       exists: (p) =>
@@ -717,7 +696,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
     assert.equal(
       resolveShellPath({
         env,
-        platform: "win32",
         homeDir: "H:/home",
         pathValue: "",
         exists: (p) => p === "C:\\Windows\\System32\\cmd.exe",
@@ -727,20 +705,6 @@ test("bg runner -7: resolveShellPath 顺序固定，且没有 cmd.exe 兜底（o
       "ComSpec 不再是兜底路径：解析不到 bash 必须返回 null",
     );
   }
-
-  // 5b. POSIX 上同样没有 /bin/sh 兜底。
-  assert.equal(
-    resolveShellPath({
-      env: {},
-      platform: "linux",
-      homeDir: "H:/home",
-      pathValue: "/usr/local/bin",
-      exists: noExists,
-      readFile: () => "",
-    }),
-    null,
-    "/bin/sh 不再是兜底路径",
-  );
 
   // 6. 参数形态：外壳恒为 POSIX，所以只有一种 argv；命令必须是单个 argv 元素
   //    （这正是消灭二次解析的关键），重定向由外壳完成。
@@ -876,7 +840,7 @@ test("bg runner -9: MYFLOW_BG_SHELL 指到 cmd.exe → 拒绝，并指出不支�
   //         外壳用 `-lc` 起起来，status/error/log 三条断言全变红。
   //
   // `MYFLOW_BG_SHELL` is taken verbatim, so a path whose basename is `cmd.exe`
-  // triggers the guard on every platform without needing a real cmd.exe.
+  // triggers the guard without needing a real cmd.exe.
   const dir = makeDir();
   try {
     const log = join(dir, "cmd.log");
@@ -1061,11 +1025,9 @@ test("S2 -3: 日志路径含空格/单引号、命令含引号与空格都能跑
 // does not allocate a console for it at all, and (B) retry a transient refusal
 // on a bounded backoff instead of retrying twice in half a second.
 
-test("S3 -1: 起外壳时 stdio:'ignore' 且仅在 Windows 上 detached，不传任何 fd", async () => {
-  // 回退点：去掉 Windows 上的 detached（改回 { cwd, stdio: "ignore" }）
-  //         → win32 上 detached 断言变红；
-  //         改成无条件 detached（不再按平台判断）→ POSIX 上同一条断言变红，
-  //         因为那会把外壳移出 wrapper 的进程组、打掉 design.md §4.4 的组杀；
+test("S3 -1: 起外壳时 stdio:'ignore' 且恒为 detached，不传任何 fd", async () => {
+  // 回退点：去掉 detached（改回 { cwd, stdio: "ignore" }）
+  //         → 不建控制台窗口的保证消失，断言变红；
   //         改回向子进程传数字 fd → collectNumbers 变红。
   const dir = makeDir();
   try {
@@ -1094,8 +1056,8 @@ test("S3 -1: 起外壳时 stdio:'ignore' 且仅在 Windows 上 detached，不传
     for (const options of captured) {
       assert.equal(
         options.detached,
-        process.platform === "win32",
-        "Windows 上起外壳必须 detached（不建控制台窗口）；非 Windows 必须留在 wrapper 进程组内（design.md §4.4）",
+        true,
+        "起外壳必须 detached：否则每个后台任务都会新建一个控制台窗口",
       );
       assert.equal(options.stdio, "ignore", '起外壳必须 stdio:"ignore"');
       assert.deepEqual(collectNumbers(options), [], "不得向子进程传任何数字 fd");

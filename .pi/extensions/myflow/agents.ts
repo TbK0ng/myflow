@@ -58,8 +58,8 @@ export function isSafeWriteScope(scope: string): boolean {
  * Normalize a path for a containment check.
  *
  * `resolve` collapses `..` and normalizes separators; unifying to `/` keeps the
- * prefix check from being fooled by a `\` vs `/` difference, and lowercasing on
- * Windows makes the comparison case-insensitive (the filesystem is). This is a
+ * prefix check from being fooled by a `\` vs `/` difference, and lowercasing
+ * makes the comparison case-insensitive, as NTFS itself is (Windows only). This is a
  * lexical check (it does not follow symlinks): the guarantee is a directory
  * boundary, not mutual exclusion.
  *
@@ -70,8 +70,7 @@ export function isSafeWriteScope(scope: string): boolean {
  * exactly the kind of drift that lets one boundary be loosened alone.
  */
 export function normalizeWriterPath(target: string, baseDir: string): string {
-  const normalized = resolve(baseDir, target).split("\\").join("/");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return resolve(baseDir, target).split("\\").join("/").toLowerCase();
 }
 
 /** Whether `target` resolves to `root` or a path inside it. */

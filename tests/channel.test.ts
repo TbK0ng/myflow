@@ -618,7 +618,7 @@ test("channel wait_for_exit: covers the descendants, not just the root", async (
     childPid = Number(readFileSync(pidFile, "utf-8"));
     assert.equal(isPidAlive(childPid), true, "the child must be alive before the wait");
 
-    // 快照后代，然后只杀父（terminate，不是 /T）：子进程必须继续活着。
+    // 快照后代，然后只杀父（taskkill 不带 /T）：子进程必须继续活着。
     const descendants = JSON.parse(
       channelHook(
         sandbox,
@@ -629,7 +629,13 @@ test("channel wait_for_exit: covers the descendants, not just the root", async (
     ) as number[];
     assert.ok(descendants.includes(childPid), "the child must be enumerated before the kill");
 
-    channelHook(sandbox, ["import channel", `channel.terminate(${parent.pid})`].join(String.fromCharCode(10)));
+    channelHook(
+      sandbox,
+      [
+        "import subprocess",
+        `subprocess.run(["taskkill", "/F", "/PID", "${parent.pid}"], capture_output=True)`,
+      ].join(String.fromCharCode(10)),
+    );
     assert.equal(isPidAlive(childPid), true, "killing the parent alone must leave the child alive");
 
     // 等在枚举到的后代上。若等待列表退回「只含父」（或枚举返回空），wait_for_exit

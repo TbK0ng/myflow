@@ -16,21 +16,22 @@ The release directory contains exactly four things that belong to a project:
 Nothing in the release is project-specific: no task history, no spec tree, no
 machine state, no absolute paths.
 
+**Windows only.** The harness runs on Windows with Git Bash: the background
+tools need a POSIX shell and `taskkill`, the channel runtime and the worktree
+sessions use `DETACHED_PROCESS` / `taskkill`, and the path guards assume NTFS
+case folding. Every entry point refuses to start anywhere else.
+
+Prerequisites: `python3` on `PATH`, Node.js 22 or newer, and Git for Windows.
+
 ## 1. Copy the payload
 
 Unpack the zip, then copy from the release directory into the target project
-root. The commands are the same in both shells; only the path spelling differs.
+root, from Git Bash:
 
 ```bash
-# POSIX (macOS / Linux)
-REL=/path/to/myflow-0.2.0          # e.g. ~/src/myflow-0.2.0
-DST=/path/to/target-project        # e.g. ~/work/target-project
-
-# Windows (Git Bash)
-REL=/c/src/myflow-0.2.0
+REL=/c/src/myflow-0.2.0            # wherever you unpacked it
 DST=/c/work/target-project
 
-# same for both:
 mkdir -p "$DST/.myflow"
 cp -r "$REL/.pi" "$DST/"
 cp -r "$REL/.myflow/agents" "$REL/.myflow/scripts" "$DST/.myflow/"
@@ -69,8 +70,8 @@ Then start (or `/reload`) Pi and run `/myflow-status`. It should print
 the extension loaded, the command registered, and the scripts are reachable.
 
 One requirement: the extension shells out to `python3` (`gate-info`, the verify
-gate), so a working `python3` must be on `PATH`. On Windows install Python with
-the `python3` shim, or point a `python3` wrapper at your interpreter; without it
+gate), so a working `python3` must be on `PATH` — install Python with the
+`python3` shim, or point a `python3` wrapper at your interpreter. Without it
 `/myflow-status` still renders but reports `Approval: unavailable`.
 
 ## 4. Lines the target `.gitignore` needs

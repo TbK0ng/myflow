@@ -132,19 +132,7 @@ function makeEntry(
  */
 function killTree(pid: unknown): void {
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return;
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
-  } else {
-    try {
-      process.kill(-pid);
-    } catch {
-      try {
-        process.kill(pid);
-      } catch {
-        /* already gone */
-      }
-    }
-  }
+  spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
 }
 
 /** 轮询直到 predicate 为真或超时；返回最终值。 */

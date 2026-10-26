@@ -247,12 +247,9 @@ function readSettingsShellPath(settingsPath, exists, readFile) {
 }
 
 /** Find a bare `name` on `PATH` and return its absolute path, or null. */
-function findOnPath(name, platform, pathValue, exists) {
-  const candidates = platform === "win32" ? [`${name}.exe`, name] : [name];
-  // The separator follows the *resolved* platform, not the host, so an injected
-  // `platform` (tests) behaves like the machine it stands in for.
-  const separator = platform === "win32" ? ";" : ":";
-  for (const directory of String(pathValue).split(separator)) {
+function findOnPath(name, pathValue, exists) {
+  const candidates = [`${name}.exe`, name];
+  for (const directory of String(pathValue).split(";")) {
     if (!directory) continue;
     // Never fall back to the WSL launcher. On Windows `%SystemRoot%\System32\bash.exe`
     // is the WSL entry point, which this project forbids invoking; a Git Bash
@@ -264,10 +261,8 @@ function findOnPath(name, platform, pathValue, exists) {
     // 64-bit process. All three resolve to the same `bash.exe` WSL entry point,
     // so all three are skipped. This machine has no WSL installed and does not
     // intend to: naming them here is a *refusal*, never a way to support WSL.
-    if (platform === "win32") {
-      const base = basename(directory).toLowerCase();
-      if (base === "system32" || base === "sysnative" || base === "syswow64") continue;
-    }
+    const base = basename(directory).toLowerCase();
+    if (base === "system32" || base === "sysnative" || base === "syswow64") continue;
     for (const candidate of candidates) {
       const full = join(directory, candidate);
       if (exists(full)) return full;
@@ -296,12 +291,11 @@ function findOnPath(name, platform, pathValue, exists) {
  * This stays a pure resolver: it never throws and never exits. `null` means
  * "nothing usable found".
  *
- * Injectable (`env`, `platform`, `exists`, `readFile`, `homeDir`, `pathValue`)
+ * Injectable (`env`, `exists`, `readFile`, `homeDir`, `pathValue`)
  * so the order can be tested without touching the machine's real settings.
  *
  * @param {{
  *   env?: NodeJS.ProcessEnv,
- *   platform?: NodeJS.Platform,
  *   exists?: (path: string) => boolean,
  *   readFile?: (path: string) => string,
  *   homeDir?: string,
@@ -311,7 +305,6 @@ function findOnPath(name, platform, pathValue, exists) {
  */
 export function resolveShellPath(options = {}) {
   const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
   const exists = options.exists ?? existsSync;
   const readFile = options.readFile ?? ((path) => readFileSync(path, "utf-8"));
   const homeDir = options.homeDir ?? homedir();
@@ -326,13 +319,11 @@ export function resolveShellPath(options = {}) {
   if (fromSettings) return fromSettings;
 
   // 3. Git for Windows' standard install location.
-  if (platform === "win32") {
-    const gitBash = join("C:\\", ...GIT_BASH_REL);
-    if (exists(gitBash)) return gitBash;
-  }
+  const gitBash = join("C:\\", ...GIT_BASH_REL);
+  if (exists(gitBash)) return gitBash;
 
   // 4. `bash` on PATH.
-  const onPath = findOnPath("bash", platform, pathValue, exists);
+  const onPath = findOnPath("bash", pathValue, exists);
   if (onPath) return onPath;
 
   return null;
@@ -738,21 +729,14 @@ export function runCommand(options) {
         // a descriptor over as a standard handle would push libuv onto the
         // Windows handle-list path that can fail with ERROR_NO_SYSTEM_RESOURCES.
         //
-        // On Windows the shell is started detached, i.e. with
-        // `DETACHED_PROCESS`, so it gets no console. This wrapper has none
-        // either, so without the flag Windows would build a fresh console --
-        // and a console window -- for every background task: a visible flash,
-        // and an allocation from the interactive desktop heap, the resource
-        // whose exhaustion is reported as ERROR_NO_SYSTEM_RESOURCES (232).
-        // Whether that heap is what refuses these spawns is unmeasured, so this
-        // is not claimed as the fix.
-        //
-        // Windows only. `detached` also moves the child into a new process
-        // group, and off Windows `myflow_bg_stop` signals this process's group
-        // (`process.kill(-pid)`, design.md §4.4); a detached shell would sit
-        // outside that group and survive the stop.
-        const detachShell = process.platform === "win32";
-        child = spawnImpl(shellPath, shellArgs, { cwd, stdio: "ignore", detached: detachShell });
+        // The shell is started with `DETACHED_PROCESS`, so it gets no console.
+        // This wrapper has none either, so without the flag Windows would build
+        // a fresh console -- and a console window -- for every background task:
+        // a visible flash, and an allocation from the interactive desktop heap,
+        // the resource whose exhaustion is reported as ERROR_NO_SYSTEM_RESOURCES
+        // (232). Whether that heap is what refuses these spawns is unmeasured,
+        // so this is not claimed as the fix.
+        child = spawnImpl(shellPath, shellArgs, { cwd, stdio: "ignore", detached: true });
       } catch (error) {
         // A synchronous throw from `spawn` means the process was never created,
         // so it is as safe to retry as an asynchronous `'error'`.
@@ -856,12 +840,6 @@ export function runWrapper(injected = {}) {
   }
 
   const exitPath = options.exit;
-  // Resolve the shell once, up front: every `.exit` record (including the
-  // no-command and log-directory failures below) then says which shell this
-  // task would have used. A failure to *create* a resolved shell is retried and
-  // reported by `runCommand`; a failure to *resolve* one is refused below.
-  const resolveShell = injected.resolveShell ?? resolveShellPath;
-  const shellPath = resolveShell();
   const record = (payload, runnerCode) => {
     try {
       writeExitRecord(exitPath, payload);
@@ -871,6 +849,32 @@ export function runWrapper(injected = {}) {
     }
     process.exitCode = runnerCode;
   };
+
+  // Windows only: Git Bash supplies the shell, `taskkill /T` the tree kill, and
+  // the pid handshake above goes through Windows process handles. Refuse
+  // anywhere else -- after the handshake, so the refusal is recorded in `.exit`
+  // instead of the task lingering as "starting" until the caller's timeout.
+  if (process.platform !== "win32") {
+    record(
+      {
+        exit_code: null,
+        error:
+          `myflow background tasks run on Windows only (this is ${process.platform}); ` +
+          "Git Bash is required. No command was executed.",
+        at: isoTimestamp(),
+        shell: null,
+      },
+      EXIT_SPAWN_FAILED,
+    );
+    return;
+  }
+
+  // Resolve the shell once, up front: every `.exit` record (including the
+  // no-command and log-directory failures below) then says which shell this
+  // task would have used. A failure to *create* a resolved shell is retried and
+  // reported by `runCommand`; a failure to *resolve* one is refused below.
+  const resolveShell = injected.resolveShell ?? resolveShellPath;
+  const shellPath = resolveShell();
 
   if (!options.log || !options.command) {
     record(

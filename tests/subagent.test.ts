@@ -489,14 +489,10 @@ test("tool_call: a scoped sub-agent may only write inside <active task>/<writesU
       assert.equal(await call("edit", path), undefined, `edit ${path} must be allowed`);
     }
 
-    // Case: Windows folds case, so a case-varied scope directory is the same
-    // directory; a case-sensitive filesystem treats it as outside.
+    // Case: the filesystem folds case (NTFS), so a case-varied scope directory
+    // is the same directory.
     const caseVariant = await call("write", ".myflow/tasks/demo/RESEARCH/note.md");
-    if (process.platform === "win32") {
-      assert.equal(caseVariant, undefined, "Windows is case-insensitive: RESEARCH is research");
-    } else {
-      assert.equal(caseVariant?.block, true, "POSIX is case-sensitive: RESEARCH is a different directory");
-    }
+    assert.equal(caseVariant, undefined, "NTFS is case-insensitive: RESEARCH is research");
 
     // Outside the scope: blocked, with a reason naming the scope.
     for (const path of [

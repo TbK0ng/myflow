@@ -220,31 +220,25 @@ def forget(name: str) -> None:
 def is_alive(pid: object) -> bool:
     """Whether the process is still running.
 
-    Windows cannot use the POSIX `kill(pid, 0)` probe: it fails with
+    The POSIX `kill(pid, 0)` probe does not work here: Windows fails it with
     `SystemError`/`OSError` for a live process owned by another process. Ask the
     kernel for the exit code instead.
     """
     if not isinstance(pid, int) or pid <= 0:
         return False
-    if os.name == "nt":
-        import ctypes
+    import ctypes
 
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        try:
-            code = ctypes.c_ulong()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return False
-            return code.value == 259  # STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except (OSError, SystemError, ValueError):
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
         return False
-    return True
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _now() -> str:
@@ -453,10 +447,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     kwargs: dict = {"cwd": str(target), "stdin": subprocess.DEVNULL, "stdout": open(log_path, "wb"), "stderr": subprocess.STDOUT}
     kwargs["env"] = {**os.environ, "MYFLOW_SKIP_BREADCRUMB": "1"}
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     process = subprocess.Popen(command, **kwargs)  # noqa: SIM115 - log handle lives with the child
 
     sessions = read_registry()
@@ -521,6 +512,9 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    if os.name != "nt":
+        print("error: myflow runs on Windows only (Git Bash required)", file=sys.stderr)
+        return 1
     parser = argparse.ArgumentParser(description="myflow worktree sessions")
     sub = parser.add_subparsers(dest="command", required=True)
 

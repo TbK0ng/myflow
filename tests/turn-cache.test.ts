@@ -232,21 +232,15 @@ test("resolveActiveTaskStatus: a symlinked task dir that leaves tasks/ is not an
   }
 });
 
-test("resolveActiveTaskStatus: case-varied current_task follows the platform filesystem", () => {
+test("resolveActiveTaskStatus: a case-varied current_task reaches the same NTFS directory", () => {
   const dir = makeProject();
   makeTask(dir, "test-task");
   try {
     writePointer(dir, "ctx-case", ".MYFLOW/TASKS/TEST-TASK");
     const result = resolveActiveTaskStatus(dir, "ctx-case");
-    if (process.platform === "win32") {
-      // NTFS folds case, so the same directory is reached and is inside tasks/.
-      assert.equal(result.status, "in_progress");
-      assert.ok(result.taskDir);
-    } else {
-      // POSIX is case-sensitive: the path names a different, absent directory.
-      assert.equal(result.status, "no_task");
-      assert.equal(result.taskDir, null);
-    }
+    // NTFS folds case, so the same directory is reached and is inside tasks/.
+    assert.equal(result.status, "in_progress");
+    assert.ok(result.taskDir);
     assert.notEqual(result.status, "stale");
   } finally {
     rmSync(dir, { recursive: true, force: true });

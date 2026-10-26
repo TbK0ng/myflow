@@ -255,6 +255,13 @@ function runVerifyCommands(projectRoot: string): string | null {
 }
 
 export default function extension(pi: ExtensionAPI): void {
+  // The harness is Windows-only end to end: Git Bash supplies the POSIX shell,
+  // `taskkill /T` the tree kill, and NTFS the case folding the path guards
+  // assume. Refuse to load anywhere else instead of half-working.
+  if (process.platform !== "win32") {
+    throw new Error(`myflow supports Windows only (this is ${process.platform})`);
+  }
+
   let projectRoot: string | null = null;
   const turnCache = new TurnContextCache();
   const agentType = detectAgentType();

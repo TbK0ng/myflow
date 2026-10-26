@@ -148,8 +148,8 @@ function startProbe(): { pid: number; stop: () => void } {
     } catch {
       /* already gone */
     }
-    // Windows：仍然从 Node 用参数数组调 taskkill（经 Git Bash 转发会把 /F 改成 F:/）。
-    if (process.platform === "win32" && pid > 0) {
+    // 从 Node 用参数数组调 taskkill（经 Git Bash 转发会把 /F 改成 F:/）。
+    if (pid > 0) {
       spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
     }
   };

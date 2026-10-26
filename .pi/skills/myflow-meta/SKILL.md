@@ -9,6 +9,12 @@ This repository **is** the myflow harness for Pi. This skill is the map for
 changing it. It describes only what exists here — there is one platform (Pi),
 this repository is the whole harness: one Pi extension, five scripts, the skills that drive them, and their tests.
 
+**Windows only, with Git Bash.** The shell is the Git for Windows bash, a process
+tree dies by `taskkill /F /T`, a worker is spawned with `DETACHED_PROCESS`, and
+path comparison folds case (NTFS does). There is exactly one code path: no
+`process.platform` / `os.name` branch survives, and each entry point refuses to
+start on another platform instead of half-working.
+
 ## Layout
 
 ```

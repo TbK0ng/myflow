@@ -419,7 +419,7 @@ export function listEntries(dir: string): {
  * Whether a pid is alive.
  *
  * `process.kill(pid, 0)` performs the OS existence check without signalling.
- * Non-positive and non-integer pids are rejected up front: on every platform
+ * Non-positive and non-integer pids are rejected up front: on Windows
  * `process.kill(0, 0)` targets the *process group* and succeeds, so without
  * that guard a missing pid would read as alive. `EPERM` means the process
  * exists but is owned by another user — alive.
@@ -2286,37 +2286,20 @@ export interface BgStopRegistration extends BgToolRegistration {
 /**
  * Terminate a process tree rooted at `pid`.
  *
- * Windows uses `taskkill /F /T` because it is the only reliable way to kill the
- * whole tree: the descendants of a background command are `cmd`/`bash` children
- * that `process.kill` does not reliably reach (ADR-6). The arguments are passed
- * as an **array**, never a single string, because Git Bash rewrites `/F` to
- * `F:/` if the command is routed through it (`design.md` §4.4).
- *
- * Everywhere else the wrapper is a process-group leader (the start tool spawns
- * it detached), so signalling the negative pid reaches the whole group; if the
- * group has already gone, the fallback signals the root pid directly.
+ * `taskkill /F /T` is the only reliable way to kill the whole tree on Windows:
+ * the descendants of a background command are `cmd`/`bash` children that
+ * `process.kill` does not reliably reach (ADR-6). The arguments are passed as an
+ * **array**, never a single string, because Git Bash rewrites `/F` to `F:/` if
+ * the command is routed through it (`design.md` §4.4).
  */
 export function terminateTree(pid: number): KillOutcome {
-  if (process.platform === "win32") {
-    const result = spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
-      encoding: "utf-8",
-      windowsHide: true,
-    });
-    const raw = (result.stderr ?? "").trim();
-    const stderr = raw || (result.error ? messageOf(result.error) : "");
-    return { status: result.error ? null : result.status, stderr };
-  }
-  try {
-    process.kill(-pid);
-    return { status: 0, stderr: "" };
-  } catch (groupError) {
-    try {
-      process.kill(pid);
-      return { status: 0, stderr: "" };
-    } catch (error) {
-      return { status: 1, stderr: `${messageOf(groupError)}; fallback: ${messageOf(error)}` };
-    }
-  }
+  const result = spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
+    encoding: "utf-8",
+    windowsHide: true,
+  });
+  const raw = (result.stderr ?? "").trim();
+  const stderr = raw || (result.error ? messageOf(result.error) : "");
+  return { status: result.error ? null : result.status, stderr };
 }
 
 /**

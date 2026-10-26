@@ -35,6 +35,19 @@ Payload tour and inventory:
 
 ## Contracts
 
+### Platform: Windows only
+
+- **Producers**: one guard per entry point — `.pi/extensions/myflow/index.ts`
+  (throws at load), `.myflow/scripts/bg_runner.mjs` (records a refusal in
+  `<taskId>.exit`), `.myflow/scripts/channel.py` and `.myflow/scripts/worktree.py`
+  (exit 1 with a message).
+- **Invariant**: one code path. No `process.platform` / `os.name` branch
+  survives outside those guards: the shell is the Git for Windows bash, a tree
+  is killed with `taskkill /F /T`, a worker is spawned with `DETACHED_PROCESS |
+  CREATE_NEW_PROCESS_GROUP`, and path comparison folds case (NTFS does).
+- **Breaks if**: a cross-platform branch is reintroduced "just in case". It can
+  never run here, so it is untested code that reads as a supported platform.
+
 ### Write scope: `writesUnder`
 
 - **Producer**: `.pi/agents/<agent>.md` frontmatter — `writesUnder: <dir>`
@@ -161,11 +174,12 @@ Payload tour and inventory:
 
 - **Producers**:
   - `.myflow/scripts/bg_runner.mjs` — the detached wrapper. It writes its own
-    `<taskId>.pid` handshake first (`writePidRecord`), resolves a POSIX shell
-    (`resolveShellPath`), refuses with `shellRejectionReason` when none
-    resolves, spawns the shell with argv (`shellArgsFor`), and writes the
-    `<taskId>.exit` record itself (`writeExitRecord` / `spawnFailureRecord` /
-    `shellUnavailableRecord`).
+    `<taskId>.pid` handshake first (`writePidRecord`), resolves the shell
+    (`resolveShellPath`: `MYFLOW_BG_SHELL` → the settings `shellPath` → the Git
+    for Windows bash → `bash` on `PATH`, skipping the WSL launcher), refuses with
+    `shellRejectionReason` when none resolves, spawns the shell with argv
+    (`shellArgsFor`), and writes the `<taskId>.exit` record itself
+    (`writeExitRecord` / `spawnFailureRecord` / `shellUnavailableRecord`).
   - `.pi/extensions/myflow/background.ts` — the registry (`newTaskId`,
     `writeEntry` / `readEntry` / `listEntries`, `isAlive`, `resolveStatus`,
     `prune`, cursors) and the four tool builders (`createBgStartTool`,

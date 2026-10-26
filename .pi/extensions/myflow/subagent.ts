@@ -66,25 +66,16 @@ export const SUBAGENT_TIMEOUT_MS = 900_000;
 /** Raw stdout/stderr of each run, kept so a long or failed run can be read back. */
 export const SUBAGENT_LOG_DIR = ".myflow/.runtime/subagent-logs";
 
-/** Stop a child together with anything it started (MCP servers outlive a plain kill). */
+/**
+ * Stop a child together with anything it started (MCP servers outlive a plain
+ * kill). `taskkill /T` is the only way to reach the whole tree on Windows.
+ */
 export function killChildTree(pid: number | undefined): void {
   if (!pid) return;
-  if (process.platform === "win32") {
-    try {
-      execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore" });
-    } catch {
-      /* already gone */
-    }
-    return;
-  }
   try {
-    process.kill(-pid, "SIGTERM");
+    execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore" });
   } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      /* already gone */
-    }
+    /* already gone */
   }
 }
 
@@ -456,8 +447,8 @@ async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
       const proc = spawn(invocation.command, invocation.args, {
         cwd: projectRoot,
         shell: false,
-        // POSIX: own process group, so the whole tree can be signalled at once.
-        detached: process.platform !== "win32",
+        // Not detached: the tree is stopped by `taskkill /T` on pid, not by
+        // signalling a process group.
         stdio: ["ignore", "pipe", "pipe"],
         env,
       });

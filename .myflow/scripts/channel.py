@@ -43,7 +43,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -264,52 +263,25 @@ def write_workers(scope: str, workers: list[dict]) -> None:
 def is_alive(pid: object) -> bool:
     """Whether the process is still running.
 
-    Windows cannot use the POSIX `kill(pid, 0)` probe: it fails with
+    The POSIX `kill(pid, 0)` probe does not work here: Windows fails it with
     `SystemError`/`OSError` for a live process owned by another process. Ask the
     kernel for the exit code instead.
     """
     if not isinstance(pid, int) or pid <= 0:
         return False
-    if os.name == "nt":
-        import ctypes
+    import ctypes
 
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        try:
-            code = ctypes.c_ulong()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return False
-            return code.value == 259  # STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
     try:
-        os.kill(pid, 0)
-    except (OSError, SystemError, ValueError):
-        return False
-    return True
-
-
-def terminate(pid: object) -> bool:
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
-        if not handle:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
             return False
-        try:
-            return bool(kernel32.TerminateProcess(handle, 1))
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 15)
-        return True
-    except (OSError, SystemError, ValueError):
-        return False
+        return code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def terminate_tree(pid: object) -> bool:
@@ -322,27 +294,18 @@ def terminate_tree(pid: object) -> bool:
     """
     if not isinstance(pid, int) or pid <= 0:
         return False
-    if os.name == "nt":
-        completed = subprocess.run(
-            ["taskkill", "/T", "/F", "/PID", str(pid)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        return completed.returncode == 0
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-        return True
-    except (OSError, SystemError, ValueError):
-        return terminate(pid)
+    completed = subprocess.run(
+        ["taskkill", "/T", "/F", "/PID", str(pid)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return completed.returncode == 0
 
 
 def descendant_pids(root_pid: object) -> list[int]:
     """Return every process descended from `root_pid`, nearest generation first.
-
-    Windows only. On POSIX `terminate_tree` signals the whole process group, so
-    there is no per-process tree to enumerate and this returns an empty list.
 
     Why the snapshot has to happen *before* the kill: the Windows process table
     records a child's parent in `th32ParentProcessID`, and that link is what
@@ -359,8 +322,6 @@ def descendant_pids(root_pid: object) -> list[int]:
     empty table yields `[]`. That degrades to "wait for the root alone", which
     is exactly the pre-existing behavior, instead of crashing `rm`.
     """
-    if os.name != "nt":
-        return []
     if not isinstance(root_pid, int) or root_pid <= 0:
         return []
     try:
@@ -369,8 +330,8 @@ def descendant_pids(root_pid: object) -> list[int]:
 
         TH32CS_SNAPPROCESS = 0x00000002
         # `ctypes` defaults a HANDLE return to a signed 32-bit int, so the
-        # INVALID_HANDLE_VALUE sentinel reads back as -1; the existing
-        # `is_alive` / `terminate` helpers rely on the same convention.
+        # INVALID_HANDLE_VALUE sentinel reads back as -1; `is_alive` relies on
+        # the same convention.
         INVALID_HANDLE_VALUE = -1
 
         class PROCESSENTRY32(ctypes.Structure):
@@ -681,10 +642,7 @@ def cmd_spawn(args: argparse.Namespace) -> int:
 
     kwargs: dict = {"cwd": str(PROJECT_ROOT), "stdin": subprocess.DEVNULL, "stdout": open(log_path, "wb"), "stderr": subprocess.STDOUT}
     kwargs["env"] = worker_env
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     process = subprocess.Popen(command, **kwargs)  # noqa: SIM115 - log handle lives with the child
 
     workers.append(
@@ -811,6 +769,9 @@ def cmd_prune(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    if os.name != "nt":
+        print("error: myflow runs on Windows only (Git Bash required)", file=sys.stderr)
+        return 1
     parser = argparse.ArgumentParser(description="myflow channel runtime")
     sub = parser.add_subparsers(dest="command", required=True)
 

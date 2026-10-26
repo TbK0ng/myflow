@@ -79,8 +79,8 @@ Keep these consistent across files; change them together or not at all:
 - **Dispatch cap and log**: every `myflow_subagent` run is capped (default
   `SUBAGENT_TIMEOUT_MS`, override with `timeoutMs`, `0` disables) and tees its raw
   stream to `.myflow/.runtime/subagent-logs/`. Stopping is a tree kill
-  (`taskkill /T /F`, `killpg`): a plain kill leaves the MCP servers the child
-  started holding its handles.
+  (`taskkill /T /F`): a plain kill leaves the MCP servers the child started
+  holding its handles.
 - **Delegated work orders**: `worktree.py start` and `channel.py spawn` prefix the
   prompt with "do not create or manage myflow tasks". Without it a detached
   session reads the `no_task` block at session start and stalls asking for consent.
