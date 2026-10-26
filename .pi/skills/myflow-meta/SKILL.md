@@ -53,6 +53,7 @@ tests/                              # harness development only (node --test)
 tools/                              # harness development only, never in the payload
   release-payload.json              # the single source of truth for the payload list
   release.py                        # builds dist/myflow-<version>/ + .zip; --check / --verify
+                                    # --release bumps, changelogs, builds, commits and tags
   INSTALL.md                        # installer instructions copied into every release
 ```
 

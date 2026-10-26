@@ -25,7 +25,7 @@ cat .myflow/spec/index.md 2>/dev/null || echo "NO_SPEC"
 
 ```bash
 cat .myflow/spec/index.md
-cat .myflow/spec/guides/index.md 2>/dev/null || true   # optional; skip when absent
+cat .myflow/spec/guides/index.md
 cat .myflow/spec/<area>/index.md    # the area you are touching (e.g. harness/)
 ```
 

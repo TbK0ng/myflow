@@ -1,102 +1,122 @@
 # Implementation Plan
 
-Six small edits and one test. No new files in the payload.
+Sections 1–4, 6 and 7 already landed in commit `7eedda5`. What remains is the
+`guides/` correction (section 5) and the release command (section 8).
 
-## 1. Canonical hook set — delete the extra copies
+## 1–4, 6, 7 — DONE in `7eedda5`
 
-**`.pi/skills/myflow-meta/SKILL.md`**
-- Frontmatter `description`: replace "the eight extension hooks" with "the
-  extension hooks" (keep the rest of the sentence).
-- Keep the hook table exactly as is (it is the canonical home).
+Canonical hook table + the scaffold assertion, the two `channel.worker_guard`
+config rows, the config-key checklist line, the full `task.py` command list, and
+the stale "6 hooks" test title. Do not redo them; verify they still hold at the
+end.
 
-**`.pi/skills/myflow-check/SKILL.md`**
-- Line: `- [ ] No regression in the eight extension hooks or myflow_subagent.`
-  → `- [ ] No regression in the extension hooks (the table in myflow-meta) or myflow_subagent.`
+## 5. Restore `guides/` as a first-class spec layer
 
-## 2. Hook set is tested, not just documented
+The first attempt declared it optional. That was wrong: `guides/` is a layer of
+the spec tree (upstream Trellis `.trellis/spec/guides/`, ported in `a0e3525`,
+listed in `spec/index.md` until `97a0382` dropped it). Reverse the optional
+wording, restore the unconditional read, and give the tree a real one.
 
-**`tests/scaffold.test.ts`** — extend the test `copied payload extension
-registers hooks, tool, and command` (it already builds `handlers` from the
-copied payload). After the existing exhaustive-hook assertion, add:
-- Read `${destination}/.pi/skills/myflow-meta/SKILL.md`.
-- Extract the hook names from the rows of the "Hook | What it does" table
-  (first cell inside backticks), i.e. every row whose first cell matches a
-  registered handler name pattern.
-- Assert both directions: (a) every key of `handlers` appears in the table,
-  (b) every table row names a registered handler. Fail with the missing/extra
-  name in the message.
-- Also assert every registered hook name appears somewhere in
-  `.pi/skills/myflow-meta/references/harness-conventions.md` (the "All eight
-  hooks stay registered" bullet). One-way check is enough there.
+**`.pi/skills/myflow-before-dev/SKILL.md`** — Step 2: restore exactly
+`cat .myflow/spec/guides/index.md`, with no tolerance suffix and no qualifier
+comment: the layer is part of the tree, as it was before the first attempt.
 
-Keep it a plain parse (`matchAll` over `^\| \`([a-z_]+)\` \|`), no markdown
-dependency. Node builtins only.
+**`.pi/skills/myflow-update-spec/SKILL.md`** — "What Counts As Spec": a question
+to ask yourself belongs in `.myflow/spec/guides/`, part of the tree rather than
+a coding spec. Minimal Tree: add `guides/index.md` to the sample layout.
 
-## 3. Complete config table
+**`.pi/skills/myflow-break-loop/SKILL.md`** — Step 5: `guides/index.md` without
+the "and the project has a guides/ directory; it is optional" clause.
 
-**`.pi/skills/myflow-meta/references/harness-conventions.md`** — in
-`## Config Keys`, add two rows after `channel.auto_trust_myflow_symlinks`:
-- `channel.worker_guard.max_live_workers` | `3` | Cap on live workers; `spawn`
-  refuses above it
-- `channel.worker_guard.idle_timeout` | `900` | Seconds before the guard stops an
-  idle worker
+**`.myflow/spec/index.md`** — Layout lists `guides/index.md` as the
+cross-cutting layer: thinking questions, not executable contracts. Drop "this
+project has none".
 
-Match the existing `channel.py` defaults and the wording in `myflow-channel`.
+**`.pi/skills/myflow-spec-bootstrap/references/spec-writing.md`** — `## File
+Structure`: state that a generated tree always includes `guides/index.md`
+alongside the layer directories, and what belongs in it.
 
-## 4. Checklist line for config keys
+**`.pi/skills/myflow-spec-bootstrap/SKILL.md`** — Done Criteria: every
+generated tree includes `guides/index.md`; guide files are added beside it as
+questions accumulate.
 
-**`.myflow/spec/harness/index.md`** — add one `## Quality Check` bullet: a new
-config key read by `.pi/extensions/myflow/` or `.myflow/scripts/` must be added
-to the Config Keys table in `harness-conventions.md` in the same change (a
-`channel.worker_guard` key also updates `myflow-channel`).
+**New `.myflow/spec/guides/index.md`** — purpose, the one guide this repo has,
+and thinking triggers that point at real local situations (doc claim vs code
+drift, contract copies, hook/config counts). Keep it short; no upstream content
+copied.
 
-## 5. `guides/` becomes optional and defined
+**New `.myflow/spec/guides/doc-drift-thinking-guide.md`** — the guide this
+session actually earned:
+- A sentence naming a path, a subcommand, a count, or a default is a claim
+  about code.
+- When a claim and the code disagree, work out which is older before editing
+  either: `git log -S <token>`, `git blame`, then the upstream origin.
+- Case study: `guides/` → Trellis layout → `a0e3525` → dropped by `97a0382`
+  while three skills kept naming it. The first fix called it optional; the
+  surviving references were evidence of intent.
+- A short checklist per claim type: path (does it resolve?), subcommand (does
+  argparse/AST have it?), count (how many copies, which is canonical?),
+  config key (is it read?), default (does it match the code?).
 
-**`.pi/skills/myflow-before-dev/SKILL.md`** — Step 2: change
-`cat .myflow/spec/guides/index.md` to a tolerant read, e.g.
-`cat .myflow/spec/guides/index.md 2>/dev/null || true`, and add "(optional;
-skip when absent)".
+## 8. `tools/release.py --release`
 
-**`.pi/skills/myflow-update-spec/SKILL.md`** — in "What Counts As Spec" and the
-Minimal Tree, state that `guides/` is an optional sibling directory for thinking
-questions, present only when the project has some.
+One command for the release that is currently manual. Keep the existing
+`--check` / `--out` / `--verify` behaviour untouched.
 
-**`.myflow/spec/index.md`** — add to `## Layout`: `guides/` is optional, holds
-thinking questions rather than executable contracts, and this project has none.
+```
+python tools/release.py --release {patch|minor|major} [--yes] [--dry-run]
+```
 
-Do not touch `myflow-break-loop`'s `guides/index.md` line beyond optional
-wording if it reads as mandatory.
+Order of operations, each one failing loudly:
+1. Refuse a dirty working tree (`git status --porcelain` non-empty) and a
+   detached HEAD. The release must be reproducible from a clean tree.
+2. Compute the next version from `package.json` (`patch`/`minor`/`major`
+   arithmetic; no dependency, no tags consulted). Refuse if `0.x` semantics are
+   unclear — plain integer arithmetic is enough.
+3. Rewrite the `"version"` value in `package.json` with a targeted regex so the
+   file's formatting is unchanged.
+4. `CHANGELOG.md`: rename the first `## Unreleased` heading to
+   `## <version> — <YYYY-MM-DD>`, then insert a fresh empty `## Unreleased`
+   above it. Fail when there is no `## Unreleased` section or it is empty.
+5. `--check`, then build into `dist/`, then the existing `verify`.
+6. `git add package.json CHANGELOG.md`, commit `Release <version>`, create an
+   annotated tag `v<version>`.
+7. Only with `--yes`: `git push --follow-tags`. Without it, print the exact
+   push command and stop with exit 0.
 
-## 6. Complete lifecycle command list
+`--dry-run` performs steps 1–4 in memory, prints the next version, the new
+CHANGELOG heading and the tag name, writes nothing, and skips the build.
 
-**`.pi/skills/myflow-meta/SKILL.md`** — in the `## Task Lifecycle` bash block add:
-- `task.py add-context <task> <implement|check> <path> "<why>"` — curate a
-  manifest entry
-- `task.py validate <task>` — check the manifests have curated entries
-- `task.py finish` — clear the active-task pointer without changing status
+Keep the style of the file: stdlib only, small named functions, a `fail()`
+exit, help text in `parse_args`.
 
-Keep the block ordered as the workflow uses them.
-
-## 7. Optional one-liner
-
-**`tests/subagent.test.ts`** — retitle `all 6 hooks` to `all registered hooks`.
-Do it: it is one word and it is the drift this change is about.
+**`tests/release.test.ts`** — two cases in the existing `-N:` style, using a
+temp git repo fixture (init, commit the payload root, set
+`GIT_AUTHOR_*`/`GIT_COMMITTER_*` in the spawn env so no global config is
+needed):
+- `--release patch --dry-run` prints the bumped version, the version and date
+  heading, and leaves `package.json` / `CHANGELOG.md` byte-identical.
+- `--release patch` on a clean fixture bumps, commits and tags; without `--yes`
+  it prints the push command and does not push. A dirty tree is refused with a
+  useful message.
 
 ## Verify
 
 ```bash
 npm run check
-node --test tests/scaffold.test.ts
+node --test tests/scaffold.test.ts tests/release.test.ts
+python3 tools/release.py --check
+python3 tools/release.py --release patch --dry-run
 ```
 
-Then confirm by hand that `grep -rn "eight" .pi/skills` shows only the canonical
-table row and the conventions bullet.
+`--dry-run` runs against this repo and therefore must not write; check
+`git status` after it.
 
 ## Done criteria
 
-- `npm run check` green; the new assertion was seen red before the table was
-  edited (temporarily rename a table row, watch it fail, restore).
-- No skill states a hook count outside `myflow-meta`'s table.
-- Config Keys table names every key the code reads.
-- `myflow-meta` lists all 12 `task.py` subcommands.
-- `guides/` reads as optional in all three skills that mention it.
+- `npm run check` green.
+- `guides/` exists in this repo, is listed in `spec/index.md`, and no skill calls
+  it optional or absent.
+- `release.py --release patch --dry-run` is side-effect free; `--release patch`
+  without `--yes` stops before the push, with a clean `git status` apart from
+  the release commit and tag.

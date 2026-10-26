@@ -19,8 +19,7 @@ A spec entry is an **executable contract**, not a principle:
 - The *why*, so the rule survives when the code is refactored.
 
 If a rule is only a question to ask yourself, it belongs in
-`.myflow/spec/guides/` — an optional sibling directory, present only when the
-project has such questions — not in a coding spec.
+`.myflow/spec/guides/`, not in a coding spec.
 
 ## When To Update
 
@@ -43,7 +42,8 @@ directory), one-off debugging notes, or anything already written down.
 2. **Pick the file.** Read `.myflow/spec/index.md` if it exists. If the tree is
    missing, create `index.md` plus the appropriate `<area>/index.md` (or run
    `myflow-spec-bootstrap` for a full pass). Otherwise use the area you touched;
-   in this repository that is usually `harness/`.
+   in this repository that is usually `harness/`. Thinking questions go to
+   `guides/index.md`, never into an area index.
 3. **Read it first.** Find the right section; do not duplicate an existing
    entry. If an entry is now wrong, fix it instead of adding a contradiction.
 4. **Write it.** One concept per section. Include a short concrete example or
@@ -64,8 +64,8 @@ entry point: which areas exist and how to use them.
 
 - `<area>/index.md` — the rules for that area, with a Pre-Development
   Checklist and a Quality Check section.
-- `guides/` — optional sibling directory for thinking questions rather than
-  executable contracts; absent unless the project has some.
+- `guides/index.md` — the cross-cutting layer: thinking questions rather than
+  executable contracts.
 ```
 
 `myflow-spec-bootstrap` can replace it with a tree generated from the codebase.

@@ -9,10 +9,15 @@ Usage
 -----
     python tools/release.py --check [--root DIR]
     python tools/release.py --out OUTDIR [--root DIR] [--verify]
+    python tools/release.py --release {patch|minor|major} [--yes] [--dry-run]
 
-``--check``  validate the manifest and the payload, produce nothing.
-``--out``    build ``OUTDIR/myflow-<version>/`` plus a reproducible ``.zip``.
-``--verify`` extract the built tree into a temporary project and smoke-test it.
+``--check``    validate the manifest and the payload, produce nothing.
+``--out``      build ``OUTDIR/myflow-<version>/`` plus a reproducible ``.zip``.
+``--verify``   extract the built tree into a temporary project and smoke-test it.
+``--release``  bump ``package.json``, write the CHANGELOG entry, check, build,
+               verify, commit ``Release <version>``, tag ``v<version>``, and
+               push only with ``--yes``. ``--dry-run`` prints what it would do
+               and writes nothing.
 
 Exit code is 0 only when every requested step passed.
 """
@@ -573,6 +578,165 @@ def check_clean_tree(project: Path) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Release
+# ---------------------------------------------------------------------------
+
+#: The heading that becomes the released section.
+UNRELEASED = "## Unreleased"
+#: `package.json`'s version field, matched so the rest of the file is untouched.
+PACKAGE_VERSION = re.compile(r'("version"\s*:\s*")([^"]*)(")')
+#: A plain three-part version; anything else is refused rather than guessed at.
+PLAIN_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def git_run(root: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run one git command in `root`; a non-zero exit is reported, never raised."""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        fail("git is not on PATH (a release needs it)")
+
+
+def release_blockers(root: Path) -> list[str]:
+    """Why this tree cannot be released from, if anything.
+
+    A release must be reproducible: one clean tree on a branch, so the tag names
+    exactly the commit the version and the changelog heading describe.
+    """
+    status = git_run(root, "status", "--porcelain")
+    if status.returncode != 0:
+        return [f"{root}: not a git checkout ({status.stderr.strip()})"]
+    problems: list[str] = []
+    changed = [line for line in status.stdout.splitlines() if line.strip()]
+    if changed:
+        shown = ", ".join(changed[:5])
+        more = f" (+{len(changed) - 5} more)" if len(changed) > 5 else ""
+        problems.append(f"working tree is dirty: {shown}{more}")
+    head = git_run(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if head.returncode != 0 or not head.stdout.strip():
+        problems.append("HEAD is detached; check out a branch first")
+    return problems
+
+
+def next_version(current: str, level: str) -> str:
+    """`current` bumped at `level`; plain integer arithmetic, no tag lookup."""
+    match = PLAIN_VERSION.match(current)
+    if match is None:
+        fail(f"version {current!r} is not MAJOR.MINOR.PATCH")
+    major, minor, patch = (int(part) for part in match.groups())
+    if level == "major":
+        return f"{major + 1}.0.0"
+    if level == "minor":
+        return f"{major}.{minor + 1}.0"
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def bumped_package(root: Path, version: str) -> bytes:
+    """`package.json` with only the version value replaced, formatting intact."""
+    path = root / "package.json"
+    try:
+        content = path.read_bytes().decode("utf-8")
+    except FileNotFoundError:
+        fail(f"{path}: missing (it carries the release version)")
+    replaced, count = PACKAGE_VERSION.subn(
+        lambda match: f"{match.group(1)}{version}{match.group(3)}", content, count=1
+    )
+    if count != 1:
+        fail(f'{path}: no `"version"` field to bump')
+    return replaced.encode("utf-8")
+
+
+def bumped_changelog(root: Path, version: str, day: str) -> tuple[bytes, str]:
+    """The changelog with the released section dated and a fresh Unreleased above."""
+    path = root / "CHANGELOG.md"
+    try:
+        content = path.read_bytes().decode("utf-8")
+    except FileNotFoundError:
+        fail(f"{path}: missing (a release needs its CHANGELOG entry)")
+    newline = "\r\n" if "\r\n" in content else "\n"
+    lines = content.splitlines()
+    start = next((index for index, line in enumerate(lines) if line.strip() == UNRELEASED), None)
+    if start is None:
+        fail(f"{path}: no `{UNRELEASED}` section to release")
+    end = next(
+        (index for index in range(start + 1, len(lines)) if lines[index].startswith("## ")),
+        len(lines),
+    )
+    if not "\n".join(lines[start + 1 : end]).strip():
+        fail(f"{path}: the `{UNRELEASED}` section is empty; write the entry first")
+    heading = f"## {version} — {day}"
+    lines[start] = heading
+    lines.insert(start, "")
+    lines.insert(start, UNRELEASED)
+    # `splitlines` drops the final newline; keep the file's own ending byte.
+    trailing = newline if content.endswith(("\n", "\r")) else ""
+    return (newline.join(lines) + trailing).encode("utf-8"), heading
+
+
+def commit_release(root: Path, version: str) -> None:
+    """Commit the version bump and tag it; every step fails loudly."""
+    tag = f"v{version}"
+    for args in (
+        ("add", "package.json", "CHANGELOG.md"),
+        ("commit", "-m", f"Release {version}"),
+        ("tag", "-a", tag, "-m", f"Release {version}"),
+    ):
+        result = git_run(root, *args)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            fail(f"git {args[0]} failed: {detail}")
+
+
+def run_release(root: Path, level: str, push: bool, dry_run: bool) -> int:
+    """One command from a clean tree to a tagged commit."""
+    blockers = release_blockers(root)
+    if dry_run:
+        for blocker in blockers:
+            print(f"release: a real release would refuse: {blocker}")
+    elif blockers:
+        fail("; ".join(blockers))
+
+    version = next_version(version_of(root), level)
+    package = bumped_package(root, version)
+    changelog, heading = bumped_changelog(root, version, time.strftime("%Y-%m-%d"))
+    tag = f"v{version}"
+
+    if dry_run:
+        print(f"release: next version {version}")
+        print(f"release: changelog heading {heading}")
+        print(f"release: tag {tag}")
+        print("release: dry run - nothing written, nothing built, nothing tagged")
+        return 0
+
+    (root / "package.json").write_bytes(package)
+    (root / "CHANGELOG.md").write_bytes(changelog)
+    print(f"release: bumped to {version}")
+
+    if run_check(root) != 0:
+        fail("the release fails --check; the tree is left with the version bump")
+    manifest = read_manifest(root)
+    stage = build(root, (root / "dist").resolve(), manifest)
+    if verify(stage) != 0:
+        fail(f"verify failed for {stage}; nothing was committed or tagged")
+
+    commit_release(root, version)
+    print(f"release: committed and tagged {tag}")
+
+    if push:
+        result = git_run(root, "push", "--follow-tags")
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            fail(f"git push failed: {detail}")
+        print(f"release: pushed {tag}")
+    else:
+        print("release: not pushed; push the commit and its tag with:")
+        print("  git push --follow-tags")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -583,8 +747,22 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def force_utf8_stdio() -> None:
+    """A Windows pipe defaults to the ANSI codepage, which mangles the em dash
+    in a CHANGELOG heading. Force UTF-8 for every consumer, as the payload
+    scripts do."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    """`--check` or `--out`; `--verify` only makes sense next to `--out`."""
+    """`--check`, `--out`, or `--release`; `--verify` only makes sense next to `--out`."""
     parser = argparse.ArgumentParser(
         prog="release.py",
         description="Build a myflow release from tools/release-payload.json.",
@@ -600,18 +778,38 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--root", metavar="DIR", help="repository root (default: the script's parent)")
     parser.add_argument("--verify", action="store_true", help="smoke-test the built tree")
+    parser.add_argument(
+        "--release",
+        choices=("patch", "minor", "major"),
+        metavar="{patch,minor,major}",
+        help="bump, changelog, check, build, verify, commit and tag (push only with --yes)",
+    )
+    parser.add_argument("--yes", action="store_true", help="with --release: push the commit and tag")
+    parser.add_argument("--dry-run", action="store_true", help="with --release: print and write nothing")
     args = parser.parse_args(argv)
-    if not args.check and args.out is None:
-        parser.error("one of --check or --out is required")
-    if args.verify and args.out is None:
-        parser.error("--verify requires --out")
+    if args.release is None:
+        if not args.check and args.out is None:
+            parser.error("one of --check, --out or --release is required")
+        if args.verify and args.out is None:
+            parser.error("--verify requires --out")
+        if args.yes or args.dry_run:
+            parser.error("--yes and --dry-run only make sense with --release")
+        return args
+    if args.check or args.out is not None or args.verify:
+        parser.error("--release runs on its own, not with --check, --out or --verify")
+    if args.yes and args.dry_run:
+        parser.error("--yes and --dry-run contradict each other")
     return args
 
 
 def main(argv: list[str]) -> int:
     """Run the requested steps; the exit code is the verdict."""
+    force_utf8_stdio()
     args = parse_args(argv)
     root = repo_root(args.root)
+
+    if args.release is not None:
+        return run_release(root, args.release, push=args.yes, dry_run=args.dry_run)
 
     if args.check:
         code = run_check(root)

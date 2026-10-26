@@ -7,9 +7,7 @@ entry point: which areas exist and how to use them.
 
 - `harness/index.md` — rules for the myflow harness itself: the extension hooks,
   the sub-agent dispatch contract, task state, and the prompt-injection chain.
-- `guides/` — an optional sibling directory for thinking questions rather than
-  executable contracts. It is absent unless a project has such questions; this
-  project has none.
+- `guides/index.md` — cross-cutting thinking checklists (not coding rules).
 
 ## How To Use
 

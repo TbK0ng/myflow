@@ -56,4 +56,6 @@ the spec boundaries, write the docs, and verify the result.
   examples from this repository.
 - Non-applicable sections are removed rather than filled with filler.
 - `index.md` files match the final spec file set and link correctly.
+- `guides/index.md` exists in every generated tree. Add guide files beside it as
+  the project accumulates thinking questions.
 - Analysis assumptions and the tools used are noted in the task or spec.

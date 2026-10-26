@@ -20,6 +20,10 @@ file path and naming the symbol or behavior.
 Keep the spec tree aligned with the project:
 
 - Keep `index.md` as the navigation file for each spec directory.
+- Always include `guides/index.md` alongside the layer directories. It holds
+  thinking questions — how to decide what is true, which copy of a rule is
+  canonical — not coding rules. Add guide files beside it as the project
+  accumulates them.
 - Split topics when developers would look for them independently.
 - Merge topics when separate files would repeat the same rule.
 - Delete files that do not apply.

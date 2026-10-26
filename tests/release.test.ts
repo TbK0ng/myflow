@@ -257,3 +257,142 @@ test("-6: --verify smoke-tests the release in a throwaway project", () => {
     rmSync(work, { recursive: true, force: true });
   }
 });
+
+// `--release` is the one command from a clean tree to a tagged commit. It is
+// deliberately not tested against this repository: it writes `package.json` and
+// `CHANGELOG.md`, commits and tags. A temp git fixture stands in for it.
+
+const GIT_ENV = {
+  GIT_AUTHOR_NAME: "myflow test",
+  GIT_AUTHOR_EMAIL: "test@example.com",
+  GIT_COMMITTER_NAME: "myflow test",
+  GIT_COMMITTER_EMAIL: "test@example.com",
+};
+
+/** The fixture's changelog: one release's worth of Unreleased followed by a release. */
+const CHANGELOG_FIXTURE = [
+  "# Changelog",
+  "",
+  "## Unreleased",
+  "",
+  "### Added",
+  "",
+  "- A fixture release.",
+  "",
+  "## 0.2.0 - 2026-10-21",
+  "",
+  "### Added",
+  "",
+  "- The previous release.",
+  "",
+].join("\n");
+
+/** Run one git command in `root`, with an identity the fixture does not have. */
+function git(root: string, args: string[]): Run {
+  const result = spawnSync("git", ["-C", root, ...args], {
+    env: { ...process.env, ...GIT_ENV },
+    encoding: "utf-8",
+  });
+  return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+/** The version `current` bumped at `level` — the same arithmetic the script uses. */
+function nextVersion(current: string, level: "patch" | "minor" | "major"): string {
+  const [major, minor, patch] = current.split(".").map(Number);
+  if (level === "major") return `${major + 1}.0.0`;
+  if (level === "minor") return `${major}.${minor + 1}.0`;
+  return `${major}.${minor}.${patch + 1}`;
+}
+
+/** A payload root that is also a git checkout with one commit, ready to release. */
+function makeGitRoot(): string {
+  const root = makePayloadRoot();
+  writeFileSync(join(root, "CHANGELOG.md"), CHANGELOG_FIXTURE);
+  // The real file is indented one field per line; the release must replace only
+  // the version value, so the fixture looks like it.
+  writeFileSync(join(root, "package.json"), `{\n  "name": "fixture",\n  "version": "${VERSION}"\n}\n`);
+  // The release builds into `dist/`; the fixture ignores it so a finished
+  // release can be proved to leave a clean tree.
+  writeFileSync(join(root, ".gitignore"), "dist/\n");
+  assert.equal(git(root, ["init", "--quiet"]).status, 0, "git init must succeed in the fixture");
+  assert.equal(git(root, ["add", "-A"]).status, 0, "the fixture must stage");
+  const commit = git(root, ["commit", "--quiet", "-m", "fixture"]);
+  assert.equal(commit.status, 0, `the fixture must commit:\n${commit.stderr}`);
+  return root;
+}
+
+test("-7: --release patch --dry-run prints the next version and heading, and writes nothing", () => {
+  const root = makeGitRoot();
+  try {
+    const next = nextVersion(VERSION, "patch");
+    const dotted = next.replace(/\./g, "\\.");
+    const pkgBefore = readFileSync(join(root, "package.json"));
+    const changelogBefore = readFileSync(join(root, "CHANGELOG.md"));
+
+    const result = release(["--release", "patch", "--dry-run", "--root", root], { env: GIT_ENV });
+    assert.equal(result.status, 0, `--dry-run failed:\n${result.stderr}`);
+    assert.match(result.stdout, new RegExp(`next version ${dotted}`), "--dry-run must print the next version");
+    // The heading is `<version> — <date>`: the em dash and the date both matter.
+    assert.match(
+      result.stdout,
+      new RegExp(`## ${dotted} — \\d{4}-\\d{2}-\\d{2}`),
+      "--dry-run must print the CHANGELOG heading",
+    );
+    assert.match(result.stdout, new RegExp(`tag v${dotted}`), "--dry-run must print the tag name");
+
+    // Revert point: writing the bump before returning from the dry run makes
+    // both byte comparisons below fail.
+    assert.deepEqual(readFileSync(join(root, "package.json")), pkgBefore, "package.json must be untouched");
+    assert.deepEqual(readFileSync(join(root, "CHANGELOG.md")), changelogBefore, "CHANGELOG.md must be untouched");
+    assert.ok(!existsSync(join(root, "dist")), "a dry run must not build");
+    assert.equal(git(root, ["status", "--porcelain"]).stdout.trim(), "", "a dry run must leave the tree clean");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("-8: --release patch bumps, commits and tags, and stops before the push", () => {
+  const root = makeGitRoot();
+  try {
+    const next = nextVersion(VERSION, "patch");
+
+    const result = release(["--release", "patch", "--root", root], { env: GIT_ENV });
+    assert.equal(result.status, 0, `--release failed:\n${result.stderr}`);
+
+    assert.equal(
+      readFileSync(join(root, "package.json"), "utf-8"),
+      `{\n  "name": "fixture",\n  "version": "${next}"\n}\n`,
+      "package.json must carry the bumped version and its original formatting",
+    );
+    const sections = readFileSync(join(root, "CHANGELOG.md"), "utf-8").split(/^## /m);
+    assert.equal(sections[1]?.trim(), "Unreleased", "a fresh empty Unreleased must sit above the release");
+    assert.ok(sections[2]?.startsWith(`${next} — `), `the released section must be dated: ${sections[2]}`);
+    assert.ok(
+      readFileSync(join(root, "CHANGELOG.md"), "utf-8").endsWith("\n"),
+      "the release must not strip the changelog's final newline",
+    );
+
+    assert.equal(git(root, ["log", "-1", "--format=%s"]).stdout.trim(), `Release ${next}`, "one release commit");
+    const tags = git(root, ["tag", "--list"]).stdout.split("\n").map((tag) => tag.trim());
+    assert.ok(tags.includes(`v${next}`), `the release must be tagged; got ${JSON.stringify(tags)}`);
+    // Without --yes the push is printed, never run: the fixture has no remote,
+    // so an attempted push would have failed the command.
+    assert.match(result.stdout, /git push --follow-tags/, "the exact push command must be printed");
+    // Apart from the commit and the tag, the release leaves the tree clean.
+    assert.equal(git(root, ["status", "--porcelain"]).stdout.trim(), "", "a release must leave a clean tree");
+
+    // Revert point: doing any of the writes before the dirty-tree check makes
+    // this run succeed instead of refusing.
+    writeFileSync(join(root, "stray.txt"), "x\n");
+    const dirty = release(["--release", "patch", "--root", root], { env: GIT_ENV });
+    assert.notEqual(dirty.status, 0, "a dirty tree must be refused");
+    assert.match(dirty.stderr, /dirty/, "the refusal must say the tree is dirty");
+    assert.equal(
+      readFileSync(join(root, "package.json"), "utf-8"),
+      `{\n  "name": "fixture",\n  "version": "${next}"\n}\n`,
+      "a refused release must not have bumped anything",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

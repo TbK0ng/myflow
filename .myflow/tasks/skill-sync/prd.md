@@ -26,16 +26,32 @@ Found now:
    documented in `myflow-channel`.
 3. The hook count appears in prose in four places; `.myflow/spec/harness/index.md`
    enumerates only three, so `myflow-check`'s copy is unguarded.
-4. `.myflow/spec/guides/` is referenced by three skills, defined by none, and
-   `myflow-before-dev` reads it unconditionally.
+4. `.myflow/spec/guides/` is referenced by three skills but its definition was
+   lost: it is a first-class layer of the spec tree (ported from the upstream
+   Trellis layout, `spec-system.md` at `a0e3525`, and listed in
+   `.myflow/spec/index.md` until `97a0382` rewrote that file), and the three
+   skills are older than the rewrite. A first attempt declared it "optional,
+   this project has none" and was wrong: the surviving references were evidence
+   of intent, not stale text.
 5. Drift proof: `tests/subagent.test.ts` still titles a test "all 6 hooks" while
    eight are registered.
+6. `tools/release.py` can check, build and verify a release, but the step after
+   that - bump the version, write the CHANGELOG entry, build, tag and push - is
+   manual.
 
 ## Solution
 
-Correct the four real defects, delete duplicate prose instead of syncing it, and
-add one assertion that ties the canonical hook table to the set the extension
+Correct the real defects, delete duplicate prose instead of syncing it, and add
+one assertion that ties the canonical hook table to the set the extension
 actually registers.
+
+For `guides/`: restore the required layer. `guides/` is part of the spec tree,
+not an optional extra, so `myflow-before-dev`'s unconditional read comes back
+and the tree this repo owns gets a real `guides/` entry, and the bootstrap that
+generates trees creates it.
+
+For releases: one command performs the whole release, with a dry run and without
+pushing by default.
 
 ## User stories
 
@@ -45,20 +61,24 @@ actually registers.
    the harness reads.
 3. As an agent reading the skill map, I want every `task.py` subcommand the
    workflow uses to be listed there.
-4. As an agent in a project without `guides/`, I want the optional read not to
-   look like a broken spec.
+4. As an agent reading the spec tree, I want its `guides/` layer to exist and be
+   described, so that the three skills that point at it are not pointing at air.
 5. As a user installing the payload, I want the skills to describe only files
-   the payload creates or that are explicitly optional.
+   the payload creates or that are clearly optional per project.
 6. As a reviewer, I want a mechanism behind the fix, not just corrected
    paragraphs.
+7. As a maintainer cutting a release, I want one command that bumps the version,
+   writes the CHANGELOG entry, builds, verifies, commits, tags and pushes.
+8. As a maintainer running that command by accident, I want it to refuse a dirty
+   tree and to leave the push for an explicit flag.
 
 ## Out of scope
 
 - Rewriting any skill's reasoning steps.
 - `.pi/prompts/`, `.pi/agents/`, `.myflow/agents/`.
-- Adding a `guides/` tree or any guide content to this repo.
 - Generating skills from code, or a prose linter.
-- Re-auditing `channel.py` / `task.py` behavior.
+- Porting the upstream thinking guides wholesale; this repo gets one guide with
+  a real case behind it.
 
 ## Acceptance
 
@@ -66,4 +86,8 @@ actually registers.
 - No skill states a hook count outside the canonical table.
 - Every config key read by code appears in the Config Keys table.
 - `myflow-meta` lists all 12 `task.py` subcommands.
-- `guides/` is either optional-by-contract or gone from all three skills.
+- `.myflow/spec/guides/` exists, is listed in `spec/index.md`, and every skill
+  that mentions it describes it as part of the tree.
+- `release.py --release patch --dry-run` prints the next version and the
+  CHANGELOG heading without writing; `--release patch` without `--yes` stops
+  before the push.
