@@ -15,8 +15,9 @@ the spec boundaries, write the docs, and verify the result.
    if it exists (it may be absent or empty; that is a normal starting point).
 2. Analyze the repository architecture with the best available tools, in this
    preference order:
-   - **codebase-memory** — the code graph MCP already configured for this
-     harness (see `references/mcp-setup.md` and `references/repository-analysis.md`)
+   - **codebase-memory** — a code graph backend, if this Pi install exposes its
+     tools (see `references/mcp-setup.md` and
+     `references/repository-analysis.md`); nothing in the payload configures it
    - language-native tooling (compiler, type checker, test runner)
    - direct source and test reads
 3. Decompose the spec work by package and layer only when that reflects the

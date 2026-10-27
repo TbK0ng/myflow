@@ -58,10 +58,11 @@ pattern is:
 - The context key is `pi_<sanitized session id>`.
 - `task.py` and `get_context.py` derive the same key from `MYFLOW_CONTEXT_ID`
   or `PI_SESSION_ID`.
-- Only `task.py start` / `finish` / `archive` write the pointer.
+- `create` sets the pointer when none exists yet, and `start` sets it; `finish`
+  and `archive` clear it.
 
 Reference files:
-- `src/turn-cache.ts`
+- `.pi/extensions/myflow/turn-cache.ts`
 - `.myflow/scripts/task.py`
 - `tests/task-bridge.test.ts`
 

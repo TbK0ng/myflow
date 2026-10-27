@@ -125,7 +125,9 @@ entry point: which areas exist and how to use them.
 ## Related
 
 - `myflow-meta/references/harness-conventions.md` — the rules for changing the
-  myflow harness itself; capture harness lessons there, not in the project spec.
+  myflow harness itself. Harness-wide contracts go there; project-local
+  decisions go to the project spec. In this repository both apply, because the
+  project spec *is* the harness spec.
 - `myflow-spec-bootstrap` — the bulk counterpart: generate or refresh the whole
   `.myflow/spec/` tree from the codebase.
 - `myflow-break-loop` — deep analysis of a bug that often produces spec updates.

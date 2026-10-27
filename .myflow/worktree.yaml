@@ -1,0 +1,6 @@
+# Project-owned, not part of the payload. The settle gate runs these commands
+# after a `myflow-check` sub-agent, so the gate is a real check and not a no-op.
+# The extension strips inherited `MYFLOW_*` vars before spawning, so the suite
+# runs hermetically here.
+verify:
+  - npm run check

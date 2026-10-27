@@ -237,12 +237,24 @@ function projectCustomMessage(messages: Message[], customType: string, content: 
   return projected;
 }
 
+/**
+ * The ambient environment minus inherited myflow state.
+ *
+ * The verify commands run the project's suite. A `MYFLOW_*` value leaked from
+ * the calling sub-agent would make that suite see itself as a sub-agent and fail
+ * for reasons that have nothing to do with the change under review.
+ */
+function verifyChildEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MYFLOW_")));
+}
+
 function runVerifyCommands(projectRoot: string): string | null {
   const script = join(projectRoot, ".myflow", "scripts", "worktree.py");
   if (!existsSync(script)) return null;
   try {
     execFileSync("python3", [script, "verify"], {
       cwd: projectRoot,
+      env: verifyChildEnv(),
       encoding: "utf-8",
       timeout: 300_000,
       stdio: ["ignore", "pipe", "pipe"],

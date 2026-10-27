@@ -34,9 +34,11 @@ tree lists.
 
 ## Step 3: Work The Checklist
 
-Work the **Pre-Development Checklist** in the area index. It names the
-load-bearing contracts (context key, statuses, hook set, config keys) that must
-stay consistent across files.
+Work the **Pre-Development Checklist** in the area index: it is the readiness
+pass for the change you are about to make. The load-bearing contracts it points
+at (context key, statuses, hook set, config keys) are spelled out in that
+index's **Contracts** section, and the copies that must move with them are
+listed in its **Quality Check**.
 
 When there is no spec tree, use this generic checklist instead:
 

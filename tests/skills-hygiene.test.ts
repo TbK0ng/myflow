@@ -146,9 +146,12 @@ const SCRIPTS = [
 
 /**
  * Paths under `.pi/` or `.myflow/` that the harness creates while it runs
- * rather than ships. Everything else an instruction file names must exist.
+ * rather than ships. Everything else an instruction file names must exist —
+ * including `.myflow/spec/...`, because a project-owned spec tree is still a
+ * tree the payload promises; an instruction that names a layer of it must not
+ * point at air.
  */
-const RUNTIME_PREFIXES = [".myflow/tasks/", ".myflow/archive/", ".myflow/spec/", ".myflow/.runtime/"];
+const RUNTIME_PREFIXES = [".myflow/tasks/", ".myflow/archive/", ".myflow/.runtime/"];
 const RUNTIME_FILES = [".myflow/config.yaml", ".myflow/worktree.yaml", ".pi/mcp.json"];
 
 /** Instruction files as repository-relative paths. */
@@ -188,12 +191,16 @@ function payloadTokens(content: string): Set<string> {
 test("instruction files only reference paths that exist or are created at runtime", () => {
   const files = payloadInstructionFiles();
   assert.ok(files.length >= 15, `expected instruction files, found ${files.length}`);
+  // A project without a spec tree cannot satisfy a `.myflow/spec/...` reference,
+  // so only hold the skills to it once this repository has one.
+  const specTreeExists = existsSync(join(ROOT, ".myflow", "spec", "index.md"));
   const broken: string[] = [];
   for (const file of files) {
     const content = readFileSync(join(ROOT, file), "utf-8");
     for (const token of payloadTokens(content)) {
       if (RUNTIME_FILES.includes(token)) continue;
       if (RUNTIME_PREFIXES.some((prefix) => token === prefix.replace(/\/$/, "") || token.startsWith(prefix))) continue;
+      if (!specTreeExists && token.startsWith(".myflow/spec/")) continue;
       if (!existsSync(join(ROOT, token))) broken.push(`${file} -> ${token}`);
     }
   }

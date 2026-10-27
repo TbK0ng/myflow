@@ -25,10 +25,12 @@ a manifest edit — never a second list in either consumer.
 - `.myflow/spec/` (this project's conventions), `.myflow/config.yaml`,
   `.myflow/worktree.yaml`
 - `.myflow/tasks/`, `.myflow/archive/` — deliverables, committed with the code
-- `.myflow/.runtime/` — machine state (sessions, worktree registry, worker
-  logs, channel-adjacent records). Add it to the project's `.gitignore`; a
-  tracked runtime directory pollutes every diff and makes worktree merges
-  collide with untracked copies.
+- `.myflow/.runtime/` — machine state (sessions, worktree registry, background
+  tasks and their logs, sub-agent logs). Channel worker logs are **not** here:
+  the channel store and its workers live user-level under
+  `~/.pi/myflow/channels/`. Add `.myflow/.runtime/` to the project's
+  `.gitignore`; a tracked runtime directory pollutes every diff and makes
+  worktree merges collide with untracked copies.
 
 **Harness development** — not needed to run the payload:
 
@@ -54,8 +56,9 @@ Keep these consistent across files; change them together or not at all:
   `task.py`). Session files live at `.myflow/.runtime/sessions/<key>.json`.
 - **Shell/session bridge**: scripts read `MYFLOW_CONTEXT_ID` first, then Pi's
   `PI_SESSION_ID`.
-- **Task statuses**: `planning → in_progress → done`; `archive` rewrites to
-  `completed`. The workflow-state block key equals the status, except
+- **Task statuses**: `planning → in_progress`; `archive` rewrites to
+  `completed`. There is no `done` status. The workflow-state block key equals
+  the status, except
   `no_task` (no session) and `completed` (archived).
 - **Workflow-state blocks**: `[workflow-state:STATUS] … [/workflow-state:STATUS]`
   in `.myflow/workflow.md`. The extension is parser-only.
@@ -153,7 +156,7 @@ Keep these consistent across files; change them together or not at all:
   cannot dispatch in practice. `tool_call` also blocks that call as a second
   line of defense (for agents without an allowlist); keep both.
 - User interaction is main-session-only: `myflow_ask_user` (one multiple-choice
-  question, 2-4 options, appends `questions.jsonl`) and `myflow_request_approval`
+  question, a few options, appends `questions.jsonl`) and `myflow_request_approval`
   (writes `approval.json` only when the user agrees). Both refuse in their
   handler and again in `tool_call`; keep both lines, and do not put either tool
   in an agent allowlist.
@@ -240,7 +243,8 @@ Keep these consistent across files; change them together or not at all:
 
 ## Quality Check
 
-- [ ] `npm run check` passes (typecheck, then the suite).
+- [ ] `npm run check` passes (typecheck, then the suite), with the `MYFLOW_*`
+  vars scrubbed when the caller is a sub-agent.
 - [ ] The extension still loads from a payload-only copy
   (`tests/scaffold.test.ts`).
 - [ ] New behavior has a test that fails when the behavior is reverted.

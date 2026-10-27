@@ -31,10 +31,12 @@ boundaries, execution flows, dependency hubs, and impact-sensitive areas.
    }
    ```
 
-2. A generated Pi extension, `~/.pi/agent/extensions/cbmem.ts`, exposes the
+2. A generated Pi extension, `~/.pi/agent/extensions/cbmem.ts`, can expose the
    server's tools directly to the model, so they appear as normal tools rather
-   than only behind the MCP namespace. It is regenerated on install/update from
-   the server's tool registry; do not hand-edit inside its generated block.
+   than only behind the MCP namespace. Whether that file exists depends on how
+   this machine was set up. If it is absent, the tools appear as
+   `mcp__<server>__<tool>` and any agent allowlist has to name them that way.
+   Do not assume either shape: inspect the tool names your Pi actually exposes.
 
 ## Moving It To Another Machine
 
@@ -42,7 +44,7 @@ boundaries, execution flows, dependency hubs, and impact-sensitive areas.
 2. Add the `mcpServers` entry above to `~/.pi/agent/mcp.json`, or use a
    project-level `.pi/mcp.json`.
 3. Restart Pi or run `/reload`.
-4. Verify with `pi mcp` or the `/mcp` command.
+4. Verify with `pi mcp list` or the `/mcp` command.
 
 ## Index The Repository
 
@@ -57,6 +59,12 @@ Modes: `fast` (file bytes only), `moderate` (filtered + semantic), `full`
 the index with `persistence: true` (writes `.codebase-memory/graph.db.zst`).
 
 ## Useful Tools
+
+The names below are the ones codebase-memory exposes today, and they reach the
+model through the generated interface above rather than from the MCP namespace.
+Inspect the names your backend actually exposes (`/mcp`, or the tool list)
+before calling one; do not hardcode a name from this table into a skill or a
+script.
 
 | Tool | Purpose |
 |------|---------|

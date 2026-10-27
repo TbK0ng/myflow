@@ -35,8 +35,11 @@ cat .myflow/spec/index.md 2>/dev/null || echo "NO_SPEC"
 ## Step 3: Run Project Checks
 
 ```bash
-npm run check      # typecheck, then node --test "tests/*.test.ts"
+env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLOW_WRITES_UNDER npm run check
 ```
+
+The `MYFLOW_*` scrub is not optional: a check sub-agent has `MYFLOW_AGENT_TYPE`
+set, and with it leaking in the suite is not hermetic (~23 false failures).
 
 Fix every failure before continuing. Also re-run any command the change
 affects, for example:

@@ -7,13 +7,16 @@ description: "Understand, modify, and copy the myflow harness for Pi: the extens
 
 This repository **is** the myflow harness for Pi. This skill is the map for
 changing it. It describes only what exists here — there is one platform (Pi),
-this repository is the whole harness: one Pi extension, five scripts, the skills that drive them, and their tests.
+this repository is the whole harness: one Pi extension, its scripts, the skills
+that drive them, and their tests.
 
 **Windows only, with Git Bash.** The shell is the Git for Windows bash, a process
 tree dies by `taskkill /F /T`, a worker is spawned with `DETACHED_PROCESS`, and
 path comparison folds case (NTFS does). There is exactly one code path: no
-`process.platform` / `os.name` branch survives, and each entry point refuses to
-start on another platform instead of half-working.
+`process.platform` / `os.name` branch survives. The four entry points that own
+the platform-specific work — the extension, `bg_runner.mjs`, `channel.py`,
+`worktree.py` — refuse to start on another platform instead of half-working;
+`task.py` and `get_context.py` carry no check.
 
 ## Layout
 
@@ -23,7 +26,7 @@ start on another platform instead of half-working.
   extensions/myflow/subagent.ts     # myflow_subagent tool (single/parallel/chain)
   extensions/myflow/ask.ts          # myflow_ask_user tool (one choice question)
   extensions/myflow/approval.ts     # myflow_request_approval tool (writes approval.json)
-  extensions/myflow/background/      # the four myflow_bg_* tools + the on-disk registry
+  extensions/myflow/background/      # the myflow_bg_* tools + the on-disk registry
     index.ts                         #   public surface: BG_TOOL_NAMES + registerMyflowBackground
     registry.ts                      #   the on-disk layer (entry, pid, exit, cursor, prune)
     tools.ts                         #   shared plumbing: registration, refusals, cwd check
@@ -39,6 +42,7 @@ start on another platform instead of half-working.
 .myflow/
   agents/{architect,reviewer}.md      # channel runtime peers (design review, code review)
   workflow.md                       # phases, routing, per-turn state blocks
+  config.yaml                       # optional, project-owned: injection budgets, skip keyword, channel trust
   worktree.yaml                     # optional, project-owned: parallel sessions + verify commands
   scripts/get_context.py            # session context (workflow + task + git)
   scripts/task.py                   # task lifecycle + session pointer
@@ -52,8 +56,8 @@ start on another platform instead of half-working.
 tests/                              # harness development only (node --test)
 tools/                              # harness development only, never in the payload
   release-payload.json              # the single source of truth for the payload list
-  release.py                        # builds dist/myflow-<version>/ + .zip; --check / --verify
-                                    # --release bumps, changelogs, builds, commits and tags
+  release.py                        # builds dist/myflow-<version>/ + .zip; --check / --out / --verify
+                                    # --release {patch|minor|major} [--yes] [--dry-run] bumps, changelogs, builds, commits and tags
   INSTALL.md                        # installer instructions copied into every release
 ```
 
@@ -89,19 +93,22 @@ directory. These hooks are always registered:
 | `session_start` | Main session: `session-context` + `task-context`. Sub-agent: `task-context` only. |
 | `input` | Reads the skip keyword, starts the turn cache. |
 | `before_agent_start` | Returns the `workflow-state` breadcrumb. |
-| `context` | Replaces a stale `task-context`, re-adds or strips the breadcrumb. |
+| `context` | Replaces a stale `task-context`, rebuilds `session-context` when the active task or status changed, re-adds or strips the breadcrumb. |
 | `tool_call` | Blocks `myflow_subagent` inside a sub-agent (recursion guard), blocks `myflow_ask_user` / `myflow_request_approval` inside a sub-agent (main-session-only guard), blocks the four `myflow_bg_*` tools inside a sub-agent (background tasks register in the shared project registry and outlive the process), and blocks `write`/`edit` outside a declared `writesUnder` scope. |
 | `session_before_compact` | Records the compaction timestamp so the breadcrumb is re-injected. |
 | `agent_before_settle` | Holds a `myflow-check` sub-agent until the configured verify commands pass (bounded retries). |
 | `session_shutdown` | Kills nothing: background tasks are project-level and must outlive the session. It is idempotent (one run per session), reports the tasks this session started that are still running (silent without a UI), and never throws. |
 
 Injected blocks are `custom` messages with `display: false`:
-`<session-context>`, `<task-context>`, `<workflow-state>`.
+`<session-context>`, `<task-context>`, `<workflow-state>`, and the
+`<session-overview>` sitting beside `<workflow-state>` in the same message.
 
 `myflow_subagent` spawns an isolated `pi` process per run. A call names one
-agent and one or more prompts: `single` runs one prompt, `parallel` runs up to
-six prompts for that agent at once, and `chain` runs them in sequence with
-`Previous output:` appended. Runs are capped (`timeoutMs`, default 15 min, 0 = none)
+agent and one or more prompts: `single` runs one prompt, `parallel` runs
+several prompts for that agent at once, and `chain` runs them in sequence with
+`Previous output:` appended, stopping at the first failed run. The prompt cap is
+on the shared `prompts` array, so it bounds `chain` too. Runs are capped
+(`timeoutMs`, 0 = none; the tool schema states the default)
 and logged under `.myflow/.runtime/subagent-logs/`. `parallel` is refused for a
 write-capable agent that declares no `writesUnder` scope (implement, check):
 sub-agents share one tree, so an unbounded writer runs one at a time. A declared
@@ -117,8 +124,8 @@ the caller.
 
 `myflow_ask_user` and `myflow_request_approval` implement the plan-approval
 gate and take the same injected `deriveContextKey` / `isSubAgent` as
-`myflow_subagent`, so neither imports `index.ts`. The first asks one 2-4 option
-question through `ctx.ui.select` and appends `questions.jsonl`; the second
+`myflow_subagent`, so neither imports `index.ts`. The first asks one question
+with a few options through `ctx.ui.select` and appends `questions.jsonl`; the second
 confirms through `ctx.ui.confirm` and writes `approval.json` only on consent.
 With no interactive UI both return instructions instead of fabricating an answer
 or an approval. The gate's contracts live in `references/harness-conventions.md`.
@@ -180,7 +187,8 @@ python3 .myflow/scripts/task.py finish   # clear the active-task pointer without
 python3 .myflow/scripts/task.py list [--status <s>] [--json]
 ```
 
-Statuses: `planning -> in_progress -> done`; `archive` rewrites to `completed`.
+Statuses: `planning -> in_progress`; `archive` rewrites to `completed`. There
+is no `done` status.
 The workflow-state block key equals the status (`no_task` when there is none,
 `completed` for archived work).
 
@@ -242,6 +250,8 @@ with this skill in `references/harness-conventions.md`.
 
 ```bash
 npm run check                     # tsc --noEmit, then the suite
+# in a sub-agent the suite is not hermetic; scrub first:
+# env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLOW_WRITES_UNDER npm run check
 python3 .myflow/scripts/get_context.py
 python3 .myflow/scripts/task.py current --source
 python3 .myflow/scripts/worktree.py config

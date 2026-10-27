@@ -1,0 +1,21 @@
+{"file": ".scratch/skill-sync/spec.md", "reason": "the source spec: audit findings and decisions"}
+{"file": ".pi/skills/myflow-meta/SKILL.md", "reason": "canonical hook table + lifecycle command block to edit"}
+{"file": ".pi/skills/myflow-meta/references/harness-conventions.md", "reason": "Config Keys table + hook list to edit"}
+{"file": ".pi/skills/myflow-check/SKILL.md", "reason": "the third hook-count copy to fix"}
+{"file": ".pi/skills/myflow-before-dev/SKILL.md", "reason": "unconditional guides/ read to make tolerant"}
+{"file": ".pi/skills/myflow-update-spec/SKILL.md", "reason": "guides/ definition to state as optional"}
+{"file": ".myflow/spec/index.md", "reason": "Layout section to extend with optional guides/"}
+{"file": ".myflow/spec/harness/index.md", "reason": "Quality Check to extend with the config-key rule"}
+{"file": "tests/scaffold.test.ts", "reason": "the test that builds the real handler set; extend it"}
+{"file": "tests/subagent.test.ts", "reason": "stale test title to retitle"}
+{"file": ".myflow/tasks/skill-sync/research/audit-meta.md", "reason": "audit-meta findings: evidence for batch 3"}
+{"file": ".myflow/tasks/skill-sync/research/audit-process-skills.md", "reason": "audit-process-skills findings: evidence for batch 3"}
+{"file": ".myflow/tasks/skill-sync/research/audit-brainstorm.md", "reason": "audit-brainstorm findings: evidence for batch 3"}
+{"file": ".myflow/tasks/skill-sync/research/audit-spec-skills.md", "reason": "audit-spec-skills findings: evidence for batch 3"}
+{"file": ".myflow/tasks/skill-sync/research/audit-channel.md", "reason": "audit-channel findings: evidence for batch 3"}
+{"file": ".myflow/tasks/skill-sync/research/audit-cross-cutting.md", "reason": "audit-cross-cutting findings: evidence for batch 3"}
+{"file": ".pi/extensions/myflow/index.ts", "reason": "batch 3 code changes (B1/B2/C1/D1/D2)"}
+{"file": ".myflow/scripts/channel.py", "reason": "batch 3 code changes (B1/B2/C1/D1/D2)"}
+{"file": ".myflow/scripts/worktree.py", "reason": "batch 3 code changes (B1/B2/C1/D1/D2)"}
+{"file": "tests/skills-hygiene.test.ts", "reason": "batch 3 code changes (B1/B2/C1/D1/D2)"}
+{"file": "tests/context-injection.test.ts", "reason": "batch 3 code changes (B1/B2/C1/D1/D2)"}

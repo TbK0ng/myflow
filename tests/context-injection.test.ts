@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -472,4 +472,18 @@ test("buildTaskContext: total budget still holds after design/implement are adde
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("the max_file_bytes default has one value across TypeScript and Python", () => {
+  // `context-injection.ts` truncates at this number; `task.py validate` warns at
+  // it. Two languages, two literals, so the pair is compared here rather than
+  // trusted to stay in sync.
+  const taskPy = readFileSync(join(import.meta.dirname, "..", ".myflow", "scripts", "task.py"), "utf-8");
+  const match = /def _context_max_file_bytes\(\)[\s\S]*?default = (\d+)/.exec(taskPy);
+  assert.ok(match, "task.py must keep the max_file_bytes default in _context_max_file_bytes");
+  assert.equal(
+    Number(match[1]),
+    DEFAULT_CONTEXT_INJECTION_LIMITS.max_file_bytes,
+    "task.py's max_file_bytes default must equal the extension's",
+  );
 });

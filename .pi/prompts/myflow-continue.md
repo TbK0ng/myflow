@@ -16,7 +16,7 @@ This shows the workflow-state blocks, the active task (`path / status / title`)
 and where the pointer came from, plus git branch and recent commits.
 
 If there is no active task, decide with the user whether this turn should
-create one (Phase 1.0), then load `myflow-brainstorm`.
+create one (before Phase 1), then load `myflow-brainstorm`.
 
 ## Step 2: Read The Phase Index
 
@@ -35,7 +35,7 @@ artifact presence:
 | `in_progress` | implementation not started | **2.1** implement |
 | `in_progress` | implementation done, not checked | **2.2** check |
 | `in_progress` | check passed | **3.1** spec update |
-| `completed` / `done` | still in `tasks/` | **3.3** finish and archive |
+| `completed` | still in `tasks/` | **3.3** finish and archive |
 
 Phase rules:
 

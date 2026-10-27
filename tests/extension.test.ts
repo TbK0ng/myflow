@@ -1,6 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -440,6 +440,45 @@ test("verify gate: a channel review worker is held without an agent type", async
     else process.env[MYFLOW_AGENT_ENV] = agentBackup;
     if (flagBackup === undefined) delete process.env[MYFLOW_VERIFY_GATE_ENV];
     else process.env[MYFLOW_VERIFY_GATE_ENV] = flagBackup;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("verify gate: the verify command runs without the caller's MYFLOW_* env", async () => {
+  // A check sub-agent carries MYFLOW_AGENT_TYPE; the suite the gate runs is not
+  // hermetic with respect to it, so every MYFLOW_* key must be stripped from the
+  // child env or the gate fails on the caller's identity rather than the change.
+  const root = makeProject();
+  const previous = process.env[MYFLOW_AGENT_ENV];
+  const leakBackup = process.env.MYFLOW_TEST_LEAK;
+  process.env[MYFLOW_AGENT_ENV] = "myflow-check";
+  process.env.MYFLOW_TEST_LEAK = "1";
+  try {
+    const seen = join(root, "verify-env.json");
+    mkdirSync(join(root, ".myflow", "scripts"), { recursive: true });
+    writeFileSync(
+      join(root, ".myflow", "scripts", "worktree.py"),
+      `import json, os, sys\njson.dump(dict(os.environ), open(r"${seen}", "w"))\nsys.exit(0)\n`,
+    );
+    const { api } = makeMockAPI(root);
+    extension(api);
+    const handlers = getHandlers(api);
+    const ctx = getCtx(api);
+    await handlers.session_start({}, ctx);
+    const allowed = await (handlers.agent_before_settle as (event: unknown, ctx: HookContext) => Promise<unknown>)(
+      { outcome: "completed" },
+      ctx,
+    );
+    assert.equal(allowed, undefined, "the stubbed verify passes");
+    const leaked = Object.keys(JSON.parse(readFileSync(seen, "utf-8")) as Record<string, string>).filter((key) =>
+      key.startsWith("MYFLOW_"),
+    );
+    assert.deepEqual(leaked, [], `the verify command inherited MYFLOW_* keys: ${leaked.join(", ")}`);
+  } finally {
+    if (previous === undefined) delete process.env[MYFLOW_AGENT_ENV];
+    else process.env[MYFLOW_AGENT_ENV] = previous;
+    if (leakBackup === undefined) delete process.env.MYFLOW_TEST_LEAK;
+    else process.env.MYFLOW_TEST_LEAK = leakBackup;
     rmSync(root, { recursive: true, force: true });
   }
 });

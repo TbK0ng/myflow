@@ -7,7 +7,7 @@ description: "Guides collaborative requirements discovery before implementation.
 
 **CoreRule**: Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
-Ask the questions one at a time, as a multiple-choice question via the `myflow_ask_user` tool (one question, 2-4 options). The tool records each exchange in `questions.jsonl`, and the approval gate later refuses a plan the user was never asked about, so skipping this step does not work.
+Ask the questions one at a time, as a multiple-choice question via the `myflow_ask_user` tool (one question with a few options). The tool records each exchange in `questions.jsonl`, and the approval gate later refuses a plan the user was never asked about, so skipping this step does not work.
 
 When no interactive UI is available, `myflow_ask_user` returns an instruction instead of an answer: list the options in prose, end your turn, and wait. Never invent an answer.
 
@@ -64,17 +64,28 @@ Triggered from /skill:myflow-brainstorm when the user describes a development ta
 
 ## Step 0: Ensure Task Exists (ALWAYS)
 
-Before any Q&A, ensure a task exists. If none exists, create one immediately.
+Before any Q&A, check whether a task is already active:
+
+```bash
+python3 ./.myflow/scripts/task.py current
+```
+
+* **A task is active**: use it. Never create a second one; a second task does
+  not become the session pointer, so its `questions.jsonl` rows would land
+  nowhere the gate reads.
+* **No task**: ask the user for consent to create one. The injected `no_task`
+  block requires that consent; do not create a task first and ask afterwards.
 
 * Use a **temporary working title** derived from the user's message.
 * It's OK if the title is imperfect — refine later in PRD.
 
 ```bash
-TASK_DIR=$(python3 ./.myflow/scripts/task.py create "brainstorm: <short goal>" --description "<one-line summary>" --slug <auto>)
+TASK_DIR=$(python3 ./.myflow/scripts/task.py create "brainstorm: <short goal>" \
+  --description "<one-line summary>" --slug <concrete-slug> | sed 's/^created: //')
 ```
 
-Use a slug without a date prefix. `task.py create` adds the `MM-DD-`
-directory prefix automatically.
+`task.py create` prints `created: <dir>`, hence the `sed`; the slug is used
+verbatim as the directory name.
 
 Create/seed `prd.md` immediately with what you know:
 
@@ -203,9 +214,13 @@ Examples:
 * The user asks for "best practice", "how others do it", "recommendation"
 * The user can't reasonably enumerate options
 
-### Delegate to `myflow-research` sub-agent (don't research inline)
+### Delegate research to `myflow-research` sub-agent (don't research inline)
 
-For each research topic, **spawn a `myflow-research` sub-agent via the `myflow_subagent` tool** — don't do WebFetch / WebSearch / `gh api` inline in the main conversation.
+For each research topic, **spawn a `myflow-research` sub-agent via the `myflow_subagent` tool** — don't read the repository inline in the main conversation.
+
+Its allowlist is `read, write, find, grep, ls`: it reads the repository and
+persists findings, but it has no web or `gh` access. External research happens
+in the current session.
 
 Why:
 - The sub-agent has its own context window → doesn't pollute brainstorm context with raw tool output
@@ -214,18 +229,21 @@ Why:
 - Independent topics can be **parallelized** — spawn multiple sub-agents in one tool call
 - `parallel` is rejected for write-capable agents that declare no `writesUnder` scope: `myflow-implement` and `myflow-check` run one at a time (one unbounded writer per working tree), while `myflow-research` declares `writesUnder: research` and may run in parallel (each run writes its own topic file under `{TASK_DIR}/research/`)
 
-> **Fallback**: if `myflow_subagent` dispatch is unavailable in the current session, do the research inline and write the same files to `{TASK_DIR}/research/<topic>.md` yourself. Keep the contract (persisted file + one-line summary) either way.
+> **Fallback**: if `myflow_subagent` dispatch is unavailable in the current session, do the repository reading inline and write the same files to `{TASK_DIR}/research/<topic>.md` yourself. Keep the contract (persisted file + one-line summary) either way.
 
 Agent type: `myflow-research`
 Task description template: "Research <specific question>; persist findings to `{TASK_DIR}/research/<topic-slug>.md`."
 
 ❌ Bad (what you must NOT do):
 ```
-Main agent: WebFetch(url-A) → WebFetch(url-B) → Bash(gh api ...)
-          → WebSearch(q1) → WebSearch(q2) → ... (10+ inline calls)
+Main agent: read(file-A) → read(file-B) → grep(pattern, src/) → ls(dir) → ... (10+ inline calls)
           → Write(research/topic.md)
 ```
-→ Pollutes main context with raw HTML/JSON, burns tokens.
+→ Pollutes main context with raw output, burns tokens.
+
+External sources (docs sites, `gh api`) are read in the current session and the
+findings are written to `{TASK_DIR}/research/<topic>.md` here; keeping the file
+is the contract, not who fetched it.
 
 ✅ Good:
 ```
@@ -353,7 +371,7 @@ Then update PRD:
 
 * One question per message
 * Prefer multiple-choice when possible — ask it with `myflow_ask_user`
-  (2-4 options; the user picks exactly one)
+  (a few options; the user picks exactly one)
 * After each user answer:
 
   * Update PRD immediately
@@ -456,6 +474,11 @@ Here's my understanding of the complete requirements:
 Does this look correct? If yes, I'll proceed with implementation.
 ```
 
+For complex work, write that plan down: `design.md` for the technical approach
+and `implement.md` for the ordered steps, alongside `prd.md`. The approval gate
+hashes every plan file that exists, and task-context injection feeds them to
+sub-agents, so a plan that lives only in the chat is invisible to both.
+
 ### Request Approval (Required Before Activation)
 
 After the user confirms the plan, request approval with the
@@ -539,26 +562,27 @@ Context / Decision / Consequences
 
 ## Integration with Start Workflow
 
-After brainstorm completes (Step 8 confirmation approved), the flow continues to the Task Workflow's **Phase 2: Prepare for Implementation**:
+After brainstorm completes (Step 8 confirmation approved), the flow continues through
+the rest of the Task Workflow:
 
 ```text
-Brainstorm
-  Step 0: Create task directory + seed PRD
-  Step 1–7: Discover requirements, research, converge
-  Step 8: Final confirmation → user approves
-  ↓
-Task Workflow Phase 2 (Prepare for Implementation)
-  Code-Spec Depth Check (if applicable)
-  → Research codebase (based on confirmed PRD)
-  → Configure code-spec context (jsonl files)
-  → Approve the plan (`myflow_request_approval`, or `task.py approve`)
-  → Activate task (`task.py start`)
-  ↓
-Task Workflow Phase 3 (Execute)
-  Implement → Check → Complete
+1.1 Brainstorm (this skill)
+    Step 0: create the task + seed PRD
+    Step 1–8: discover requirements, research, converge, confirm
+    ↓
+1.2 Research (optional)          myflow_subagent → myflow-research → research/<topic>.md
+1.3 Configure context (required) task.py add-context → implement.jsonl / check.jsonl
+                                 a seeded-but-empty manifest hard-blocks `start`
+1.4 Activate (required)          approve the plan (myflow_request_approval, or
+                                 task.py approve) → task.py start
+    ↓
+2.1–2.3 Execute                  implement → check → (rollback on demand)
+    ↓
+3.1–3.3 Finish                   update spec → commit → /myflow-finish-work
 ```
 
-The task directory and PRD already exist from brainstorm, so Phase 1 of the Task Workflow is skipped entirely.
+The task directory and PRD already exist from brainstorm, so the exploration
+half of Phase 1 is done; 1.2–1.4 still run.
 
 ---
 

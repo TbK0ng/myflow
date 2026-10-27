@@ -45,6 +45,7 @@ a brainstorm.
 ### Spawn an implement or check worker
 
 ```bash
+python3 ./.myflow/scripts/channel.py create review       # spawn refuses an unknown channel
 python3 ./.myflow/scripts/channel.py spawn review --agent reviewer --handle checker \
   --task .myflow/tasks/<slug>
 python3 ./.myflow/scripts/channel.py wait review --from checker --kind done
@@ -56,9 +57,13 @@ artifacts itself.
 ### Interrupt and redirect
 
 ```bash
-python3 ./.myflow/scripts/channel.py send review --as me --to checker --kind interrupt \
+python3 ./.myflow/scripts/channel.py send review --as me --to checker \
   --text "Stop: keep the existing signature."
 ```
+
+`--kind interrupt` is only a message kind, not a signal: nothing reads it
+mid-run. The worker sees the message on its next channel read. To stop it now,
+`kill checker`.
 
 ### Inspect and clean up
 
@@ -69,6 +74,10 @@ python3 ./.myflow/scripts/channel.py kill <handle>
 python3 ./.myflow/scripts/channel.py rm <channel>
 python3 ./.myflow/scripts/channel.py rm <channel> --force   # stop its live workers first
 ```
+
+Every one of those is scoped: add `--scope global` to reach a global channel or
+its workers. Without it they look only at the project bucket, so a global
+channel is unlistable and its worker unkillable from the default scope.
 
 ## Rules
 
@@ -93,9 +102,9 @@ python3 ./.myflow/scripts/channel.py rm <channel> --force   # stop its live work
 - A worker keeps its log file open until it exits, so `rm` refuses while a
   worker of that channel is alive. Stop it (`kill <channel>`) or use
   `rm --force`, which stops the workers before deleting.
-- The worker guard caps live workers (`channel.worker_guard.max_live_workers`,
-  default 3) and stops idle ones (`channel.worker_guard.idle_timeout`, default
-  900s).
+- The worker guard caps live workers **per channel** and stops idle ones
+  (`channel.worker_guard.*`; the defaults are in the Config Keys table in
+  `myflow-meta/references/harness-conventions.md`).
 
 ## Not For
 

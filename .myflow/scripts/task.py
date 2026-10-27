@@ -20,7 +20,7 @@ Data model (matches .pi/extensions/myflow/turn-cache.ts resolveActiveTaskStatus)
     .myflow/tasks/<dir>/task.json                -> {"title", "status", "description", "slug", "parent"}
     .myflow/archive/<YYYY-MM>/<dir>/task.json    -> archived task
 
-Statuses: planning -> in_progress -> done -> (archived as completed)
+Statuses: planning -> in_progress -> (archived as completed). No `done` state.
 """
 
 from __future__ import annotations

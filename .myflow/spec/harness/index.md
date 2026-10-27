@@ -8,11 +8,12 @@ Payload tour and inventory:
 
 ## Pre-Development Checklist
 
-- [ ] Run `npm run check` (typecheck, then the suite) **from the main session**, not from inside a
-      sub-agent. The suite is not hermetic w.r.t. `MYFLOW_AGENT_TYPE` /
-      `MYFLOW_CONTEXT_ID`: when those leak in, unrelated tests fail because the
-      extension sees itself as a sub-agent. Clear them before believing a
-      failure:
+- [ ] Run `npm run check` (typecheck, then the suite) with the `MYFLOW_*` env
+      vars scrubbed. Every process that runs the suite scrubs them first; a
+      check sub-agent must, because it is the one that has to run it. The suite
+      is not hermetic w.r.t. `MYFLOW_AGENT_TYPE` / `MYFLOW_CONTEXT_ID`: when
+      those leak in, unrelated tests fail because the extension sees itself as a
+      sub-agent. Clear them before believing a failure:
       `env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLOW_WRITES_UNDER npm run check`
 - [ ] Decide whether you are changing a **contract** (env key, frontmatter key,
       file format, tool schema) or only behavior inside one module. A contract
@@ -264,7 +265,7 @@ Payload tour and inventory:
     self-heals to `exited` with `exit_code: null`. `exit_code` is therefore
     nullable everywhere: a task force-stopped by `myflow_bg_stop`, or one whose
     wrapper died, is reported `stopped` / `exited` with no code.
-  - A finished verdict is **sticky**. `resolveStatus` has a fixed **six-level**
+  - A finished verdict is **sticky**. `resolveStatus` has a fixed
     precedence: `.exit` → `status: "stopped"` → `status: "exited"` →
     `isAlive(readPid(...))` → `starting` while the entry is at most
     `STARTING_TIMEOUT_MS` (60s) old → self-heal to `exited` with
@@ -371,8 +372,7 @@ session, and the invariants above are what keep it honest.
   files, so it shrinks the blast radius to one directory and the agent contract
   requires one topic per file. This is a **boundary** guarantee, **not mutual
   exclusion** — do not describe it as a lock.
-- Revisit if: a sub-agent gains `bash` (which would write around the guard), or
-  dispatch grows a way to prove disjointness.
+- Revisit if: dispatch grows a way to prove disjointness.
 
 ## Gotchas
 
@@ -392,11 +392,14 @@ session, and the invariants above are what keep it honest.
 > `myflow-check` keep full-tree access — and a blank *present* value as
 > fail-closed inside the child.
 
-> **Gotcha**: the guard compares paths **lexically**, not through `realpath`.
+> **Gotcha**: the guard compares paths **lexically**, not through `realpath`,
+> and it only bounds `write` / `edit`.
 >
-> Happens when: a symlink already inside the scope points outside it. This is
-> unreachable for the current agents (no `bash`, no symlink tool), but re-check
-> if an agent ever gains either.
+> Happens when: a symlink already inside the scope points outside it, or an
+> agent writes through the shell. `myflow-implement` and `myflow-check` both
+> declare `bash`, which can write around the lexical check by design. The scope
+> is a blast-radius boundary, **not a sandbox**; do not count on it to contain
+> `bash`.
 
 > **Gotcha**: `hasWriteScope` and `declaresWriteScope` are not interchangeable.
 >
@@ -432,7 +435,10 @@ session, and the invariants above are what keep it honest.
       `myflow-meta` harness conventions, the `myflow-brainstorm` skill, and
       `.pi/prompts/myflow-continue.md`. No copy still describes `task.py start`
       as gated only on the context manifests.
-- [ ] No agent gained `bash` without revisiting the Design Decision above.
+- [ ] An agent that gains `bash` or unbounded `write` re-opens the Design
+      Decision above. The `writesUnder` guard bounds `write`/`edit` lexically;
+      `bash` writes around it by design, so a write scope is a blast-radius
+      boundary, never a sandbox.
 - [ ] Changing the shell resolution (`resolveShellPath` /
       `shellRejectionReason` / `shellArgsFor`), the `<taskId>.exit` shape, or the
       `<taskId>.pid` handshake was mirrored into the `myflow_bg_start` tool
@@ -442,3 +448,11 @@ session, and the invariants above are what keep it honest.
       `stopped`). Adding a state means updating `BackgroundTaskStatus`,
       `resolveStatus`, `myflow_bg_list` / `myflow_bg_output` / `myflow_bg_stop`,
       the tool descriptions, and this entry — all together.
+- [ ] A number that a shipped doc states and the code defines has **one** home.
+      Restating a count in prose is a bug; pointing at the canonical place is
+      the fix. `tests/doc-numbers.test.ts` pins the cross-language pairs that
+      cannot share a home (the Config Keys table, `STARTING_TIMEOUT_MS`,
+      `PRUNE_AFTER_MS`).
+- [ ] A test that waits for a Windows tree kill **polls to a deadline**; a fixed
+      `setTimeout` under-waits on a loaded machine and slows every run down.
+      `waitForProcessGone` in `tests/subagent.test.ts` is the pattern.

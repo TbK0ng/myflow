@@ -20,9 +20,10 @@ Usage:
     channel.py rm <name>
     channel.py prune
 
-Store: `~/.myflow/channels/<project>/<channel>/events.jsonl` for project scope
-and `~/.myflow/channels/__global__/<channel>/events.jsonl` for global scope.
-Worker processes and logs live beside them. Writes take a lock file, allocate a
+Store: `~/.pi/myflow/channels/<project>/<channel>/events.jsonl` for project
+scope and `~/.pi/myflow/channels/__global__/<channel>/events.jsonl` for global
+scope. Never `~/.myflow`: that name is the project-root marker. Worker
+processes and logs live beside them. Writes take a lock file, allocate a
 monotonic `seq`, and honor `--idempotency-key`.
 
 Worker guard: `.myflow/config.yaml`

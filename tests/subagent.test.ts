@@ -34,6 +34,24 @@ function makeProject(): string {
   return root;
 }
 
+/**
+ * Poll until `pid` is gone. A tree kill on Windows completes asynchronously, so
+ * a fixed sleep either under-waits (red on a loaded machine) or slows every run
+ * down; the deadline keeps a real orphan a failure.
+ */
+async function waitForProcessGone(pid: number, deadlineMs = 15_000): Promise<boolean> {
+  const start = Date.now();
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if (Date.now() - start >= deadlineMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 /** A project with one active task and a session pointing at it. */
 function makeScopedProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-guard-"));
@@ -251,15 +269,8 @@ test("myflow_subagent: a run past its cap is stopped, reported, and logged", asy
     assert.ok(existsSync(logPath), "the raw stream must be kept");
     assert.match(readFileSync(logPath, "utf-8"), /"working"/, "the log holds what the run produced");
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
     const childPid = Number(readFileSync(pidFile, "utf-8"));
-    let alive = true;
-    try {
-      process.kill(childPid, 0);
-    } catch {
-      alive = false;
-    }
-    assert.equal(alive, false, "the stopped run is killed, not orphaned");
+    assert.ok(await waitForProcessGone(childPid), "the stopped run is killed, not orphaned");
   } finally {
     process.argv[1] = argv1;
     rmSync(root, { recursive: true, force: true });

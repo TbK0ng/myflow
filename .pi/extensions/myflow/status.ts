@@ -166,7 +166,7 @@ export function buildStatusReport(projectRoot: string, contextKey: string | null
 export function nextActionForPhase(phase: string): string {
   switch (phase) {
     case "no_task":
-      return "classify this turn; create a task only with user consent (Phase 1.0)";
+      return "classify this turn; create a task only with user consent (before Phase 1)";
     case "planning":
       return "myflow-brainstorm -> prd.md -> curate jsonl -> task.py start (Phase 1)";
     case "in_progress":
