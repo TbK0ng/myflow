@@ -26,8 +26,6 @@ a manifest edit — never a second list in either consumer.
 
 **Project-owned** — never copy between projects:
 
-- `.myflow/config.yaml` — injection budgets, skip keyword, channel trust; absent
-  from a repository that runs on the defaults
 - `.myflow/tasks/`, `.myflow/archive/` — deliverables, committed with the code
 - `.myflow/.runtime/` — machine state (sessions, worktree registry, background
   tasks and their logs, sub-agent logs). Channel worker logs are **not** here:
@@ -217,7 +215,7 @@ Keep these consistent across files; change them together or not at all:
   breaks as soon as the prompt grows a newline. Assert the recorded state
   (registry/plan) instead of the shim's view of argv.
 
-## Config Keys (`.myflow/config.yaml`, all optional)
+## Tuning constants (code defaults)
 
 | Key | Default | Effect |
 | --- | --- | --- |

@@ -152,7 +152,7 @@ const SCRIPTS = [
  * point at air.
  */
 const RUNTIME_PREFIXES = [".myflow/tasks/", ".myflow/archive/", ".myflow/.runtime/"];
-const RUNTIME_FILES = [".myflow/config.yaml", ".myflow/worktree.yaml", ".pi/mcp.json"];
+const RUNTIME_FILES = [".myflow/worktree.yaml", ".pi/mcp.json"];
 
 /** Instruction files as repository-relative paths. */
 function payloadInstructionFiles(): string[] {

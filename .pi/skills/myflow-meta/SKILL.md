@@ -52,7 +52,6 @@ the platform-specific work — the extension, `bg_runner.mjs`, `channel.py`,
   spec/                             # the harness's own specification (ships in the payload)
   worktree.template.yaml            # ships: worktree + verify config template with no project commands
   worktree.yaml                     # this repository's own verify config (not shipped)
-  config.yaml                       # optional, project-owned: injection budgets, skip keyword, channel trust
   scripts/get_context.py            # session context (workflow + task + git)
   scripts/task.py                   # task lifecycle + session pointer
   scripts/bg_runner.mjs             # detached background-task wrapper (records its own exit)
@@ -81,9 +80,8 @@ Do **not** copy `.myflow/tasks/`, `.myflow/archive/`, or `.myflow/.runtime/` —
 one project's deliverables and machine state. `.myflow/worktree.yaml` stays
 behind too: it names this repository's own `verify:` commands. The release
 carries `.myflow/worktree.template.yaml`, which the installer copies into place
-and edits. `.myflow/config.yaml` only exists in a project that overrides a
-default, so a release often has none: every reader falls back to a built-in
-default. `tests/`, `package.json`, `tsconfig.json`, and `tools/` are harness
+and edits. Every budget and trust rule has a built-in default, and a release
+ships no override. `tests/`, `package.json`, `tsconfig.json`, and `tools/` are harness
 development and are not copied either.
 
 The payload list has exactly **one source**: `tools/release-payload.json`
@@ -187,9 +185,9 @@ the transport a run is driven over lives in `transport.ts`.
 
 `buildTaskContext` (`.pi/extensions/myflow/context-injection.ts`) materializes `prd.md`,
 `design.md` / `implement.md` when present, `info.md`, and the files referenced
-by `implement.jsonl` / `check.jsonl`, bounded by `context_injection.*` in
-`.myflow/config.yaml`. Files outside the
-project are only read when under a trusted root (`channel.*`). Omitted or
+by `implement.jsonl` / `check.jsonl`, bounded by the built-in byte budgets in
+`context-injection.ts`. Files outside the
+project are only read when under a trusted root. Omitted or
 truncated entries remain authoritative on disk; the model must read them.
 
 The escape hatch: if the user's input contains the configured skip keyword
@@ -261,8 +259,8 @@ with this skill in `references/harness-conventions.md`.
 | `/mysubagents` views, rendering, keys | `.pi/extensions/myflow/board/` (`render.ts` for layout, `keys.ts` for keys, `actions.ts` for what a key does) |
 | What a run records / how stale is decided | `.pi/extensions/myflow/runs.ts` |
 | How a child run is spawned, settled, steered, killed | `.pi/extensions/myflow/transport.ts`, `.pi/extensions/myflow/ctl.ts` |
-| Task context budgets or trust rules | `.myflow/config.yaml`, `.pi/extensions/myflow/context-injection.ts` |
-| Skip keyword behavior | `.myflow/config.yaml`, `.pi/extensions/myflow/escape-hatch.ts` |
+| Task context budgets or trust rules | `.pi/extensions/myflow/context-injection.ts` |
+| Skip keyword behavior | `.pi/extensions/myflow/escape-hatch.ts` |
 | Workflow phases, routing, breadcrumbs | `.myflow/workflow.md` |
 | Task lifecycle | `.myflow/scripts/task.py` |
 | Parallel sessions (worktrees) | `.myflow/scripts/worktree.py`, `.myflow/worktree.yaml` |

@@ -15,11 +15,11 @@ function read(rel: string): string {
   return readFileSync(join(ROOT, ...rel.split("/")), "utf-8");
 }
 
-/** The `## Config Keys` table as key -> default literal, backticks stripped. */
+/** The `## Tuning constants` table as key -> default literal, backticks stripped. */
 function configKeyDefaults(): Map<string, string> {
   const lines = read(CONVENTIONS).split(/\r?\n/);
-  const start = lines.findIndex((line) => line.startsWith("## Config Keys"));
-  assert.ok(start >= 0, `${CONVENTIONS} must carry the Config Keys table`);
+  const start = lines.findIndex((line) => line.startsWith("## Tuning constants"));
+  assert.ok(start >= 0, `${CONVENTIONS} must carry the tuning-constants table`);
   const rows = new Map<string, string>();
   for (const line of lines.slice(start + 1)) {
     if (line.startsWith("## ")) break;
@@ -28,7 +28,7 @@ function configKeyDefaults(): Map<string, string> {
   }
   // A parser that silently matched zero rows would make every `rows.get` below
   // compare against `undefined` and hide a reformatted table.
-  assert.ok(rows.size > 0, `${CONVENTIONS} must parse at least one Config Keys row`);
+  assert.ok(rows.size > 0, `${CONVENTIONS} must parse at least one tuning-constants row`);
   return rows;
 }
 
@@ -56,7 +56,7 @@ function objectNumber(source: string, key: string): number {
   return Number(match[1]!.replace(/_/g, ""));
 }
 
-test("the Config Keys table matches the defaults the code reads", () => {
+test("the tuning-constants table matches the defaults the code reads", () => {
   const rows = configKeyDefaults();
 
   const skip = /DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD = "([^"]+)"/.exec(

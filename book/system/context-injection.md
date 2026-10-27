@@ -76,7 +76,7 @@ artifact 在前，curated 清单在后。算术很直白：三个 artifact 各�
 5. `implement.jsonl` 有 6 行：前 3 行指向 spec 与源码文件，逐个 `realpath` 校验后内联；第 4 行指向一个 200 KB 的文件 → 截断到 32768，末尾追加 `truncated` 提示；第 5 行预算已不够 → 换成 `omitted` 提示；第 6 行连同剩余内容被 terminal summary 取代。
 6. 最后拼成 `<task-context>…</task-context>`，作为隐藏消息进入子进程的第一个请求。
 
-子进程看到的开头是：`Context is bounded by .myflow/config.yaml. Files marked [truncated] or [omitted] remain authoritative on disk; use their required_read path before relying on missing detail.` 这句话是给模型的指令。
+子进程看到的开头是一段给模型的指令：被标成 `[truncated]` 或 `[omitted]` 的文件，磁盘上的那份才是权威，缺了什么要按路径自己去读。
 
 ## 常见误解
 

@@ -64,7 +64,6 @@ in the wrong repository.
 | --- | --- |
 | `.myflow/tasks/`, `.myflow/archive/` | One project's deliverables. They reference paths and history that do not exist in the target. |
 | `.myflow/.runtime/` | Machine state (session pointers, worktree registry, background tasks, worker logs). Copying it points sessions at tasks that are not there. |
-| `.myflow/config.yaml` | Optional. Without it the harness runs on built-in defaults; create one only when an injection budget, the skip keyword, or channel trust has to change. |
 | `tests/`, `package.json`, `tsconfig.json` | Harness development only — they run `node --test` against the harness's own source. Not needed to use the payload. |
 | `tools/` | Harness development only: the release manifest (`release-payload.json`), the build script (`release.py`), and this file. |
 | `INSTALL.md`, `RELEASE.md` | Instructions for the installer, not runtime files. |

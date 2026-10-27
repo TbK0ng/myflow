@@ -104,9 +104,8 @@ machine state: put it in `.gitignore`, never commit it.
 
 ## Escape Hatch
 
-Include the skip keyword (default `no-myflow`, configurable in
-`.myflow/config.yaml` under `prompt_injection.skip_keyword`) to suppress the
-per-turn breadcrumb for that turn. `session-context` and `task-context` are
+Include the skip keyword (default `no-myflow`) to suppress the per-turn
+breadcrumb for that turn. `session-context` and `task-context` are
 still injected.
 
 [workflow-state:no_task]
