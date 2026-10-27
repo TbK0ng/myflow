@@ -6,6 +6,8 @@ reproducible zip). Dates are the tag dates.
 
 ## Unreleased
 
+## 0.3.0 — 2026-10-27
+
 ### Changed
 
 - **Windows only, with Git Bash.** Every non-win32 code path is deleted rather
@@ -14,6 +16,21 @@ reproducible zip). Dates are the tag dates.
   CREATE_NEW_PROCESS_GROUP`, and path comparison always folds case. The
   extension, the background wrapper, `channel.py` and `worktree.py` refuse to
   start on any other platform.
+- **Every shipped skill was checked against the code it describes.** A parallel
+  audit of the eight skills found prose that had drifted: the hook count lived in
+  four unguarded copies (now one table, compared against the registered handlers
+  by `tests/scaffold.test.ts`), the Config Keys table omitted the two
+  `channel.worker_guard` keys, the skill map listed 9 of 12 `task.py` subcommands,
+  two skills told an agent to run the suite unscrubbed inside a sub-agent, and
+  brainstorm's create snippet and phase map no longer matched the code or
+  `workflow.md`. Counts that can drift were deleted from prose rather than
+  duplicated again.
+- **The verify gate runs something.** `.myflow/worktree.yaml` now names the
+  suite, and the `agent_before_settle` child gets a `MYFLOW_*`-free environment.
+  Before this, a project without that file silently passed the gate, and a check
+  agent inside one inherited its own env into the suite.
+- **`done` is gone from the documented status set.** `task.py` only ever wrote
+  `planning` / `in_progress`, and `archive` rewrites to `completed`.
 
 ### Added
 
@@ -24,12 +41,23 @@ reproducible zip). Dates are the tag dates.
 - CI on `windows-latest`: the single supported platform, typecheck then suite.
 - `engines: node >= 22`, which is what stripping types in the test suite needs.
 - This changelog.
+- `tools/release.py --release {patch|minor|major} [--yes] [--dry-run]`: bump,
+  date the changelog, check, build, verify, commit, tag and (with `--yes`) push.
+- `.myflow/spec/guides/`: the cross-cutting layer of the spec tree, restored
+  after a rewrite dropped its definition, with a doc-drift guide behind it.
+- Guards for the drift class this release fixes: a `.myflow/spec/` path named in
+  an instruction file must exist, the `32768` injection default must agree across
+  TypeScript and Python, and the verify child must not inherit `MYFLOW_*`.
 
 ### Fixed
 
 - Documentation named `node --test tests/`, which Node 24 rejects (the argument
   is a file glob, not a directory). Every occurrence now names `npm test` or
   `npm run check`.
+- `channel.py`'s docstring pointed at `~/.myflow/channels`; the store is
+  `~/.pi/myflow/channels`.
+- The stopped-run test slept a fixed 1.5s for a Windows tree kill and failed
+  about one run in seven; it now polls to a deadline.
 
 ## 0.2.0 - 2026-10-21
 
