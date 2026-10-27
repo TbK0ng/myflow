@@ -82,6 +82,13 @@ reproducible zip). Dates are the tag dates.
   `~/.pi/myflow/channels`.
 - The stopped-run test slept a fixed 1.5s for a Windows tree kill and failed
   about one run in seven; it now polls to a deadline.
+- **The installer doc claimed no configuration was needed.** It now pins
+  `shellPath` to the machine's Git Bash in the **project's** `.pi/settings.json`,
+  because Pi's bash tool only guesses where bash lives and a Git installed
+  outside `Program Files` makes every `myflow_bg_*` task refuse to start. The
+  doc also names the one file the background tools read instead
+  (`~/.pi/agent/settings.json`, or `MYFLOW_BG_SHELL`), which is not the project
+  file and is left to the machine's owner.
 
 ### Refactored
 

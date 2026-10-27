@@ -77,9 +77,47 @@ raw file content.
 
 ## 3. Let Pi load it
 
-No configuration is needed. Pi discovers `.pi/extensions/`, `.pi/skills/`, and
-`.pi/prompts/` from the project root; the extension lives in the subdirectory
-`.pi/extensions/myflow/`, whose `index.ts` is the entry point Pi loads.
+Pi discovers `.pi/extensions/`, `.pi/skills/`, and `.pi/prompts/` from the project
+root; the extension lives in the subdirectory `.pi/extensions/myflow/`, whose
+`index.ts` is the entry point Pi loads. There is no registration step.
+
+**Pin Pi's shell to this machine's Git Bash.** Pi's bash tool and the harness's
+background tools both work by spawning `bash`, and both only *guess* where it is:
+Pi tries `%ProgramFiles%\Git\bin\bash.exe` and then `bash.exe` on `PATH`. A Git
+for Windows installed outside `Program Files` and absent from `PATH` matches
+neither, and a `myflow_bg_*` task then **refuses to start** rather than falling
+back to `cmd.exe`. Write the real path once, into the **project's**
+`.pi/settings.json`, from the target project root:
+
+```bash
+mkdir -p .pi
+BASH_WIN=$(cygpath -w "$(command -v bash)")      # this session's Git Bash, as a Windows path
+node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const [file, shellPath] = process.argv.slice(1);
+const settings = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+settings.shellPath = shellPath;
+fs.mkdirSync(path.dirname(file), { recursive: true });
+fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+console.log(`${file}: shellPath = ${shellPath}`);
+' .pi/settings.json "$BASH_WIN"
+```
+
+That one file is the whole step, and it is the project's on purpose: the setting
+is per-project, and Pi reads a project `.pi/settings.json` *over* the user-level
+`~/.pi/agent/settings.json`, so this repository can pin one shell without
+choosing for every other project on the machine. The merge is deliberate too: the
+file may already exist (Pi writes packages and theme choices there) and only
+`shellPath` is set — arguments after the `-e` script arrive as `process.argv[1:]`,
+which is why the file and the shell path are appended.
+
+One thing the project file does **not** reach: a `myflow_bg_*` task resolves its
+shell in `bg_runner.mjs` from `MYFLOW_BG_SHELL`, then the **user-level**
+`~/.pi/agent/settings.json`, then the standard install location, then `PATH` —
+never from the project file. That is fine when your Git lives in
+`C:\Program Files\Git`; with a non-standard Git, export `MYFLOW_BG_SHELL` (or set
+`shellPath` in the user-level file yourself) and leave the project file alone.
 
 The only thing Pi asks for is **project trust**: because the target project now
 contains `.pi/extensions`, Pi prompts once on startup to trust the folder's Pi
@@ -100,6 +138,7 @@ gate), so a working `python3` must be on `PATH` — install Python with the
 ```gitignore
 .myflow/.runtime/     # required: session pointers, background tasks, worker logs
 __pycache__/          # recommended: the scripts are Python
+.pi/settings.json     # recommended: machine-local, holds the shellPath above
 dist/                 # only if you also build releases in this project
 ```
 
@@ -110,6 +149,7 @@ diff and makes parallel worktree copies collide with untracked files.
 
 ```bash
 # in the target project root; `python3` (also what the extension invokes)
+cat .pi/settings.json                        # -> the shellPath pinned in step 3
 python3 .myflow/scripts/task.py current       # -> no active task
 python3 .myflow/scripts/get_context.py        # -> contains [workflow-state:no_task]
                                               #    and "## Session Runtime Context"
