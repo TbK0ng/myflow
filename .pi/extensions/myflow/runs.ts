@@ -28,9 +28,9 @@
  * stays importable under `node --test` without the Pi package installed.
  */
 
-import { readFileSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PRUNE_AFTER_MS, messageOf, writeFileAtomic } from "./background/registry.ts";
 import { ctlPath } from "./ctl.ts";
 
@@ -480,14 +480,20 @@ function endedAtMillis(entry: RunEntry): number {
 
 /**
  * Delete terminal entries that are older than 24h, then the oldest terminal
- * entries beyond `MAX_FINISHED_RUNS`. Returns how many were removed.
+ * entries beyond `MAX_FINISHED_RUNS`. Returns how many entries were removed.
  *
  * Running, queued, and undateable entries are never touched: one may still
  * produce output, and something we cannot date is not something we delete.
+ *
+ * With `projectRoot`, the entry's log goes too, and log files nobody references
+ * any more are swept once they are older than the same cutoff. Without that a
+ * registry of 8 runs left 91 MB of orphaned transcripts behind: the entries were
+ * pruned and the logs had no owner left to delete them.
  */
-export function pruneRuns(dir: string, now: number = Date.now()): number {
+export function pruneRuns(dir: string, now: number = Date.now(), projectRoot?: string): number {
   const cutoff = now - PRUNE_AFTER_MS;
-  const terminal = listRuns(dir).runs.filter((entry) => isTerminal(entry.status));
+  const all = listRuns(dir).runs;
+  const terminal = all.filter((entry) => isTerminal(entry.status));
   const doomed = new Set<string>();
   for (const entry of terminal) {
     const endedAt = Date.parse(entry.endedAt ?? "");
@@ -497,13 +503,69 @@ export function pruneRuns(dir: string, now: number = Date.now()): number {
     .filter((entry) => !doomed.has(entry.runId))
     .sort((a, b) => endedAtMillis(b) - endedAtMillis(a));
   for (const entry of survivors.slice(MAX_FINISHED_RUNS)) doomed.add(entry.runId);
+  const removed = terminal.filter((entry) => doomed.has(entry.runId));
+  if (projectRoot) for (const entry of removed) removeLog(projectRoot, entry);
   for (const runId of doomed) {
     const path = runPath(dir, runId);
     rmSync(path, { force: true });
     rmSync(`${path}.tmp`, { force: true });
     rmSync(ctlPath(dir, runId), { force: true });
   }
+  if (projectRoot) sweepOrphanLogs(projectRoot, all, doomed, cutoff);
   return doomed.size;
+}
+
+/** Delete one entry's log, if it recorded one. Never throws: pruning is best-effort. */
+function removeLog(projectRoot: string, entry: RunEntry): void {
+  if (!entry.logPath) return;
+  try {
+    rmSync(join(projectRoot, entry.logPath), { force: true });
+  } catch {
+    /* a log we cannot delete must not stop the registry prune */
+  }
+}
+
+/**
+ * Delete log files that no surviving entry points at and that are past the
+ * cutoff.
+ *
+ * `deleteRun` deliberately keeps a run's log (it is the transcript a human may
+ * still want to read), so the sweep is what finally reclaims them. Fresh orphans
+ * are kept: a run whose entry was forgotten a minute ago may still be read.
+ */
+function sweepOrphanLogs(
+  projectRoot: string,
+  entries: readonly RunEntry[],
+  doomed: ReadonlySet<string>,
+  cutoff: number,
+): void {
+  const referenced = new Set<string>();
+  const dirs = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.logPath) continue;
+    const absolute = join(projectRoot, entry.logPath);
+    dirs.add(dirname(absolute));
+    if (!doomed.has(entry.runId)) referenced.add(absolute.toLowerCase());
+  }
+  for (const logDir of dirs) {
+    let names: string[];
+    try {
+      names = readdirSync(logDir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.endsWith(".log")) continue;
+      const absolute = join(logDir, name);
+      if (referenced.has(absolute.toLowerCase())) continue;
+      try {
+        if (statSync(absolute).mtimeMs >= cutoff) continue;
+        rmSync(absolute, { force: true });
+      } catch {
+        /* raced with a live run's first byte, or already gone */
+      }
+    }
+  }
 }
 
 /**

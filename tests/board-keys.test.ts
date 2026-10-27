@@ -249,3 +249,24 @@ test("board: the read-only view cannot reach a delete", () => {
     assert.notEqual(action.kind, "delete-finished");
   }
 });
+
+test("background: d deletes the selected task, D clears the finished ones", () => {
+  const base = state({ background: [background({ id: "bg-1-0001", status: "stopped" })] });
+  assert.deepEqual(press("background", base, "d"), { kind: "delete-bg", id: "bg-1-0001" });
+  assert.deepEqual(press("background", base, "D"), { kind: "delete-finished-bg" });
+});
+
+test("help: ? opens it from every list view and closes it again", () => {
+  for (const view of ["menu", "board", "tree", "background"] as const) {
+    assert.deepEqual(press(view, state(), "help"), { kind: "open-help" });
+  }
+  assert.deepEqual(press("help", state(), "help"), { kind: "close-help" });
+  assert.deepEqual(press("help", state(), "esc"), { kind: "close-help" });
+  assert.deepEqual(press("help", state(), "q"), { kind: "close-help" });
+  // Reading a transcript is not interrupted by the help key.
+  assert.deepEqual(press("viewer", state(), "help"), { kind: "none" });
+});
+
+test("normalizeKey: '?' is the help key", () => {
+  assert.equal(normalizeKey("?"), "help");
+});

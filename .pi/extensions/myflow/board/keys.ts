@@ -32,6 +32,7 @@ export type NormalizedKey =
   | "c"
   | "d"
   | "D"
+  | "help"
   | "q";
 
 /** What the TUI must provide to interpret keys — `keybindings.matches`. */
@@ -62,6 +63,7 @@ const LITERAL_KEYS: Record<string, NormalizedKey> = {
   c: "c",
   d: "d",
   D: "D",
+  "?": "help",
   // Arrow keys arrive as CSI (`ESC [ A`) or, once the terminal is in
   // application-cursor mode, as SS3 (`ESC O A`). Both are handled: a panel that
   // only understands one of them looks dead in exactly one terminal setup.
@@ -101,6 +103,8 @@ export type Action =
   | { kind: "none" }
   | { kind: "close" }
   | { kind: "close-viewer" }
+  | { kind: "open-help" }
+  | { kind: "close-help" }
   | { kind: "open-view"; view: ListView }
   | { kind: "open-viewer"; target: ViewTarget }
   | { kind: "stop-run"; runId: string }
@@ -110,6 +114,8 @@ export type Action =
   | { kind: "steer"; runId: string }
   | { kind: "restart-run"; runId: string }
   | { kind: "stop-bg"; id: string }
+  | { kind: "delete-bg"; id: string }
+  | { kind: "delete-finished-bg" }
   | { kind: "prune-bg" }
   | { kind: "rerun-bg"; id: string };
 
@@ -189,6 +195,14 @@ export function applyKey(view: View, state: BoardState, key: NormalizedKey): Key
     return { selection, action: NONE };
   }
 
+  if (view === "help") {
+    if (key === "esc" || key === "q" || key === "help") return { selection, action: { kind: "close-help" } };
+    return { selection, action: NONE };
+  }
+
+  // Help is reachable from every list view with one key, and from nowhere else.
+  if (key === "help") return { selection, action: { kind: "open-help" } };
+
   if (key === "q" || (key === "esc" && view !== "menu")) {
     return { selection, action: { kind: "close" } };
   }
@@ -258,11 +272,15 @@ export function applyKey(view: View, state: BoardState, key: NormalizedKey): Key
         return { selection: { ...selection, index: next }, action: NONE };
       }
       if (key === "c") return { selection, action: { kind: "prune-bg" } };
+      if (key === "D") return { selection, action: { kind: "delete-finished-bg" } };
       const id = selectedBackgroundId(state);
       if (key === "enter") {
         return id ? { selection, action: { kind: "open-viewer", target: { kind: "background", id } } } : { selection, action: NONE };
       }
       if (key === "x") return id ? { selection, action: { kind: "stop-bg", id } } : { selection, action: NONE };
+      // Refused by the store, not here: it knows how to tell a leftover `.pid`
+      // from a command that is still running.
+      if (key === "d") return id ? { selection, action: { kind: "delete-bg", id } } : { selection, action: NONE };
       if (key === "r") return id ? { selection, action: { kind: "rerun-bg", id } } : { selection, action: NONE };
       return { selection, action: NONE };
     }

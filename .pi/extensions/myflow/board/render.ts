@@ -143,7 +143,7 @@ export function renderMenu(state: BoardState, ctx: RenderContext): string[] {
     );
   });
   lines.push("");
-  lines.push(fit(ctx, theme.fg("muted", "↑/↓ move · Enter open · Esc close")));
+  lines.push(fit(ctx, theme.fg("muted", "↑/↓ move · Enter open · ? help · Esc close")));
   return lines;
 }
 
@@ -215,7 +215,7 @@ export function renderBoard(state: BoardState, ctx: RenderContext): string[] {
   });
 
   lines.push("");
-  lines.push(fit(ctx, theme.fg("muted", "Enter read-only view · Esc close")));
+  lines.push(fit(ctx, theme.fg("muted", "Enter read-only view · ? help · Esc close")));
   return lines;
 }
 
@@ -273,7 +273,7 @@ export function renderTree(state: BoardState, ctx: RenderContext): string[] {
       ctx,
       theme.fg(
         "muted",
-        "x stop · X cancel group · s steer · r rerun · d delete · D clear finished · Enter view · Esc close",
+        "x stop · X cancel group · s steer · r rerun · d delete · D clear finished · Enter view · ? help · Esc close",
       ),
     ),
   );
@@ -294,7 +294,7 @@ export function renderBackground(state: BoardState, ctx: RenderContext): string[
     lines.push(backgroundRow(entry, index === state.selection.index, ctx));
   });
   lines.push("");
-  lines.push(fit(ctx, theme.fg("muted", "x stop · c prune finished · r rerun · Enter output · Esc close")));
+  lines.push(fit(ctx, theme.fg("muted", "x stop · d delete · D clear finished · c prune 24h · r rerun · Enter output · ? help · Esc close")));
   return lines;
 }
 
@@ -347,6 +347,8 @@ export function renderView(view: View, state: BoardState, ctx: RenderContext): s
       return renderBackground(state, ctx);
     case "viewer":
       return renderViewer(state, ctx);
+    case "help":
+      return renderHelp(ctx);
     case "board":
     default:
       return renderBoard(state, ctx);
@@ -356,4 +358,60 @@ export function renderView(view: View, state: BoardState, ctx: RenderContext): s
 /** A colorless theme, for the non-TUI text report (`design.md` §6). */
 export function plainTheme(): BoardTheme {
   return { fg: (_name: string, text: string) => text, bold: (text: string) => text };
+}
+
+/**
+ * The help screen.
+ *
+ * Keys alone are not enough: the panel's whole point is that a key *writes a
+ * file* another session reads, that `x` really kills a process tree, and that a
+ * live row cannot be deleted. None of that is discoverable from a footer, and a
+ * user who assumes otherwise will think a refused key is broken.
+ */
+export function renderHelp(ctx: RenderContext): string[] {
+  const { theme } = ctx;
+  const title = theme.bold(theme.fg("accent", "mysubagents — help"));
+  const section = (text: string) => theme.fg("accent", text);
+  const key = (keys: string, what: string) => fit(ctx, `  ${theme.fg("accent", keys.padEnd(10))} ${what}`);
+
+  const lines: string[] = [title, ""];
+
+  lines.push(section("Views"));
+  lines.push(fit(ctx, `  ${theme.fg("accent", "board".padEnd(10))} read-only: front runs (accent) + detached tasks (warning), Enter reads`));
+  lines.push(fit(ctx, `  ${theme.fg("accent", "tree".padEnd(10))} one dispatch call = one group; manage its runs`));
+  lines.push(fit(ctx, `  ${theme.fg("accent", "background".padEnd(10))} detached tasks that outlive this terminal`));
+  lines.push("");
+
+  lines.push(section("Keys"));
+  lines.push(key("↑/↓", "move the cursor"));
+  lines.push(key("← / →", "back / open (same as Esc / Enter)"));
+  lines.push(key("Enter", "open a run's transcript or a task's output"));
+  lines.push(key("x", "stop it: abort, then kill the process tree after 5s"));
+  lines.push(key("X", "cancel the whole group (tree only)"));
+  lines.push(key("s", "steer: queue one line for that run's next turn (tree only)"));
+  lines.push(key("r", "rerun: same agent+prompt, new run id (task: replay the command)"));
+  lines.push(key("d / D", "forget the selected finished row / every finished row"));
+  lines.push(key("c", "prune tasks finished more than 24h ago (background only)"));
+  lines.push(key("? / Esc / q", "help / close the screen"));
+  lines.push("");
+
+  lines.push(section("What the operations really do"));
+  lines.push(fit(ctx, "  A run is a child `pi --mode rpc` process. `x` and `s` are written to"));
+  lines.push(fit(ctx, "  .myflow/.runtime/subagents/<runId>.ctl.jsonl, which the dispatcher polls"));
+  lines.push(fit(ctx, "  once a second — that file is why a second session can manage a run whose"));
+  lines.push(fit(ctx, "  dispatcher is blocked in its own tool call."));
+  lines.push(fit(ctx, "  A live row is refused by `d`: its dispatcher still owns the entry, so the"));
+  lines.push(fit(ctx, "  next status write would resurrect it. Stop it first."));
+  lines.push(fit(ctx, "  Deleting a run keeps its log (the transcript); deleting a task deletes its"));
+  lines.push(fit(ctx, "  log and pid file, exactly as the 24h prune does."));
+  lines.push("");
+
+  lines.push(section("Status"));
+  lines.push(fit(ctx, `  ${theme.fg("success", "▶")} running   ${theme.fg("success", "✓")} done   ${theme.fg("error", "✗")} failed   ${theme.fg("error", "⏱")} timeout`));
+  lines.push(fit(ctx, `  ${theme.fg("muted", "■")} stopped   ${theme.fg("muted", "⊘")} stale (its dispatcher disappeared)   ${theme.fg("muted", "·")} queued`));
+  lines.push(fit(ctx, "  A run marked » received at least one steer."));
+  lines.push("");
+
+  lines.push(fit(ctx, theme.fg("muted", "? / Esc / q back")));
+  return lines;
 }

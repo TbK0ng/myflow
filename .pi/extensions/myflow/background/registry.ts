@@ -792,3 +792,36 @@ export function prune(dir: string, now: number): number {
   return removed;
 }
 
+/**
+ * Forget one finished task, its log, its `.pid` handshake, and its cursors.
+ *
+ * Returns the refusal reason, or null on success. A live task is refused rather
+ * than deleted: `isFinished` already knows how to tell a leftover `.pid` from a
+ * running command, and deleting a live entry would leave the command running
+ * with nothing pointing at it — the orphan this feature exists to prevent.
+ *
+ * Unlike a front run (whose transcript is the point and is kept), a task's log
+ * goes with it, exactly as `prune` already does.
+ */
+export function deleteFinishedTask(dir: string, id: string, now: number = Date.now()): string | null {
+  const entry = readEntry(dir, id);
+  if (!entry) return `background task ${id} is not in the registry`;
+  if (!isFinished(dir, entry, now)) {
+    return `background task ${id} is still ${entry.status}; stop it first`;
+  }
+  removeEntryFiles(dir, entry);
+  return null;
+}
+
+/** Forget every finished task — the manual version of `prune`, with no 24h wait. */
+export function deleteFinishedTasks(dir: string, now: number = Date.now()): number {
+  const { entries } = listEntries(dir);
+  let removed = 0;
+  for (const entry of entries) {
+    if (!isFinished(dir, entry, now)) continue;
+    removeEntryFiles(dir, entry);
+    removed += 1;
+  }
+  return removed;
+}
+

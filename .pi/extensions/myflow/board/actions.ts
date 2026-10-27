@@ -24,7 +24,14 @@
  * `transport.ts` / `background/` modules, so `node --test` imports this directly.
  */
 
-import { backgroundDir, messageOf, prune as pruneRegistry, readEntry } from "../background/registry.ts";
+import {
+  backgroundDir,
+  deleteFinishedTask,
+  deleteFinishedTasks,
+  messageOf,
+  prune as pruneRegistry,
+  readEntry,
+} from "../background/registry.ts";
 import { startBackgroundTask, type BackgroundStartOutcome } from "../background/start.ts";
 import { stopBackgroundTask, type BackgroundStopOutcome } from "../background/stop.ts";
 import { appendControl, ctlPath, type ControlInput } from "../ctl.ts";
@@ -344,6 +351,27 @@ export function createActionRunner(deps: ActionDeps): ActionRunner {
     }
   }
 
+  /** Forget one finished task (`d`). A live one is refused by the store. */
+  function forgetBackground(id: string): ActionResult {
+    try {
+      const refusal = deleteFinishedTask(bgDir, id);
+      if (refusal) return failed(refusal);
+      return ok(`removed background task ${id}`);
+    } catch (error) {
+      return failed(`could not remove background task ${id}: ${messageOf(error)}`);
+    }
+  }
+
+  /** Forget every finished task (`D`) — `prune` without the 24h wait. */
+  function forgetFinishedBackground(): ActionResult {
+    try {
+      const removed = deleteFinishedTasks(bgDir);
+      return ok(removed === 0 ? "nothing finished to remove" : `removed ${removed} finished task(s)`);
+    } catch (error) {
+      return failed(`could not clear finished tasks: ${messageOf(error)}`);
+    }
+  }
+
   return (action, context = {}) => {
     switch (action.kind) {
       case "stop-run":
@@ -360,6 +388,10 @@ export function createActionRunner(deps: ActionDeps): ActionRunner {
         return restartRun(action.runId);
       case "stop-bg":
         return stopBg(action.id);
+      case "delete-bg":
+        return forgetBackground(action.id);
+      case "delete-finished-bg":
+        return forgetFinishedBackground();
       case "prune-bg":
         return pruneBg();
       case "rerun-bg":

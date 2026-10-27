@@ -39,7 +39,7 @@ import { lastLine, readTranscript, type TranscriptLine } from "./transcript.ts";
 
 /** The screens the panel can show. `viewer` is a sub-screen of a list view. */
 export type ViewName = "menu" | "board" | "tree" | "background";
-export type View = ViewName | "viewer";
+export type View = ViewName | "viewer" | "help";
 
 /** A view that lists rows and can be opened from the menu. */
 export type ListView = Exclude<ViewName, "menu">;

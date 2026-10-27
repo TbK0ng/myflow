@@ -65,6 +65,7 @@ export interface SubagentsRegistration {
 /** The initial screen: an explicit view name, or the menu. */
 export function parseViewArgument(args: string): View {
   const name = args.trim().toLowerCase();
+  if (name === "help" || name === "-h" || name === "--help" || name === "?") return "help";
   return name === "board" || name === "tree" || name === "background" ? name : "menu";
 }
 
@@ -254,6 +255,16 @@ export function mountPanel(options: PanelOptions): Panel {
           view = listView;
           refresh();
           return;
+        case "open-help":
+          // `listView` already points at the screen help stands on, so closing it
+          // is the same one-line return the viewer uses.
+          view = "help";
+          refresh();
+          return;
+        case "close-help":
+          view = listView;
+          refresh();
+          return;
         case "steer":
           // Close first: the steer dialog is a second input surface, and two
           // focused inputs would fight over the keyboard.
@@ -390,7 +401,7 @@ export function registerMyflowSubagentsCommand(
   registration: SubagentsRegistration = {},
 ): void {
   pi.registerCommand(COMMAND_NAME, {
-    description: "Open the mysubagents panel: board / tree / background",
+    description: "Open the mysubagents panel: board / tree / background / help (`?` inside)",
     handler: async (args: string, ctx: ExtensionContext) => {
       const projectRoot = findProjectRoot(ctx.cwd) ?? ctx.cwd;
       const contextKey = registration.deriveContextKey?.(ctx) ?? null;
@@ -399,7 +410,7 @@ export function registerMyflowSubagentsCommand(
         // Once per open: pruning on every tick would delete rows under the cursor
         // while the user is looking at them.
         try {
-          pruneRuns(runsDir(projectRoot));
+          pruneRuns(runsDir(projectRoot), Date.now(), projectRoot);
         } catch {
           /* a prune failure must not keep the panel from opening */
         }

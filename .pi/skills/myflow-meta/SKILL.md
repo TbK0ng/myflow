@@ -158,12 +158,15 @@ registries. `board` is read-only — front runs from
 `.myflow/.runtime/subagents/<runId>.json`, detached tasks from
 `.myflow/.runtime/background/` — with Enter opening a transcript or output
 tail. `tree` groups the runs of one dispatch call and can stop a run (`x`),
-cancel the group (`X`), steer it with one line (`s`), or rerun it (`r`); each of
+cancel the group (`X`), steer it with one line (`s`), rerun it (`r`), or forget
+finished rows (`d` one, `D` all); each of
 those writes a control line (`<runId>.ctl.jsonl`) or a registry entry, never
 in-memory state, which is why a *second* session can manage a run the first one
-dispatched. `background` stops, prunes and replays `myflow_bg_*` tasks through
-the same code the tools use. It needs a TUI: without one it prints the same
-state as a text report. Views and keys live in `.pi/extensions/myflow/board/`;
+dispatched. `background` stops (`x`), deletes finished entries (`d` / `D`), prunes
+(`c`) and replays (`r`) `myflow_bg_*` tasks through the same code the tools use.
+`?` opens a help screen (and `/mysubagents help` prints it) that documents every
+key, what each operation actually writes, and why a live row is refused by `d`.
+It needs a TUI: without one it prints the same state as a text report. Views and keys live in `.pi/extensions/myflow/board/`;
 the transport a run is driven over lives in `transport.ts`.
 
 ## Runtime: identity and the shell bridge

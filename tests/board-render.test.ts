@@ -16,8 +16,10 @@ import {
   plainTheme,
   renderBackground,
   renderBoard,
+  renderHelp,
   renderMenu,
   renderTree,
+  renderView,
   renderViewer,
 } from "../.pi/extensions/myflow/board/render.ts";
 import { backgroundDir, writeEntry } from "../.pi/extensions/myflow/background/registry.ts";
@@ -138,7 +140,7 @@ test("renderBoard: read-only — no management key is advertised", () => {
   assert.doesNotMatch(text, /steer/);
   assert.doesNotMatch(text, /rerun/);
   assert.doesNotMatch(text, /prune/);
-  assert.match(text, /Enter read-only view · Esc close/);
+  assert.match(text, /Enter read-only view · \? help · Esc close/);
 });
 
 test("renderBoard: failed runs read as errors, stale runs as muted", () => {
@@ -183,7 +185,7 @@ test("renderTree: group header plus numbered members, steer mark, management foo
   assert.match(text, /^ {2}> <success>▶ <accent>1\/2 {2}r-170000.*running/m);
   assert.match(text, /^ {4}<success>✓ <accent>2\/2/m);
   assert.match(text, /»/); // the steered run in the second group
-  assert.match(text, /x stop · X cancel group · s steer · r rerun · d delete · D clear finished · Enter view · Esc close/);
+  assert.match(text, /x stop · X cancel group · s steer · r rerun · d delete · D clear finished · Enter view · \? help · Esc close/);
 });
 
 test("renderTree: an empty tree says so instead of rendering nothing", () => {
@@ -208,7 +210,7 @@ test("renderBackground: every entry, exit code, and the detached label", () => {
   assert.match(text, /mysubagents · background · detached · 终端退出后仍在运行 \(3\)/);
   assert.match(text, /<success>✓ <warning>bg-def-0002 {2}npm test {2}exited {2}exit 2/);
   assert.match(text, /<muted>■ <warning>bg-ghi-0003 {2}sleep 1000 {2}stopped/);
-  assert.match(text, /x stop · c prune finished · r rerun · Enter output · Esc close/);
+  assert.match(text, /x stop · d delete · D clear finished · c prune 24h · r rerun · Enter output · \? help · Esc close/);
 });
 
 test("renderViewer: transcript kinds carry their color, long lines wrap", () => {
@@ -408,4 +410,27 @@ test("buildState: the viewer opens the selected run's transcript", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("renderHelp: every view, key, and status is documented", () => {
+  const text = joined(renderHelp(ctx()));
+  for (const view of ["board", "tree", "background"]) assert.match(text, new RegExp(view));
+  for (const key of ["↑/↓", "Enter", "x", "X", "s", "r", "d / D", "c", "?"]) {
+    assert.ok(text.includes(key), `help documents ${key}`);
+  }
+  // The semantics that a footer cannot carry.
+  assert.match(text, /ctl\.jsonl/);
+  assert.match(text, /refused by `d`/);
+  assert.match(text, /stale/);
+});
+
+test("renderHelp: the plain-theme report carries no escape sequences", () => {
+  const state0 = state();
+  const plain = renderView("help", state0, {
+    theme: plainTheme(),
+    width: 100,
+    truncate: (text: string) => text,
+  }).join("\n");
+  assert.doesNotMatch(plain, /\u001b\[/);
+  assert.match(plain, /mysubagents — help/);
 });

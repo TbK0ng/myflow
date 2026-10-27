@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -360,5 +360,33 @@ test("runs: deleteFinishedRuns clears only the finished tail", () => {
       [live.runId],
     );
     assert.equal(deleteFinishedRuns(dir), 0);
+  });
+});
+
+test("runs: pruneRuns deletes the entry's log and sweeps old orphans", () => {
+  withRoot((root) => {
+    const dir = runsDir(root);
+    const logDir = join(root, ".myflow", ".runtime", "subagent-logs");
+    mkdirSync(logDir, { recursive: true });
+
+    const old = queueGroup(dir, [member("a", "old")], { now: 1_000 })[0];
+    const kept = queueGroup(dir, [member("a", "kept")], { now: 2_000 })[0];
+    const oldLog = join(logDir, "old.log");
+    const keptLog = join(logDir, "kept.log");
+    const orphan = join(logDir, "orphan.log");
+    for (const path of [oldLog, keptLog, orphan]) writeFileSync(path, "stream\n");
+    assert.ok(finish(dir, old.runId, "done", { logPath: ".myflow/.runtime/subagent-logs/old.log" }, 3_000));
+    assert.ok(finish(dir, kept.runId, "done", { logPath: ".myflow/.runtime/subagent-logs/kept.log" }, 30_000_000_000_000));
+
+    const now = PRUNE_AFTER_MS + 10_000;
+    // The orphan is dated in the past so only the stale one is swept.
+    const ancient = new Date(1_000);
+    utimesSync(orphan, ancient, ancient);
+
+    assert.equal(pruneRuns(dir, now, root), 1);
+    assert.equal(existsSync(oldLog), false, "a pruned entry's log goes with it");
+    assert.equal(existsSync(orphan), false, "an unreferenced old log is swept");
+    assert.equal(existsSync(keptLog), true, "a surviving entry keeps its log");
+    assert.ok(readRun(dir, kept.runId));
   });
 });

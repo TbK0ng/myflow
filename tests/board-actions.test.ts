@@ -27,6 +27,7 @@ import {
   entryPath,
   listEntries,
   logPath,
+  pidPath,
   readEntry,
   writeCursor,
   writeEntry,
@@ -827,6 +828,59 @@ test("the panel's cursor actually moves (down arrow is not undone by the refresh
     panel.handleInput("\u001bOA"); // SS3 up (application cursor mode)
     assert.match(selectedRow(), new RegExp(second.runId.slice(0, 8)));
     panel.dispose();
+  } finally {
+    cleanup();
+  }
+});
+
+test("delete-bg forgets a finished task and refuses a live one", async () => {
+  const { root, cleanup } = roots();
+  try {
+    const dir = backgroundDir(root);
+    const finished = backgroundEntry(root, "bg-1-0001", {
+      status: "exited",
+      ended_at: new Date().toISOString(),
+    });
+    const live = backgroundEntry(root, "bg-2-0002", { status: "running" });
+    writeEntry(dir, finished);
+    writeEntry(dir, live);
+    writeFileSync(pidPath(dir, live.id), String(process.pid));
+
+    const run = createActionRunner({ projectRoot: root });
+
+    const refused = await press(run, { kind: "delete-bg", id: live.id });
+    assert.equal(refused.ok, false);
+    assert.ok(existsSync(entryPath(dir, live.id)), "a live task stays in the registry");
+
+    const removed = await press(run, { kind: "delete-bg", id: finished.id });
+    assert.equal(removed.ok, true);
+    assert.equal(existsSync(entryPath(dir, finished.id)), false);
+
+    const again = await press(run, { kind: "delete-bg", id: finished.id });
+    assert.equal(again.ok, false);
+    assert.match(again.message, /not in the registry/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("delete-finished-bg clears the tail and reports the count", async () => {
+  const { root, cleanup } = roots();
+  try {
+    const dir = backgroundDir(root);
+    const one = backgroundEntry(root, "bg-1-0001", { status: "exited", ended_at: new Date().toISOString() });
+    const two = backgroundEntry(root, "bg-2-0002", { status: "stopped", ended_at: new Date().toISOString() });
+    writeEntry(dir, one);
+    writeEntry(dir, two);
+
+    const run = createActionRunner({ projectRoot: root });
+    const cleared = await press(run, { kind: "delete-finished-bg" });
+    assert.equal(cleared.ok, true);
+    assert.match(cleared.message, /removed 2 finished task\(s\)/);
+    assert.deepEqual(listEntries(dir).entries, []);
+
+    const empty = await press(run, { kind: "delete-finished-bg" });
+    assert.match(empty.message, /nothing finished to remove/);
   } finally {
     cleanup();
   }

@@ -395,10 +395,20 @@ after `stdin.end()` 5s, and each ends in `clearTimers()` + exactly one terminal
   keep `index` order so a chain still reads `1..n`. Recency comes from the
   group's `g-<epoch>` prefix (shared by its members), *not* from `startedAt` —
   a run that was marked running later must not split its own group apart.
-- **A live run cannot be deleted, only stopped.** `deleteRun` refuses anything
-  not terminal, because its dispatcher still writes that entry and the next
-  transition would resurrect the row the user just removed. `deleteFinishedRuns`
-  is the manual prune; `board` produces neither (it is read-only).
+- **A pruned run takes its log with it; a forgotten one does not.** `pruneRuns`
+  (called once per `/mysubagents` open) deletes the entry, its control file, and
+  its log, then sweeps log files no surviving entry references once they are past
+  the same 24h cutoff. `d` keeps the log on purpose — it is the transcript a human
+  may still want — and the sweep is what finally reclaims it. Without this a
+  registry of 8 runs left **91 MB** of orphaned transcripts behind.
+- **A live run or task cannot be deleted, only stopped.** `deleteRun` /
+  `deleteFinishedTask` refuse anything not finished, because a dispatcher still
+  writes that entry and the next transition would resurrect the row the user
+  just removed (a background task additionally uses the `.pid` handshake, so a
+  leftover pid file cannot be mistaken for a live command). `deleteFinishedRuns`
+  and `deleteFinishedTasks` are the manual prunes; a front run's log survives
+  deletion, a background task's log goes with it, matching each feature's own
+  `prune`. `board` produces neither (it is read-only).
 - **Breaks if**: settle goes back to process exit or `agent_end`; a wait loses
   its cap; the reader starts probing pids per row; `x` is implemented by writing
   only a terminal status (nothing would be killed); `ctl` is ever rewritten or a
