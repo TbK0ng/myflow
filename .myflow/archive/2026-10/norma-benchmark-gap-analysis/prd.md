@@ -2,12 +2,12 @@
 
 ## Goal
 
-以 `../Norma`（Go 编写的通用 Agent Harness SDK）为参照物，对 **myflow 及其宿主 Pi 运行时**做一次
+以 `../Norma`（Go 编写的通用 Agent Harness SDK）为参照物，对 **myflow 及其所在的 Pi 运行时**做一次
 能力**横评**：逐项识别 Norma 具备、而「Pi 运行时 ∪ 用户级扩展 ∪ myflow 层」尚未覆盖的能力缺口，
 为每个缺口写出可直接执行的**补足标准**，并把整份横评交付到 `../critic_doc/`。
 
 明确**不以「零依赖」为目标**——myflow 建立在 Pi 之上，Pi 已提供的能力不计为缺口。
-横评的价值在于分清三类：「宿主已给」「宿主没给但 Norma 证明有价值」「Norma 特有且与 myflow 场景无关」。
+横评的价值在于分清三类：「Pi 已给」「Pi 没给但 Norma 证明有价值」「Norma 特有且与 myflow 场景无关」。
 
 本任务只产出**分析文档**，不写实现代码。缺口条目本身就是后续实现任务的输入。
 
@@ -53,14 +53,14 @@
   + 陈旧告警）、`skill`（`SKILL.md` + 按需注入且可存活于压缩 + 解锁 skill 声明的 MCP 工具）、
   `coordinator`（LLM 驱动 Agent 工具 or 编程式 `RunParallel` 扇出）、`agentcore`（`Session`/`Prompt`/
   一次性 `Run`/JSONL 转录 + `Resume`）。
-- 自述设计要点：双协议归一、宿主拥有 prompt、fail-closed 工具默认值、`iter.Seq2` 流式。
+- 自述设计要点：双协议归一、Pi 拥有 prompt、fail-closed 工具默认值、`iter.Seq2` 流式。
 - noa 的设计主张（已抽读源码，供分片取证时对照）：**一次只压一层**（`noa/tier.go`）、
   **身份用内容哈希而非下标**（`noaadapter/identity.go`）、**turn 与 tool pair 不可拆半**
   （`noa/turnintegrity.go`、`noa/toolpairs.go`）、**硬保护与软保护区分**
   （`noa/protected.go`）、**nudge 按上下文增长节律而非固定轮数**（`noa/nudge.go`）、
   **all-or-nothing 装配**（`noaadapter/noa.go`：Compactor + Compress 工具 + 常驻提示词必须同生共死）。
 
-**Pi 运行时**（用户定义：*当前运行本会话的那个运行时*；TypeScript 上游产物，myflow 不拥有、不可修改）
+**Pi 运行时**（用户定义：*当前运行本会话的那个运行时*；TypeScript 运行时产物，myflow 不拥有、不可修改）
 
 - 权威面是**已安装的 1.2.0 产物**，不是任何源码工作区。自证证据（会话实测）：
   `pi --version` → `1.2.0`；`PI_CODING_AGENT=true`、`PI_SESSION_ID=<session>`、`PI_PROVIDER`、`PI_MODEL` 均可读。
@@ -70,17 +70,17 @@
 - **版本落差（重要）**：源码工作区 `Desktop/pi/packages/coding-agent/package.json` 为 **1.0.4**，
   落后于运行中的 **1.2.0**。因此 `Desktop/pi` **不是**本次对比的运行时，只可作「实现细节参考」，
   且**可能过期**；凡以其为据的结论一律标为推断（`E5`）。
-- 权威取证面 = 安装目录 `docs/`（41 篇）+ 各包公开 API + 仓库内的宿主类型快照
+- 权威取证面 = 安装目录 `docs/`（41 篇）+ 各包公开 API + 仓库内的 Pi 类型快照
   `.pi/extensions/myflow/pi-coding-agent.d.ts`。
 - Pi 自述：「minimal, extensible agent harness」，并**明确声明跳过 sub-agents 与 plan mode**、
   鼓励「让 Pi 构建你想要的」。这决定了横评的真正问题不是「Pi 有没有 X」，而是**「X 这个关注点归谁」**：
-  - **宿主内建**：Pi core 直接提供（compaction、sessions、extensions/hooks、MCP、skills、tools、
-    providers 等）→ 不是缺口，但要检查 myflow 是否在重复造轮子或没用上宿主能力。
-  - **宿主刻意外包**：Pi 设计上就推给扩展层（subagent、plan mode、多智能体编排、长期记忆、
+  - **Pi 内建**：Pi core 直接提供（compaction、sessions、extensions/hooks、MCP、skills、tools、
+    providers 等）→ 不是缺口，但要检查 myflow 是否在重复造轮子或没用上 Pi 能力。
+  - **Pi 刻意外包**：Pi 设计上就推给扩展层（subagent、plan mode、多智能体编排、长期记忆、
     工作流状态持久化）→ **这才是 myflow 必须拥有的地方，也是真缺口集中的地方**。
   - **两者皆无**：Norma 有、Pi 既未内建也未暗示外包 → 逐个判断是否值得补。
 - **认知陷阱（必须写入文档）**：从会话内部看，Pi core 与 myflow 注册的工具/事件/命令是**融合**的
-  （`myflow_subagent` 由 myflow 注册，并非 Pi 内建）。因此「宿主能力」的判定必须依据 Pi 文档与包 API，
+  （`myflow_subagent` 由 myflow 注册，并非 Pi 内建）。因此「Pi 能力」的判定必须依据 Pi 文档与包 API，
   **不得以「我当前能用什么」为准**——否则会把 myflow 的能力记到 Pi 头上，恰好掩盖掉真正的缺口。
 
 **myflow 层**（本仓库）
@@ -127,11 +127,11 @@
 ## Assumptions (temporary)
 
 - 用户真正的痛点不是「缺引擎功能」，而是**不清楚 myflow 相对成熟 harness 到底差在哪、
-  哪些该补哪些不该补**，因此文档的可信度取决于「宿主已覆盖」这一列的准确性。
+  哪些该补哪些不该补**，因此文档的可信度取决于「Pi 已覆盖」这一列的准确性。
 - Pi 指**当前运行本会话的运行时**，即已安装的 `@earendil-works/*` 1.2.0；**不是** `../pi` 源码
   工作区，**也不是**本仓库的 `.pi/` 资产。三者不可混用。
 - 用户级第三方扩展（`~/.pi/agent/npm/node_modules/`、`~/.pi/agent/extensions/`、
-  `~/.pi/agent/skills/`）算「宿主侧已有能力」，但**必须单独标注来源**（`A-EXT`），
+  `~/.pi/agent/skills/`）算「Pi 侧已有能力」，但**必须单独标注来源**（`A-EXT`），
   不得混同为 Pi core 或 myflow——否则 `CAP-SUB-*` 会被记到错误的层上。
 - `../critic_doc/` 允许被创建与写入；它不在版本控制内，故每次交付需附**来源提交号**快照。
 
@@ -142,26 +142,26 @@
   | 层 | 对象 | 归属 |
   | --- | --- | --- |
   | L1 参照 | Norma（Go SDK，`../Norma`） | 外部，只读参考 |
-  | L2 宿主 | **Pi 运行时 1.2.0** + 用户级扩展 | 上游，**不可修改**，只能依赖或规避 |
+  | L2 Pi | **Pi 运行时 1.2.0** + 用户级扩展 | 运行时，**不可修改**，只能依赖或规避 |
   | L3 自有 | myflow（本仓库 `.pi/` + `.myflow/`） | 用户拥有，可改 |
 
   判定规则：
   - **真缺口** = Norma 有 ∧ Pi 运行时没有 ∧ myflow 没有。
   - **已承担的关注点** = Norma 有 ∧ Pi 没有 ∧ myflow 有 → 转入**机制强度对比**（不是缺口，是质量差）。
-  - **约束而非缺口** = 必须改 Pi 才能补 → myflow 补不了，只能规避或在文档中登记为上游依赖。
+  - **约束而非缺口** = 必须改 Pi 才能补 → myflow 补不了，只能规避或在文档中登记为运行时依赖。
   - **非缺口** = Pi 已内建（或用户级扩展已提供，单独标注）。
 
 - **Q2（已定 — U-4）**：交付粒度改为横评语境重排。骨架见 `design.md` §8.1。
 
 - **Q3（已定 — 上一轮用户选定第 3 档）**：横评比对的**判定维度** = 功能清单 + 强制层级 +
-  宿主契约风险 + 相对优势保护。决策记录见 `design.md` ADR-1。已取证的两类反例：
+ Pi 契约风险 + 相对优势保护。决策记录见 `design.md` ADR-1。已取证的两类反例：
   - **名义有、实际靠约定**：`myflow-research` 的递归守卫是 agent md 里的**提示词文字**；
     Norma 的 `subagent` 是**代码**深度守卫。
   - **悄悄会坏**：`task.py` 用 `PI_SESSION_ID` 派生上下文键，`turn-cache.ts` 必须派生**完全相同**的键，
     而 Pi 的会话恢复/分支/压缩会改变会话语义，任务指针却存在被 gitignore 的 `.myflow/.runtime/` 里。
   - **注入会被压缩吃掉，全靠自身补偿（已取证）**：`custom_message` 既是合法压缩切割点又参与 LLM
     context → 压缩可摘要掉 `[workflow-state:*]`；兜底来自 myflow 自己的「每回合重注入 +
-    压缩后按 `lastInjectionTs > lastCompactionTs` 重注入」。宿主一旦改切点规则或事件时序，
+    压缩后按 `lastInjectionTs > lastCompactionTs` 重注入」。Pi 一旦改切点规则或事件时序，
     myflow 会**静默**失去状态注入。
 
 - **Q4（已定 — U-2）**：产出落点。research 分片留在任务目录（可追溯、受写范围代码约束），
@@ -181,7 +181,7 @@
   与「不做零依赖」的定位冲突）。
 - 矩阵须给出每项的**归属域**（`A-PI` / `A-EXT` / `A-MF` / `A-MCP` / `A-NONE`）与
   **强制层级**（`E-C` 代码 / `E-G` 门控 / `E-P` 提示词 / `E-N` 无），并标注施加强制者。
-- 必须包含**宿主契约风险**清单：myflow 假设了 Pi 的哪些行为、证据强度、假设不成立的后果、
+- 必须包含**Pi 契约风险**清单：myflow 假设了 Pi 的哪些行为、证据强度、假设不成立的后果、
   可用什么方式钉住。
 - 必须包含**相对优势清单**：Norma 没有而 myflow 有的能力，标注为不可回退。
 - 明确区分「已核实」与「推断」，不得把推断写成事实。
@@ -200,7 +200,7 @@
       依赖与代价、优先级、证据等级。
 - [ ] 明确列出至少 3 项「看似缺口但实际不是」的条目及理由。
 - [ ] 每个「有」的判定都附强制层级，且至少给出 2 个「名义有但仅靠提示词约定」的实证条目。
-- [ ] 宿主契约风险清单至少覆盖：会话键派生（`PI_SESSION_ID`）、注入状态与压缩/分支的交互、
+- [ ] Pi 契约风险清单至少覆盖：会话键派生（`PI_SESSION_ID`）、注入状态与压缩/分支的交互、
       `.myflow/.runtime/` 的机器本地性。
 - [ ] 至少 3 项相对优势被明确标为不可回退。
 - [ ] 全文区分已核实/推断，给出取证边界（哪些做了全量审计、哪些只是抽样），并集中列出所有

@@ -13,7 +13,7 @@ end.
 ## 5. Restore `guides/` as a first-class spec layer
 
 The first attempt declared it optional. That was wrong: `guides/` is a layer of
-the spec tree (upstream Trellis `.trellis/spec/guides/`, ported in `a0e3525`,
+the spec tree (`guides/` landed in `a0e3525`,
 listed in `spec/index.md` until `97a0382` dropped it). Reverse the optional
 wording, restore the unconditional read, and give the tree a real one.
 
@@ -42,16 +42,16 @@ questions accumulate.
 
 **New `.myflow/spec/guides/index.md`** — purpose, the one guide this repo has,
 and thinking triggers that point at real local situations (doc claim vs code
-drift, contract copies, hook/config counts). Keep it short; no upstream content
-copied.
+drift, contract copies, hook/config counts). Keep it short; no content copied
+from elsewhere.
 
 **New `.myflow/spec/guides/doc-drift-thinking-guide.md`** — the guide this
 session actually earned:
 - A sentence naming a path, a subcommand, a count, or a default is a claim
   about code.
 - When a claim and the code disagree, work out which is older before editing
-  either: `git log -S <token>`, `git blame`, then the upstream origin.
-- Case study: `guides/` → Trellis layout → `a0e3525` → dropped by `97a0382`
+  either: `git log -S <token>`, `git blame`, then the origin.
+- Case study: `guides/` → spec-tree layout → `a0e3525` → dropped by `97a0382`
   while three skills kept naming it. The first fix called it optional; the
   surviving references were evidence of intent.
 - A short checklist per claim type: path (does it resolve?), subcommand (does

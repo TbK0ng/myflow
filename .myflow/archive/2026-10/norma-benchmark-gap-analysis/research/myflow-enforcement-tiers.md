@@ -1,7 +1,7 @@
 # T2 — myflow 强制层级与回归护栏（L3 自审）
 
 规则 `design.md` §4/§5.2/§7；证据 `E3`（仓库 `0a702fa`）。`E-C[mf]` 必须给出会拒绝的代码行；
-myflow 无自有机制写 `E-N[mf]`，生效中的宿主强制另记 `(有效=E-*[Pi])`，不把宿主门控算作 myflow 的强制。
+myflow 无自有机制写 `E-N[mf]`，生效中的 Pi 强制另记 `(有效=E-*[Pi])`，不把 Pi 门控算作 myflow 的强制。
 同域同判定者合并一行但逐条列 id。缩写（`.pi/extensions/myflow/`）：`ix`=index `sb`=subagent `ag`=agents
 `ci`=context-injection `tc`=turn-cache `st`=status `pr`=find-project-root；测试取首词，均在 `tests/`
 （`ext`=extension `sbt`=subagent `cit`=context-injection `tct`=turn-cache `tgt`=task-gate `tbt`=task-bridge
@@ -27,7 +27,7 @@ myflow 无自有机制写 `E-N[mf]`，生效中的宿主强制另记 `(有效=E-
 | `TRANS-01..04` | 无 JSONL 转录/sidechain；subagent-logs 是派发日志(sb:67) | `E-N[mf]` | R-∅ |
 | `CORE-01..04` | 无 Session/Run/恢复；`--no-session`(sb:394) | `E-N[mf]`(有效 E-C[Pi]) | R-∅ |
 | `HOOK-01..04` | 6 钩子(ix:254..464)；可 block(ix:426-432,451)；`continue:true` 阻结算(ix:480-495) | `E-C[mf]`；钩子面 `E-C[Pi]` | R-T ext:157,285 |
-| `MCP-01..03` | 无 MCP；宿主 `["-builtin:mcp"]`→实际 A-EXT:pi-mcp-adapter | `E-N[mf]`(有效 A-EXT) | R-∅ |
+| `MCP-01..03` | 无 MCP；Pi `["-builtin:mcp"]`→实际 A-EXT:pi-mcp-adapter | `E-N[mf]`(有效 A-EXT) | R-∅ |
 | `SKILL-01..04` | 8 个 SKILL.md 仅 name/description；无压缩存活/MCP 解锁 | 01,02 加载 `E-C[Pi]`+使用 `E-P[mf]`；03,04 `E-N[mf]` | R-T sh:29,54 |
 | `PLAN-01..03` | 只读期无代码强制(§planning 文字)；无 ExitPlanMode，等价 task.py:517-524；无权限翻转 | 01 `E-P[mf]`；02 `E-C[mf]`+`E-P[mf]`；03 `E-N[mf]` | R-T tgt:81 |
 | `MEM-01..04` | spec 约定仅 skill 文字(01,02)；无相关度/陈旧告警(03,04) | `E-P[mf]`/`E-N[mf]` | R-∅ |
@@ -76,7 +76,7 @@ P6 唯一「文字+代码」双写，按最高层 `E-C` 记；P2 有部分兜底
 ## 4. 同一关注点的「代码强制 vs 提示词约定」成对实例
 
 1. **递归守卫（升级栈样板）**：文字(agents md:12-18) → `E-G[Pi]`（三 agent `tools:` 无该工具，经
-   sb:403 `--tools` 交宿主硬门控，sh:133 钉死） → `E-C[mf]`(ix:423-433，sbt:434 锁定)。myflow 具备
+   sb:403 `--tools` 交 Pi 硬门控，sh:133 钉死） → `E-C[mf]`(ix:423-433，sbt:434 锁定)。myflow 具备
    `E-P`→`E-G`→`E-C` 升级能力栈，且已用于本项。
 2. **写范围**：文字(agent md)+`E-C`(ix:116-152,440-452)+并行闸(sb:641-648)；文字只是代码行为说明。
 3. **verify 门**：文字(workflow.md)+`E-C`(ix:478-495)，且 channel.py:564-569 把非子代理 review worker

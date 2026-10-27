@@ -502,6 +502,19 @@ after `stdin.end()` 5s, and each ends in `clearTimers()` + exactly one terminal
 > selection, and keep a test that presses an arrow and asserts the marked row
 > changed.
 
+> **Gotcha**: `myflow_subagent` resolves the project root as `ctx.cwd`, not
+> `findProjectRoot(ctx.cwd)`.
+>
+> Happens when: dispatching from a subdirectory. `subagent.ts`'s `runOptions`
+> passes `projectRoot: ctx.cwd` into `runsDir(ctx.cwd)` and
+> `resolveActiveTaskStatus(ctx.cwd, …)`, and a path built from a subdirectory
+> lands under `<subdir>/.myflow/.runtime/` (the writer `mkdirSync`s it), so
+> `/mysubagents` — which reads the real root — cannot see or steer that run, and
+> the registry's `task` field comes out `null`. Every other entry point
+> (`index.ts`, `ask.ts`, `approval.ts`, `board/index.ts`, `background/*`) calls
+> `findProjectRoot` first. Until that one call site is changed, keep dispatches
+> at the project root.
+
 ## Quality Check
 
 - [ ] No shipped file (extension, scripts, docs, skills) contains non-English

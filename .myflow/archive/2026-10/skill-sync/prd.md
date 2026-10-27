@@ -27,8 +27,8 @@ Found now:
 3. The hook count appears in prose in four places; `.myflow/spec/harness/index.md`
    enumerates only three, so `myflow-check`'s copy is unguarded.
 4. `.myflow/spec/guides/` is referenced by three skills but its definition was
-   lost: it is a first-class layer of the spec tree (ported from the upstream
-   Trellis layout, `spec-system.md` at `a0e3525`, and listed in
+   lost: it is a first-class layer of the spec tree (part of the spec-tree
+   layout, `spec-system.md` at `a0e3525`, and listed in
    `.myflow/spec/index.md` until `97a0382` rewrote that file), and the three
    skills are older than the rewrite. A first attempt declared it "optional,
    this project has none" and was wrong: the surviving references were evidence
@@ -77,7 +77,7 @@ pushing by default.
 - Rewriting any skill's reasoning steps.
 - `.pi/prompts/`, `.pi/agents/`, `.myflow/agents/`.
 - Generating skills from code, or a prose linter.
-- Porting the upstream thinking guides wholesale; this repo gets one guide with
+- Porting the thinking guides wholesale; this repo gets one guide with
   a real case behind it.
 
 ## Acceptance

@@ -28,7 +28,7 @@
    「压缩写 system checkpoint，system 段存活于压缩」，而 `02-matrix.md:101`（`CAP-SKILL-03`）却判 `A-NONE`。
    成因：检索式只查 `compaction.md` 里的字面 `skill`，而机制文档在 **`session-format.md`**。
 2. `#14`（运行期改写已存工具结果）—— **检索词汇库错位**。原文用的是 *rewrite / shrink / truncate*，
-   Pi 用的是 **`context_edit` + `replacement` / `omits`**。成因与上一轮那次「模式过窄假阴性」同源。
+ Pi 用的是 **`context_edit` + `replacement` / `omits`**。成因与上一轮那次「模式过窄假阴性」同源。
 
 另有 **6 条附带发现**（不属于 37 条本身，但同属负向断言的方法性风险，见 §5）。
 
@@ -43,7 +43,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | myflow 无 allow/deny/ask 求值 | `.pi/**`；`permission\|deny\|allow` | 无求值管线 | 同：仅 `myflow-brainstorm/SKILL.md:319`（清单文字）、`myflow-meta/references/harness-conventions.md:79-80`（verify gate） | `approve\|confirm\|gate\|guard\|policy` → `subagent.ts:392-394`(`--approve`)、`pi-coding-agent.d.ts:26`(`ui.confirm` 类型)、`index.ts:423-434`(递归/path guard)、`index.ts:459-489`(verify gate) | `.pi/` 无 `#` 标题体系 | **成立**（`E-C` 守卫存在，但不是 allow/deny/ask 求值器） | `.pi/skills/myflow-brainstorm/SKILL.md:319`、`.pi/extensions/myflow/index.ts:420-452` |
 | 2 | myflow 无 MCP 集成 | `.pi/**`；`mcp` | 仅 `subagent.ts:69` 注释 | **同语料 ≥14 处**：`skills/myflow-spec-bootstrap/references/mcp-setup.md:11,18,22,23,25,34,39-43,55,87`、`…/repository-analysis.md:13,16,36`、`myflow-meta/references/harness-conventions.md:74`、`extensions/myflow/subagent.ts:69` | `mcpServers` → 同上；无任何 `.ts` 消费 MCP | 同上 | **部分**（断言成立：myflow 只**文档化** Pi 的 MCP，不实现/不消费；但「命中 = 仅 1 处」不实） | `.pi/skills/myflow-spec-bootstrap/references/mcp-setup.md:18-25` |
-| 3 | Norma 无「按 agent 声明限制写入路径」 | `../Norma/**/*.go`；`writesUnder\|WriteScope\|allowedPath\|AllowedPath` | **0** | **0** | `writeScope\|scope.{0,10}sandbox` → 0；`sandbox` → `tool/bash.go:19`（**仅宿主建议**「a full sandbox — hosts should still gate Bash via CanUseTool」）；`read-?only\|readOnly` → `memory/tools.go:29,66`、`plan/plan.go:84,86,110-112`、`tool/{files,ls}.go`、`permission/permission.go` | `permission/`、`plan/` | **成立**（Norma 有逐工具 `ReadOnly` 谓词与 `Permissions` 谓词，但**无路径范围**概念；`ADV-01` 不受影响） | `Norma/permission/permission.go:33`、`Norma/plan/plan.go:84-98` |
+| 3 | Norma 无「按 agent 声明限制写入路径」 | `../Norma/**/*.go`；`writesUnder\|WriteScope\|allowedPath\|AllowedPath` | **0** | **0** | `writeScope\|scope.{0,10}sandbox` → 0；`sandbox` → `tool/bash.go:19`（**仅 Pi 建议**「a full sandbox — hosts should still gate Bash via CanUseTool」）；`read-?only\|readOnly` → `memory/tools.go:29,66`、`plan/plan.go:84,86,110-112`、`tool/{files,ls}.go`、`permission/permission.go` | `permission/`、`plan/` | **成立**（Norma 有逐工具 `ReadOnly` 谓词与 `Permissions` 谓词，但**无路径范围**概念；`ADV-01` 不受影响） | `Norma/permission/permission.go:33`、`Norma/plan/plan.go:84-98` |
 | 4 | Pi 无内建子代理/代理派生 | `docs/*.md`(40)；`(?i)sub-?agent\|spawn\|parallel agent\|teammate\|orchestrat\|swarm\|multi-agent` | **0**（`orchestrat` 仅 `extensions.md:158,181`） | **非 0**：`spawn` 命中 `environment-variables.md:53,57,64,69`（`spawnHook` = **进程** spawn 钩子）；`orchestrat` 命中同原声明 | 同重跑；另 `swarm\|teammate\|consensus` → **0** | `compaction.md` 标题无 subagent 相关 | **部分**（断言成立：无内建子代理；但「命中 = 0」不实，`spawnHook` 本应列入并以「非代理」排除） | `docs/environment-variables.md:53-69` |
 | 5 | Pi `docs/` 无 plan mode | `(?i)plan mode\|plan-mode\|planner\|\bplan\b` | `virtual-models.md:93,98,99`、`providers.md:46-65` | 同（`virtual-models.md:93,98,99,114`；`providers.md:47-66` 的 `ZAI Coding Plan`/`Qwen Token Plan` 等） | `read-?only\|approv` → `extensions.md:104` 无、`security.md:29-33,61,82`（project trust） | 同 | **成立**（`docs/` 内无 plan mode；唯一 `O-2` 正证 = 包根 `README.md:19`，**不是** `:15`） | `README.md:19` |
 | 6 | Pi 无内建工具审批/permission 系统 | `(?i)permission\|allow/deny\|permissionMode\|approve\|confirm before` | `security.md:3`、`extensions.md:167-179`、`mcp.md:252-254`、`skills.md:78`、`cli.md:237-239` | 同 + `how-pi-works.md:47-49`、`index.md:39`、`security.md:29,33,61,82`、`models.md:154-156`、`termux.md:48,56,104-106` | `canUseTool\|gate\|guard\|policy` → `extensions.md:167-179`（**示例**用 `tool_call`+`ui.confirm` 自建门） | 同 | **成立**（`security.md:3` 原文「it does not ask for approval before every tool call」是最强正证） | `docs/security.md:3`、`docs/extensions.md:167-179` |
@@ -71,7 +71,7 @@
 | 28 | Pi core 无子代理/sidechain | `subagent\|sub-agent\|sidechain\|nested agent\|spawn` | 0（仅 `A-EXT`） | 同（`spawn` → `spawnHook`，见 #4） | `sidechain\|child session` → 0 | 同 | **成立** | 同 #23 |
 | 29 | Pi 无「从错误解析真实窗口」 | `parse.*window\|learned window\|actual limit\|真实窗口` | 0（`custom-provider.md:152` 仅识别错误） | 同 | `context.?overflow\|too long\|overflow` → `compaction.md:37,39,85,461`、`custom-provider.md:152,154,165`、`virtual-models.md:81-84`、`models.md:90`（「Pi does **not yet** rewrite or reject history based on」`inputLimits`） | 同 | **成立**（只有「识别 overflow → 压缩重试」，无学习窗口更新） | `docs/custom-provider.md:152`、`docs/models.md:90` |
 | 30 | myflow 无账本/归档（压缩状态） | `.pi/`+`.myflow/`；`state.json\|archive\|CompressionState\|blocks\|token snapshot` | 0 | `archive` → `.myflow/workflow.md:12,26,56`、`task.py archive`、`tests/task-bridge.test.ts:74-141,311-318`（**任务**归档）；`blocks` → workflow-state 块（`tests/mvp.test.ts:52-97`）；`state.json`/`CompressionState`/`token snapshot` → **0** | `cache\|snapshot` → 仅 `turn-cache.ts`（回合缓存） | 同 | **成立**（命中经语义排除后无压缩账本） | `.myflow/workflow.md:12,26`、`.pi/extensions/myflow/turn-cache.ts:112` |
-| 31 | Pi 无 `SubagentStart` 等价宿主钩子 | `docs/*.md`(40)、`dist/.../types.d.ts`、`README.md`；`sub-?agents?\|SubagentStart\|subagent`(i) | `README.md:19`（唯一）；`on()` 全表 **42 项** | `SubagentStart` 对**整包**（含 `dist/`、`CHANGELOG.md`）**0 命中**；`on(event:` 枚举 = **41 项** | 逐条通读 `types.d.ts:1186-1228` 的 `on()` 重载：`project_trust\|resources_discover\|session_*\|mcp_servers_change\|context\|context_with_system\|cache_warming_decision\|before_provider_*\|after_provider_response\|provider_stream_event\|before_agent_start\|agent_start\|agent_end\|agent_before_settle\|agent_settled\|ui_prompt_*\|turn_*\|message_*\|tool_execution_*\|model_select\|thinking_level_select\|tool_call\|tool_result\|user_bash\|input` | 同 | **成立**（断言成立；计数更正 **41 ≠ 42**） | `dist/core/extensions/types.d.ts:1186-1228` |
+| 31 | Pi 无 `SubagentStart` 等价 Pi 钩子 | `docs/*.md`(40)、`dist/.../types.d.ts`、`README.md`；`sub-?agents?\|SubagentStart\|subagent`(i) | `README.md:19`（唯一）；`on()` 全表 **42 项** | `SubagentStart` 对**整包**（含 `dist/`、`CHANGELOG.md`）**0 命中**；`on(event:` 枚举 = **41 项** | 逐条通读 `types.d.ts:1186-1228` 的 `on()` 重载：`project_trust\|resources_discover\|session_*\|mcp_servers_change\|context\|context_with_system\|cache_warming_decision\|before_provider_*\|after_provider_response\|provider_stream_event\|before_agent_start\|agent_start\|agent_end\|agent_before_settle\|agent_settled\|ui_prompt_*\|turn_*\|message_*\|tool_execution_*\|model_select\|thinking_level_select\|tool_call\|tool_result\|user_bash\|input` | 同 | **成立**（断言成立；计数更正 **41 ≠ 42**） | `dist/core/extensions/types.d.ts:1186-1228` |
 | 32 | Pi 无进程内 MCP server 原语 | `in-?process\|InProcess\|registerMcpServer.*function\|MCP server API` | 0；`registerMcpServer(name, config)` 只收配置 | 同（`in-?process` → `docs/sdk.md:5,147`、`cli-integration.md:106`、`rpc.md:5` 均指**SDK 内嵌**；`dist/utils/image-resize-core.d.ts:41` 指图片缩放） | `createServer\|McpServer\|listen` → `pi-mcp/dist/client.d.ts`（**Client** 侧）、`pi-mcp/README.md:69-76`（`OAuthCallbackServer.listen()`，**回调**服务器）；**`pi-mcp/README.md:132`「Batch JSON-RPC messages, legacy HTTP+SSE, **servers**, sampling, and tasks are outside the initial core.」= 官方明示 server 侧不在范围内** | 同 | **成立**（且找到比「命中 0」更强的正向引证） | `pi-mcp/README.md:132`、`docs/extensions.md:195-206` |
 | 33 | Pi 无 skill 跨压缩保留机制 | `docs/*.md` 逐篇检索 `skill`（重点 `compaction.md`） | `skills.md`、`how-pi-works.md`、`settings.md`、`slash-commands.md`、`packages.md`、`extensions.md:181`；**`compaction.md` 命中 0** | `compaction.md` 命中仍 **0** | **机制在其他文档**：`session-format.md:84`（system message 的 `sections.skills`）、`:127-131`（`CompactionEntry.systemMessage` = 「complete system prompt/tool checkpoint」，成为压缩后上下文的**前置 system message**）、`:248`（「Pre-compaction system messages are folded into the complete checkpoint rather than replayed」）；`dist/bundle/chunks/chunk-HACVPRBJ.js:11` `collapseSystemMessages()` 同证；`skills.md:43-45` 证明 **roster（name+description+path）进 system prompt，正文由模型按需 `read`** | `compaction.md` 无 skill 字样 | **假阴性** | `docs/session-format.md:84,127-131,248`、`docs/skills.md:43-45` |
 | 34 | Pi 无 skill→MCP 解锁联动 | `skills.md`+`mcp.md`+全事件表；`allowed-tools\|unlock\|reveal\|deferred.{0,40}skill\|skill.{0,40}mcp` | `skills.md:78`（`allowed-tools` 方向相反）；`mcp.md:191-217` | 同 + `cli.md:156,182`、`codemode.md:50`、`extensions.md:160`、`mcp.md:196,200,202,204,213,226,244,272`（deferred 由 `tool_search`/`codemode`/配置驱动） | `unlock\|reveal` → `session-format.md:147`（分支相对，`reveal` 指恢复原文） | 同 | **成立**（`allowed-tools` 是**预授权**，与「skill 解锁 server 工具」方向相反，原 residual 已如实记录） | `docs/skills.md:78`、`docs/mcp.md:196,204` |
@@ -126,8 +126,8 @@
 | 位置 | 现状 | 应改为 |
 | --- | --- | --- |
 | `02-matrix.md:101`（`CAP-SKILL-03` Pi 侧） | `A-NONE` / `O-5`；「**无**（`compaction.md` 命中 0；skill 正文在 tool_result，摘要时截 2000 字符）」 | `A-PI(部分)` / **`O-3`**：「**roster（name+description+path）经 system section 存活于压缩**；**正文**（`/skill:name` 展开为 user 消息，`dist/core/agent-session.js:1709` `<skill name="…" location="…">`；或 `read SKILL.md` 的 tool result）被摘要，无 re-inject」 |
-| `03-gap-register.md:497`（`GAP-SKILL-03`「Pi 现状（为什么宿主不给）」） | `O-5`；理由 = compaction.md 命中 0 | `O-3`；理由 = 「**原语在 Pi**（system checkpoint 保留 roster / `session_before_compact` 可自定义），**语义由 myflow 补齐**（正文逐字 re-inject）」 |
-| `GAP-SKILL-03` 的能力描述与补足标准 | 「skill 正文存活于压缩」 | **须拆分**：(a) roster 存活 → `V-PI`/`O-1`（非缺口，已由宿主覆盖）；(b) 正文逐字 re-inject → 保留 `V-GAP` |
+| `03-gap-register.md:497`（`GAP-SKILL-03`「Pi 现状（为什么 Pi 不给）」） | `O-5`；理由 = compaction.md 命中 0 | `O-3`；理由 = 「**原语在 Pi**（system checkpoint 保留 roster / `session_before_compact` 可自定义），**语义由 myflow 补齐**（正文逐字 re-inject）」 |
+| `GAP-SKILL-03` 的能力描述与补足标准 | 「skill 正文存活于压缩」 | **须拆分**：(a) roster 存活 → `V-PI`/`O-1`（非缺口，已由 Pi 覆盖）；(b) 正文逐字 re-inject → 保留 `V-GAP` |
 | `02-matrix.md:197` / `GAP-SKILL-03` 优先级 | `V-GAP`/`P2`，理由含「Pi 无」 | `V-GAP` 仍成立（Pi 无**正文** re-inject ∧ myflow 无 ∧ Norma 有），但「缺口判定」一行的论证必须改写；`P2` 可保留 |
 | `08-coverage.md` §6 薄弱点 3 | 把 `#33` 列为「仅文档面推断」 | 删除该归类：`#33` 不是「文档未命中」，而是**检索词汇错位** |
 
@@ -162,8 +162,8 @@
 | 位置 | 现状 | 应改为 |
 | --- | --- | --- |
 | `02-matrix.md:73`（`CAP-NOA-08` Pi 侧） | `A-NONE` / `O-5` | `A-PI(原语)` / **`O-3`**；「原语充足（`context_edit` 非破坏性改写 + `turn_end`/`agent_before_settle` 链式追加）；缺**压力触发判定**与**选最大未截断结果**的语义」 |
-| `03-gap-register.md:211-214`（`GAP-NOA-08` 的「为什么宿主不给」） | `O-5`；「**无按上下文压力改写已存结果**的紧急阀」 | `O-3`；「宿主不决定**何时**改写；`context_edit` 已提供**如何**改写」 |
-| `GAP-NOA-08` 依赖与代价 | 未提 `context_edit` | 补「复用 Pi `context_edit` 或 `context` 钩子两选一 —— 两者均落在 Pi 契约上（`O-3`），须登记为宿主契约」 |
+| `03-gap-register.md:211-214`（`GAP-NOA-08` 的「为什么 Pi 不给」） | `O-5`；「**无按上下文压力改写已存结果**的紧急阀」 | `O-3`；「Pi 不决定**何时**改写；`context_edit` 已提供**如何**改写」 |
+| `GAP-NOA-08` 依赖与代价 | 未提 `context_edit` | 补「复用 Pi `context_edit` 或 `context` 钩子两选一 —— 两者均落在 Pi 契约上（`O-3`），须登记为 Pi 契约」 |
 | `02-matrix.md:169` | myflow 侧 `R-T cit` | 与 `03-gap-register.md:214` 的 `R-∅` **矛盾**，须统一（`C4` 完整性检查项） |
 
 **同类但程度较轻的 `#13`**（`CAP-NOA-07` 硬保护）：`session_before_compact` 可返回
@@ -232,7 +232,7 @@ Norma 的是「`maxAutoCompactFails=3` + `tripped` 连败停压」（`Norma/comp
 ### 2.9 `#2`/`#4`/`#13`/`#26` 的共同教训
 
 四条的固有模式是：**断言字面成立，但「命中」列与「残余风险」列不完整**，
-从而把 `O-5`（双方皆无）误填成 `O-3`（宿主部分提供）应填的位置。
+从而把 `O-5`（双方皆无）误填成 `O-3`（Pi 部分提供）应填的位置。
 **规律**：凡 `NEG` 的结论是 `O-5` 或「明确无」的条目，都必须额外做一次
 「该概念的正面枚举词 + 相邻文档标题」扫描（本片即为该扫描）。
 
@@ -306,7 +306,7 @@ Norma 的是「`maxAutoCompactFails=3` + `tripped` 连败停压」（`Norma/comp
 | F-3 | `02-matrix.md:169` 记 `CAP-NOA-08` myflow `R-T cit`，`03-gap-register.md:214` 记 `R-∅` | 矛盾，属 `C4` 完整性检查项；因 `R-T cit` 指的是**注入文件**截断而非工具输出截断，建议统一为 `R-∅`（并保留 `cit` 作为邻近测试说明） |
 | F-4 | `02-matrix.md:101`（`CAP-SKILL-03`）与 `02-matrix.md:76`（`CAP-NOA-11`）对同一机制（system checkpoint）给出互斥判定 | 见 §2.1；`C3` 归属复核时须同时核对这两行 |
 | F-5 | `pi-mcp/README.md:132` 明示「servers … outside the initial core」 | 这是 `NEG#32` 的**正向引证**（比「命中 0」强），建议补入 `02-matrix.md` MCP 域与 `GAP-SKILL-04` 的依赖说明 |
-| F-6 | `docs/compaction.md:130-138` 与 `docs/session-format.md:127-131` 对 `CompactionEntry` 的字段描述**不一致**（前者未列 `systemMessage`，后者列出） | 权威面内部不一致 → 建议进「可沉淀清单」（`08-coverage.md` §5 的 `D-8` 宿主契约快照，须以 `session-format.md` 为准） |
+| F-6 | `docs/compaction.md:130-138` 与 `docs/session-format.md:127-131` 对 `CompactionEntry` 的字段描述**不一致**（前者未列 `systemMessage`，后者列出） | 权威面内部不一致 → 建议进「可沉淀清单」（`08-coverage.md` §5 的 `D-8` Pi 契约快照，须以 `session-format.md` 为准） |
 
 ---
 

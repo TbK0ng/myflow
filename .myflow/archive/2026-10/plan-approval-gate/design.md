@@ -26,7 +26,7 @@
 
 ---
 
-## 2. 宿主能力与硬边界（已取证）
+## 2. Pi 能力与硬边界（已取证）
 
 | 事实 | 证据 | 对本设计的约束 |
 | --- | --- | --- |
@@ -39,9 +39,9 @@
 | `ctx.ui` 在 myflow 中从未被调用 | 全仓 + 全 A-EXT 检索 | 本任务是首次引入交互式 UI，需在 spec 里登记 |
 
 ### 2.1 「回合内」语义（与 Norma 的差别）
-Norma 的 `AskUserQuestion` 是**宿主提供回调**，SDK 不决定 UI。Pi 的等价物是
+Norma 的 `AskUserQuestion` 是**Pi 提供回调**，SDK 不决定 UI。Pi 的等价物是
 `ctx.ui.select`：模型调工具 → 处理器 `await` 弹窗 → 用户选中 → 答案作为**工具结果**返回。
-两者语义一致（都不结束回合）。差别仅在 UI 由宿主固定为 TUI 控件，且**只能单选**。
+两者语义一致（都不结束回合）。差别仅在 UI 由 Pi 固定为 TUI 控件，且**只能单选**。
 
 ---
 
@@ -302,7 +302,7 @@ main: task.py start                ← 门通过
 ### ADR-6 不做多选、不做 per-option 描述
 - **Context**：Pi `select` 的签名限制（§2）。
 - **Decision**：接受限制；需要说明时把描述拼进选项字符串；多选拆成多轮提问。
-- **Consequences**：表达力弱于 Norma；但零自造 UI 代码，且随宿主升级自动受益。
+- **Consequences**：表达力弱于 Norma；但零自造 UI 代码，且随 Pi 升级自动受益。
 
 ---
 

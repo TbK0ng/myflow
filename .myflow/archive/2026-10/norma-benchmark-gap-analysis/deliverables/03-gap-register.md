@@ -7,7 +7,7 @@
 > myflow 证据省略 `.pi/extensions/myflow/`（`ix`=index、`sb`=subagent、`ci`=context-injection、`tc`=turn-cache、`st`=status、`ag`=agents），测试省略 `tests/`。
 > **最终条数**：`GAP-*` = **29** 条；`QGAP-*` = **6** 条；合计 **35** 条。
 > **优先级定稿**：`P0` = 2、`P0-R` = 1、`P1` = 6、`P2` = 27（其中 `QGAP-CTX-02` 同时记 `P1` 与 `P0-R`，合计仍为 35 条）。
-> **C1 复核修正（B5）**：按 `research/c1-neg-recheck.md`，4 条条目的「Pi 现状」`O-*` 由 `O-5` 上调为 `O-3`（`GAP-CMPT-02`、`GAP-LOOP-02`、`GAP-NOA-07`、`GAP-NOA-08`）；`GAP-SKILL-03` 按 C1 拆为 roster（宿主已给）/ 正文（缺口）并改 `O-5` → `O-3`。**条数（29/6/35）与优先级分布不变**。
+> **C1 复核修正（B5）**：按 `research/c1-neg-recheck.md`，4 条条目的「Pi 现状」`O-*` 由 `O-5` 上调为 `O-3`（`GAP-CMPT-02`、`GAP-LOOP-02`、`GAP-NOA-07`、`GAP-NOA-08`）；`GAP-SKILL-03` 按 C1 拆为 roster（Pi 已给）/ 正文（缺口）并改 `O-5` → `O-3`。**条数（29/6/35）与优先级分布不变**。
 
 ---
 
@@ -46,7 +46,7 @@
 
 - **能力描述**：当会话键存在、而 `.myflow/.runtime/sessions/<key>.json` 任务指针缺失（换机 / 新 clone / 新 worktree），或两侧「无键」回退口径不一致时，产出**可观测告警**并**自愈**（重建指针或显式降级），而非静默降级为 `no_task` / 零 spec 注入。
 - **Norma 机制与证据**：`noaadapter/state_store.go:74-90,131-152` — 每会话 `state.json` 有版本守卫 + 原子写；sidecar 缺失时 `RebuildStateFromLog` **冷启动重建**；`noaadapter/materialize.go:9-30,73-84`；`noaadapter/inherit.go:29-36,63-84` 父链继承。
-- **Pi 现状（为什么宿主不给）**：`O-4`（宿主契约依赖）+ `O-3`。`PI_SESSION_ID` 形状见 `docs/environment-variables.md:20-31`，扩展侧 id 来自 `sessionManager.getSessionId()`（`pi-coding-agent.d.ts:16-18`），二者等价**未文档化**；`/fork`·`/clone` 生成新会话新 id（`docs/session-format.md:72-75`）、`/tree` 同文件（`docs/sessions.md:20-26`）。宿主不提供「键 ↔ 外部指针」一致性的任何原语。
+- **Pi 现状（为什么 Pi 不给）**：`O-4`（Pi 契约依赖）+ `O-3`。`PI_SESSION_ID` 形状见 `docs/environment-variables.md:20-31`，扩展侧 id 来自 `sessionManager.getSessionId()`（`pi-coding-agent.d.ts:16-18`），二者等价**未文档化**；`/fork`·`/clone` 生成新会话新 id（`docs/session-format.md:72-75`）、`/tree` 同文件（`docs/sessions.md:20-26`）。Pi 不提供「键 ↔ 外部指针」一致性的任何原语。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。每回合从 `getSessionId()` 派生键（`ix:161-193`）；指针读取失败即 `no_task`（`tc:45-51`）；`get_context.py:118-127` 记 `context-missing` 但**无告警**；无键回退两侧口径不一——扩展要求「恰好一个会话文件」（`tc:52-60`），脚本取 mtime 最新（`get_context.py:129-130`）。T3 `RISK-03`（`R-HARD`）、`RISK-05`（`R-SOFT`）。
 - **缺口判定**：`V-GAP`（Norma 有等价重建/告警语义 ∧ Pi 无 ∧ myflow 无）。
 - **补足标准**（逐条可验收）：
@@ -62,7 +62,7 @@
 
 - **能力描述**：myflow 的任务指针应与会话身份**强绑定**，并在 `/fork`、`/clone`、子代理派生时提供明确的继承/交接语义。
 - **Norma 机制与证据**：`noaadapter/state_store.go:16-27` — 账本带 `sessionId`；`noaadapter/inherit.go:29-36,63-84` — 子会话 `DeriveChildState` 换自身 id 继承 Blocks/Refs，父链可回溯。
-- **Pi 现状（为什么宿主不给）**：`O-3` / `O-4`。id 原语齐备（`pi-coding-agent.d.ts:16-18`、`docs/environment-variables.md:20-31`），但**无父链继承、无 fork 交接**语义；`/fork`·`/clone` 换新 id（`docs/session-format.md:72-75`），`/tree` 同文件（`docs/sessions.md:20-26`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-3` / `O-4`。id 原语齐备（`pi-coding-agent.d.ts:16-18`、`docs/environment-variables.md:20-31`），但**无父链继承、无 fork 交接**语义；`/fork`·`/clone` 换新 id（`docs/session-format.md:72-75`），`/tree` 同文件（`docs/sessions.md:20-26`）。
 - **myflow 现状**：`E-C[myflow]` / `R-T tct:172,189,207,256`。两侧各派生 `pi_<sanitize(id)>`（`ix:161-193` ↔ `task.py:96-117`、`get_context.py:101-111`）；越界/投毒 → `no_task`（`tc:22-33,84-98`）。**无父链继承、无 fork 交接**（子代理靠 `MYFLOW_CONTEXT_ID` 显式继承，`sb:446`）。
 - **缺口判定**：`V-QUAL`（Norma 有 ∧ Pi 无 ∧ myflow **有但覆盖更弱**）。
 - **差距实证**：`Norma:E-C + R-T`（`state_store.go:16-27` + `state_store_test.go`）**vs** `myflow:E-C + R-T`（`ix:161-193` + `tests/task-bridge.test.ts:27-56`）——强度同层，差在 **fork/父链继承缺失**，非机制有无。
@@ -81,7 +81,7 @@
 
 - **能力描述**：在重型摘要之前，先做「清理旧工具结果」的轻量压缩层，保留最近 N 条（Norma 为 5）。
 - **Norma 机制与证据**：`compaction/compaction.go:62,69,173,249` — `Micro(清旧工具结果, keep5)` / Auto / Reactive 三层；`compactableTools` 白名单。
-- **Pi 现状（为什么宿主不给）**：`O-3`。Pi 只有阈值 AutoCompact + overflow/length 恢复共 2 层（`docs/compaction.md:32,37,39`），无「清旧工具结果」独立层。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。Pi 只有阈值 AutoCompact + overflow/length 恢复共 2 层（`docs/compaction.md:32,37,39`），无「清旧工具结果」独立层。
 - **myflow 现状**：`E-N[myflow]`（有效 `E-C[Pi]`）/ `R-∅`。全委托 Pi。
 - **缺口判定**：`V-GAP`（Micro 层：Norma 有 ∧ Pi 无 ∧ myflow 无）。
 - **补足标准**：
@@ -97,7 +97,7 @@
 
 - **能力描述**：连续多次自动压缩失败后停用自动压缩，避免「压缩-失败-再压缩」死循环。
 - **Norma 机制与证据**：`compaction/compaction.go:69,304` — `maxAutoCompactFails=3` + `tripped` 连败停压。
-- **Pi 现状（为什么宿主不给）**：`O-3`。无**连败计数**熔断；已有**有界单次恢复重试**（`docs/compaction.md:39`）与 `session_compact_failed` 遥测（`:372`）。原语在 Pi、熔断语义由 myflow 补（C1 `#11`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。无**连败计数**熔断；已有**有界单次恢复重试**（`docs/compaction.md:39`）与 `session_compact_failed` 遥测（`:372`）。原语在 Pi、熔断语义由 myflow 补（C1 `#11`）。
 - **myflow 现状**：`E-N[myflow]`（有效 `E-C[Pi]`）/ `R-∅`。无熔断。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -111,12 +111,12 @@
 
 #### QGAP-CMPT-05 压缩与注入共存语义的强度对齐
 
-- **能力描述**：myflow 注入的 workflow-state 在宿主压缩后仍然存活，且不依赖「压缩恰好未被触发」的时序侥幸。
+- **能力描述**：myflow 注入的 workflow-state 在 Pi 压缩后仍然存活，且不依赖「压缩恰好未被触发」的时序侥幸。
 - **Norma 机制与证据**：`compaction/compaction.go:349,370` — summary 后按 5k/25k 预算**逐条重注入** skill 原文；`llm/skillmsg.go` 提供自识别信封。
-- **Pi 现状（为什么宿主不给）**：`O-3`。`custom_message` 既参与 LLM context（`docs/session-format.md:178`）**又是合法压缩切点**（`docs/compaction.md:130,134`）；Pi **不重注入**扩展消息。压缩可被扩展拦截（`docs/compaction.md:293-320`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。`custom_message` 既参与 LLM context（`docs/session-format.md:178`）**又是合法压缩切点**（`docs/compaction.md:130,134`）；Pi **不重注入**扩展消息。压缩可被扩展拦截（`docs/compaction.md:293-320`）。
 - **myflow 现状**：`E-C[myflow]` / `R-T`（`tests/extension.test.ts:224-255`）。每回合重注入（`ix:319-338`）+ 压缩后按 `lastInjectionTs > lastCompactionTs` 重挂（`ix:384-406`）+ `session_before_compact` 记时（`ix:455-457`）。
 - **缺口判定**：`V-QUAL`（并记 `R-T`，**不写 `R-∅`**——见裁定 `C-6`）。
-- **差距实证**：`Norma:E-C + R-T`（`compaction.go:349,370` + `compaction_test.go:55,84,105`）**vs** `myflow:E-C + R-T`（`ix:319-338,384-406,455-457` + `tests/extension.test.ts:224`）——强度同层，但 myflow 的补偿**依赖宿主事件时序**，最坏情况有 1 回合失败窗口。
+- **差距实证**：`Norma:E-C + R-T`（`compaction.go:349,370` + `compaction_test.go:55,84,105`）**vs** `myflow:E-C + R-T`（`ix:319-338,384-406,455-457` + `tests/extension.test.ts:224`）——强度同层，但 myflow 的补偿**依赖 Pi 事件时序**，最坏情况有 1 回合失败窗口。
 - **补足标准**：
   1. 目标**强制层级**：`E-C[myflow]`（把缺失判定从 `ix:395` 提到早退 `ix:384` 之前，去掉「必须先触发压缩事件」的时序依赖）。
   2. 目标**回归护栏**：`R-T`，扩展 `tests/extension.test.ts:224-255`，新增「压缩标记先置、无后续事件仍能重挂」用例。
@@ -132,7 +132,7 @@
 
 - **能力描述**：给进入模型的上下文块分配**稳定、永不重编号**的引用（ref），使模型可在后续轮次按 ref 精确定位消息。
 - **Norma 机制与证据**：`noa/refs.go:15,25,74,78` + `noa/const.go:5,12` — `mNNNNN` 双向 map，`BLOCKED` 硬保护，ref 永不重编号。
-- **Pi 现状（为什么宿主不给）**：`O-5`。模型无 ref 概念；只有宿主 entry id（8hex）可经 `context_edit.targetId` 定位（`docs/session-format.md:143,235`），非模型可寻址面。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。模型无 ref 概念；只有 Pi entry id（8hex）可经 `context_edit.targetId` 定位（`docs/session-format.md:143,235`），非模型可寻址面。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。无 ref 层。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -148,7 +148,7 @@
 
 - **能力描述**：压缩分层推进，**一次只压一层**，层创建后内容固定，终层不可重写。
 - **Norma 机制与证据**：`noa/tier.go:22,30,78`、`noa/types.go:56,61`、`noa/config.go:105` — `bN` tier 1..3，创建即固定，终层重写被检测。
-- **Pi 现状（为什么宿主不给）**：`O-5`。单层；重复压缩靠 `previousSummary` 迭代（`docs/compaction.md:83`），无「同层不合压」约束。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。单层；重复压缩靠 `previousSummary` 迭代（`docs/compaction.md:83`），无「同层不合压」约束。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -164,7 +164,7 @@
 
 - **能力描述**：压缩产物是**可回放重建**的块（block）；从日志回放应得到**字节一致**的摘要。
 - **Norma 机制与证据**：`noa/compress.go:77,225`（原子尺寸门）、`noa/state.go:38`、`noa/rebuild.go:37,45`（回放字节一致）。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无块模型；摘要落 `CompactionEntry`，原文留 JSONL（`docs/compaction.md:79`、`docs/session-format.md:226`），可读但不可按 ref 重建。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无块模型；摘要落 `CompactionEntry`，原文留 JSONL（`docs/compaction.md:79`、`docs/session-format.md:226`），可读但不可按 ref 重建。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -180,7 +180,7 @@
 
 - **能力描述**：按**上下文增长节律**（而非固定轮数）主动催促模型压缩，压缩后重锚。
 - **Norma 机制与证据**：`noa/nudge.go:11,20,56,114,206,300`、`noa/config.go:99-116` — 双波段成长节律 + 压缩后重锚 + tier 独立节律。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无压缩 nudge，只有阈值自动压缩与人工 `/compact`（`docs/compaction.md:32,37,41`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无压缩 nudge，只有阈值自动压缩与人工 `/compact`（`docs/compaction.md:32,37,41`）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`；每回合注入 workflow-state（`ix:319-337`，`context` 兜底 `ix:384-417`）与压缩无关。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -196,7 +196,7 @@
 
 - **能力描述**：区分「**某些工具结果恒不进压缩**」的硬保护与「最近 N 条/若干 token 保尾」的软保护。
 - **Norma 机制与证据**：`noa/const.go:54`、`noa/protected.go:13,33,74`、`noa/compress.go:371-377,381-400`、`noa/config.go:115-116` — 硬保护名单（含 `Compress` 工具本身 + 可配置 `ProtectedTools`）+ 软尾部区（`PreserveRecentMessages/Tokens`）。
-- **Pi 现状（为什么宿主不给）**：`O-3`。**无命名工具硬保护名单**；只有软尾部 `keepRecentTokens`（`docs/compaction.md:82,443`）。**但有原语**：`session_before_compact` 可返回 `{compaction:{summary,firstKeptEntryId,…}}` 自选保留边界（`docs/compaction.md:302-320`；`:138` 为保护性不变量）。缺的是「命名名单 + 强制跳过」（C1 `#13`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。**无命名工具硬保护名单**；只有软尾部 `keepRecentTokens`（`docs/compaction.md:82,443`）。**但有原语**：`session_before_compact` 可返回 `{compaction:{summary,firstKeptEntryId,…}}` 自选保留边界（`docs/compaction.md:302-320`；`:138` 为保护性不变量）。缺的是「命名名单 + 强制跳过」（C1 `#13`）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。无工具级硬保护或尾部保护。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -212,7 +212,7 @@
 
 - **能力描述**：上下文使用率逼近上限时，对**最大**的未截断工具结果做「保头保尾」改写，插入截断标记并附「勿重跑」提示；只改发出的、不改存储。
 - **Norma 机制与证据**：`noa/truncate.go:12-15,35,108`、`noa/processturn.go:87-88`、`noa/nudgetext.go:132`、`noa/config.go:109` — 使用率 ≥ `.95` 触发，标记 + 通知。
-- **Pi 现状（为什么宿主不给）**：`O-3`。**建时**每工具上限（bash 2000 行/50KB `docs/codemode.md:43`；MCP >20KB `docs/mcp.md:232`；codemode `max_output_tokens` `docs/codemode.md:12`）。**运行期原语已给**：`context_edit` 可 append-only 改写**已存** entry（`replacement:null` 省略 / 非空替换；targets 可为 tool-result；原文与元数据不变，`docs/session-format.md:143-147,235`），并可由 `turn_end`/`agent_before_settle` 链式追加（`docs/extensions.md:118`）。宿主不决定**何时**改写；缺口是「**谁来自动触发** + 选最大未截断结果」（C1 `#14`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。**建时**每工具上限（bash 2000 行/50KB `docs/codemode.md:43`；MCP >20KB `docs/mcp.md:232`；codemode `max_output_tokens` `docs/codemode.md:12`）。**运行期原语已给**：`context_edit` 可 append-only 改写**已存** entry（`replacement:null` 省略 / 非空替换；targets 可为 tool-result；原文与元数据不变，`docs/session-format.md:143-147,235`），并可由 `turn_end`/`agent_before_settle` 链式追加（`docs/extensions.md:118`）。Pi 不决定**何时**改写；缺口是「**谁来自动触发** + 选最大未截断结果」（C1 `#14`）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。`ci` 的截断只作用于**注入的 task 文件**（`ci:22-26,250-256`），与模型工具输出无关。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -220,7 +220,7 @@
   2. 目标**回归护栏**：`R-T`，新增 `tests/context-injection.test.ts` 用例（压力触发）。
   3. 行为规格：Given 上下文使用率 ≥ 阈值；When myflow 构造请求；Then 最大未截断工具结果被保头保尾并带截断标记；压力回落后自动复原。
   4. **不作弊条件**：不得改写持久化原文；不得对全部结果无差别截断（必须选**最大**未截断者）。
-- **依赖与代价**：不需新依赖；**复用 Pi `context_edit` 或 `context` 钩子二选一，两者均落在 Pi 契约上（`O-3`），须登记为宿主契约**；规模**中**。
+- **依赖与代价**：不需新依赖；**复用 Pi `context_edit` 或 `context` 钩子二选一，两者均落在 Pi 契约上（`O-3`），须登记为 Pi 契约**；规模**中**。
 - **优先级**：`P1`。依据 §9：`V-GAP` 且位于**核心流程**（上下文完整性）；C1 修正后仍为 `P1`（缺口从「无原语」变为「无触发判定」，代价仍属中等）。
 - **证据等级**：`E1`/`E4`。
 
@@ -228,7 +228,7 @@
 
 - **能力描述**：向模型暴露**可压缩区间建议**，并排除过小（<200 token）死区；对死区重复选择予以拒绝。
 - **Norma 机制与证据**：`noa/recommend.go:256,267`、`noa/const.go:31,43` — `BuildRecommendation` + `ViableRanges` + 死区重复拒绝（2 次）。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无对模型暴露的压缩建议面（`research/norma-cmpt-noa-core.md §2` NEG-A/B 命中 0）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无对模型暴露的压缩建议面（`research/norma-cmpt-noa-core.md §2` NEG-A/B 命中 0）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -246,7 +246,7 @@
 
 - **能力描述**：工具调用前可给出 allow / deny / ask（征询用户）三态决策，并支持把建议回传给发起方。
 - **Norma 机制与证据**：`permission/permission.go:18-31` — 三态 + 建议回传。
-- **Pi 现状（为什么宿主不给）**：`O-2`（刻意外包）。Pi 原文：`docs/security.md:3`「it does not ask for approval before every tool call」；`docs/extensions.md:167`「a **permission extension**」；`docs/mcp.md:252`「**permission gates**」。内核**无**逐调用审批。
+- **Pi 现状（为什么 Pi 不给）**：`O-2`（刻意外包）。Pi 原文：`docs/security.md:3`「it does not ask for approval before every tool call」；`docs/extensions.md:167`「a **permission extension**」；`docs/mcp.md:252`「**permission gates**」。内核**无**逐调用审批。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。只有硬 `block`，无 `ask`（`ix:420-452`）。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -262,7 +262,7 @@
 
 - **能力描述**：定义权限模式集合（如 plan / acceptEdits / bypass 等），模式决定可达工具集。
 - **Norma 机制与证据**：`permission/permission.go:51-58` — 6 种 mode。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无 mode，仅有进程级 allowlist（`docs/cli.md:120-122`、`docs/settings.md:42`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无 mode，仅有进程级 allowlist（`docs/cli.md:120-122`、`docs/settings.md:42`）。
 - **myflow 现状**：`E-G[myflow→Pi]` / `R-T sh:133`。无 mode；代替法 = agent frontmatter `tools:` 经 `--tools` 由 Pi 强制（`sb:403`、`.pi/agents/myflow-research.md:5`）。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -278,7 +278,7 @@
 
 - **能力描述**：deny 规则集合在评估中**优先**于 mode/bypass，构成有序判定表。
 - **Norma 机制与证据**：`permission/permission.go:85-90,145-158` — Stage1 deny 先于 mode/bypass。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无规则表；近似物 `--exclude-tools` 无优先级语义（`docs/cli.md:121-122`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无规则表；近似物 `--exclude-tools` 无优先级语义（`docs/cli.md:121-122`）。
 - **myflow 现状**：`E-C[myflow]` / `R-T sbt:456,525,554,581`。单条硬 deny（`writesUnder` 写范围，`ix:116,420-452`），无优先级表。
 - **缺口判定**：`V-GAP`（承接裁定 `C-3`）。
 - **补足标准**：
@@ -294,7 +294,7 @@
 
 - **能力描述**：权限评估为多阶段管线（如 硬 deny → mode → 规则 → 默认），每阶段可短路。
 - **Norma 机制与证据**：`permission/permission.go:85-140` — 四阶段 `Evaluate`。
-- **Pi 现状（为什么宿主不给）**：`O-2`（刻意外包）。Pi 原文：`docs/extensions.md:169-178` 以 `tool_call` 返回 `{block,reason}` 的**示例**演示审批（「a permission extension」语见 `:167`），把评估管线完全交给扩展自建；`docs/security.md:3`「it does not ask for approval before every tool call」确认内核无管线。
+- **Pi 现状（为什么 Pi 不给）**：`O-2`（刻意外包）。Pi 原文：`docs/extensions.md:169-178` 以 `tool_call` 返回 `{block,reason}` 的**示例**演示审批（「a permission extension」语见 `:167`），把评估管线完全交给扩展自建；`docs/security.md:3`「it does not ask for approval before every tool call」确认内核无管线。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -310,7 +310,7 @@
 
 - **能力描述**：运行中可翻转权限模式（如规划通过后从只读切到可写），且**逐调用**读取最新模式，无需重启会话。
 - **Norma 机制与证据**：`harness/tools.go:47-49`、`harness/query.go:75` — 逐调用重读 `PermissionModeFunc`；`plan/plan.go:68-72` — approve → target。
-- **Pi 现状（为什么宿主不给）**：`O-3`。原语 `pi.setActiveTools()`（`docs/extensions.md:163-165,185-189`），无 mode 语义。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。原语 `pi.setActiveTools()`（`docs/extensions.md:163-165,185-189`），无 mode 语义。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。未用 `setActiveTools`；子代理权限在 spawn 时固定（`--approve`，`sb:394`）；主会话无 mode 概念。
 - **缺口判定**：`V-GAP`。
 - **去重声明（裁定 `C-5`）**：本条**同时**吸收 `CAP-PERM-05` 与 `CAP-PLAN-03`（同一关注点的两处分片覆盖），本册不另立 `GAP-PLAN-03`。
@@ -329,7 +329,7 @@
 
 - **能力描述**：规划/探索阶段以**代码**强制只读（写工具不可达或被阻断），而非仅靠提示词。
 - **Norma 机制与证据**：`plan/plan.go:81-98`（`EnterTool`）+ `permission/permission.go:52,100-103`（只读由权限层代码强制）；`R-T plan/plan_test.go:13-52`、`agentcore/plan_test.go:17-72`。
-- **Pi 现状（为什么宿主不给）**：`O-2`（刻意外包）。Pi 原文：`README.md:19`「skips features like sub-agents and plan mode」；原语充足（`docs/extensions.md:165,187` `setActiveTools`、`:106,170-178` `tool_call` block、`:263` fail-safe），随包 `examples/extensions/plan-mode/` **未装载**。
+- **Pi 现状（为什么 Pi 不给）**：`O-2`（刻意外包）。Pi 原文：`README.md:19`「skips features like sub-agents and plan mode」；原语充足（`docs/extensions.md:165,187` `setActiveTools`、`:106,170-178` `tool_call` block、`:263` fail-safe），随包 `examples/extensions/plan-mode/` **未装载**。
 - **myflow 现状**：`E-P[myflow]` / `R-∅`。无只读代码守卫，仅文字（`.pi/skills/myflow-brainstorm/SKILL.md:9-13`）。这是 §4.3 `R-STR-3` 的**实证反例**（裁定 `C-8`）。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -345,7 +345,7 @@
 
 - **能力描述**：规划完成需经**可判定的审批门**才能进入执行；拒绝则留在规划态。
 - **Norma 机制与证据**：`plan/plan.go:100-144` — `Approver` 回调；拒绝则 `tool.Errorf` 且留在 plan；`R-T plan/plan_test.go:28-52`。
-- **Pi 现状（为什么宿主不给）**：`O-2`（刻意外包）。Pi 原文：`README.md:19`「skips features like sub-agents and **plan mode**」；无内建审批门，原语仅 `docs/extensions.md:104`（`before_agent_start` 改 prompt/工具）。
+- **Pi 现状（为什么 Pi 不给）**：`O-2`（刻意外包）。Pi 原文：`README.md:19`「skips features like sub-agents and **plan mode**」；无内建审批门，原语仅 `docs/extensions.md:104`（`before_agent_start` 改 prompt/工具）。
 - **myflow 现状**：`E-P[myflow]`（评审门文字：`.myflow/workflow.md:20,106-107`、`.pi/prompts/myflow-continue.md:32-34`）+ `E-C[myflow]`（代码门：`task.py:493-508` 空 jsonl 拒绝 `start`；`R-T tgt:81`）。
 - **缺口判定**：`V-QUAL`。门的**位置**不同：myflow 的门在**编码开始前**（jsonl 策展），非探索期的 plan 对象。
 - **差距实证**：`Norma:E-C + R-T`（`plan.go:100-144` + `plan_test.go:28-52`）**vs** `myflow:E-P + E-C + R-T`（`workflow.md:20` 文字 + `task.py:493-508` 代码 + `tests/task-gate.test.ts:81`）——myflow 有代码门但**文本门未升级**，且无 plan 对象可拒绝。
@@ -364,7 +364,7 @@
 
 - **能力描述**：对持久知识按相关度打分并**自动注入** top-N，而非依赖模型自行 `cat`。
 - **Norma 机制与证据**：`memory/relevant.go:31-83`（`score`：name×3/desc×2/body×1 + recency）、`agentcore/agentcore.go:223,438-445`（`MaxInject` 默认 3）、`memory/tools.go:20-96`。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无相关性召回：skills 由模型自选（`docs/skills.md:45`，本身即 `E-P`）；context files 无条件全量（`docs/configuration.md:18`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无相关性召回：skills 由模型自选（`docs/skills.md:45`，本身即 `E-P`）；context files 无条件全量（`docs/configuration.md:18`）。
 - **myflow 现状**：`E-P[myflow]` / `R-∅`。`myflow-before-dev` 让模型 `cat .myflow/spec/index.md`（`.pi/skills/myflow-before-dev/SKILL.md:14,27-29`）——纯提示词、无排序、无上限。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -380,7 +380,7 @@
 
 - **能力描述**：持久知识超过阈值（Norma 为 48h）时附「point-in-time，非实时」告警。
 - **Norma 机制与证据**：`memory/relevant.go:85-108,115-132` — `Age` + `stalenessNote`。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无 memory 即无陈旧概念。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无 memory 即无陈旧概念。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。无运行时告警；靠 git blame/review。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -396,7 +396,7 @@
 
 - **能力描述**：持久知识条目携带结构化元数据（name/description/type），供索引与召回使用。
 - **Norma 机制与证据**：`memory/memory.go:1-6,146-196` — `parseFrontmatter`/`renderFrontmatter`；`R-T memory_test.go:13-38`。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无 memory store；skills frontmatter 属知识分发（`docs/skills.md:24,67`），非 myflow 长期记忆。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无 memory store；skills frontmatter 属知识分发（`docs/skills.md:24,67`），非 myflow 长期记忆。
 - **myflow 现状**：`E-P[myflow]` / `R-∅`。`.myflow/spec/**/*.md` 无 frontmatter/type；**有意**选 spec 路线（`.pi/skills/myflow-before-dev/SKILL.md:61`「Specs are authoritative over memory」）。
 - **缺口判定**：`V-QUAL`。
 - **差距实证**：`Norma:E-C + R-T`（`memory.go:146-196` + `memory_test.go:13-38`）**vs** `myflow:E-P`（`myflow-before-dev/SKILL.md:61` 的口头定位，无机器可读元数据）。
@@ -413,7 +413,7 @@
 
 - **能力描述**：索引文件由代码从实际条目**重建**，而非人工维护。
 - **Norma 机制与证据**：`memory/memory.go:119-145` — `Index`/`rebuildIndex`/`buildIndex`，每次 `Save` 自动重建；`R-T memory_test.go:30-34`。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无索引文件；skills 仅靠 `description` 供发现（`docs/skills.md:53,85`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无索引文件；skills 仅靠 `description` 供发现（`docs/skills.md:53,85`）。
 - **myflow 现状**：`E-P[myflow]` / `R-∅`。`.myflow/spec/index.md` **人工维护**（`.pi/skills/myflow-update-spec/SKILL.md:50` 步骤 5）→ 有漂移风险。
 - **缺口判定**：`V-QUAL`。
 - **差距实证**：`Norma:E-C + R-T`（`memory.go:119-145` + `memory_test.go:30-34`）**vs** `myflow:E-P`（`myflow-update-spec/SKILL.md:50` 人工步骤）。
@@ -432,7 +432,7 @@
 
 - **能力描述**：同一批次工具调用中，只读工具可并行、写工具必须串行且互斥。
 - **Norma 机制与证据**：`harness/streaming.go:9-18,59-84`（FIFO + 排他）、`tool/tool.go:140-152`（缺省不安全）。
-- **Pi 现状（为什么宿主不给）**：`O-3`。无**调度器**——同消息工具**可并行**（`docs/extensions.md:124`）；但 core 提供互斥原语 `withFileMutationQueue()`（`:143-144`）与 `readOnlyHint`/`destructiveHint` 注解（`:167,172-174`）。缺的是「按读/写分类并强制串行」的调度语义（C1 `#21`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。无**调度器**——同消息工具**可并行**（`docs/extensions.md:124`）；但 core 提供互斥原语 `withFileMutationQueue()`（`:143-144`）与 `readOnlyHint`/`destructiveHint` 注解（`:167,172-174`）。缺的是「按读/写分类并强制串行」的调度语义（C1 `#21`）。
 - **myflow 现状**：`E-C[myflow]` / `R-T sbt:308,334`。仅 dispatch 级写者互斥（`sb:636-648` 抛错），无消息级只读/写调度。
 - **缺口判定**：`V-GAP`（消息级调度缺席）。
 - **补足标准**：
@@ -448,7 +448,7 @@
 
 - **能力描述**：循环结束时有**明确结算步骤**（settlement）与 turn/时长预算；预算耗尽走结算而非硬中断。（T3 `ADV-02` 指出 myflow「无收尾阶段」——本项吸收该点，不另立 `QGAP`。）
 - **Norma 机制与证据**：`harness/query.go:34-38,104-127`（`Settlement`）、`:563-570,594-618`（`MaxTurns`/`MaxDuration`）；`R-T` 见 S2 分片（`H*_test.go` 未逐行读，属抽样）。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无 turn/时长预算（`docs/settings.md:127-133` 只有 `retry.*`）；`agent_before_settle` 仅一次续跑（`docs/extensions.md:67`）——**无硬停原语**。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无 turn/时长预算（`docs/settings.md:127-133` 只有 `retry.*`）；`agent_before_settle` 仅一次续跑（`docs/extensions.md:67`）——**无硬停原语**。
 - **myflow 现状**：`E-C[myflow]`（子代理墙钟 900s `sb:64,473-484`、`killChildTree`、`exitCode 124`）+ `E-G[myflow]`（verify 门控续跑 `ix:464-495`）；`R-T sbt:208,269`。**主会话无 turn/时长预算，无结算收尾**。
 - **缺口判定**：`V-GAP`（主会话预算 + 结算缺席；子代理侧部分已有）。
 - **补足标准**：
@@ -466,7 +466,7 @@
 
 - **能力描述**：工具未声明行为字段时取**保守默认**（非只读 / 非并发 / 需审批），而非乐观默认。
 - **Norma 机制与证据**：`tool/tool.go:9,98-124` — `Build` 对未声明字段取保守默认。
-- **Pi 现状（为什么宿主不给）**：`O-3`。仅 MCP `annotations` 有保守默认（`docs/extensions.md:165-172`）；自定义工具**无** Pi 强制默认。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。仅 MCP `annotations` 有保守默认（`docs/extensions.md:165-172`）；自定义工具**无** Pi 强制默认。
 - **myflow 现状**：`E-N[myflow]`（工具定义默认）+ 现存 `E-C[myflow]`（写范围 fail-closed 守卫，`ix:122-140`、`sb:452-453`）；`R-T sbt:525,554,581`（承接裁定 `C-2`）。
 - **缺口判定**：`V-GAP`（工具定义层的保守默认缺席）。
 - **补足标准**：
@@ -482,7 +482,7 @@
 
 - **能力描述**：对模型可见的工具输出有**统一上限/截断**（含 myflow 自己注册的工具），并在截断时告知模型完整输出去处。
 - **Norma 机制与证据**：`tool/helpers.go:12,31,70,77`（默认 30000 头尾截断 / spill）、`harness/tools.go:104-108,126`（**全局** `capOutput` net）。
-- **Pi 现状（为什么宿主不给）**：`O-2`（刻意外包）。Pi 原文：`docs/extensions.md:145`「Truncate large model-facing results and tell the model where to read the complete output.」——责任交给**工具作者**。Pi **只对其内建工具**套用共享 `truncate` 模块（`DEFAULT_MAX_LINES=2000` / `DEFAULT_MAX_BYTES` 为包公开导出：`dist/index.js:30`、`dist/core/tools/truncate.d.ts:10`），**对第三方/扩展工具无统一 net**（`research/norma-llm-tool.md §3` NEG-3，C1 `#18` 窄化措辞）。
+- **Pi 现状（为什么 Pi 不给）**：`O-2`（刻意外包）。Pi 原文：`docs/extensions.md:145`「Truncate large model-facing results and tell the model where to read the complete output.」——责任交给**工具作者**。Pi **只对其内建工具**套用共享 `truncate` 模块（`DEFAULT_MAX_LINES=2000` / `DEFAULT_MAX_BYTES` 为包公开导出：`dist/index.js:30`、`dist/core/tools/truncate.d.ts:10`），**对第三方/扩展工具无统一 net**（`research/norma-llm-tool.md §3` NEG-3，C1 `#18` 窄化措辞）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。`myflow_subagent` 的结果文本**不截断**（`sb:275-310`）。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -499,19 +499,19 @@
 #### GAP-SKILL-03 skill **正文**存活于压缩（C1 拆分后收窄）
 
 - **拆分说明（C1 `#33` 修正）**：本关注点拆为两半——**(a) roster 存活**（name+description+path 随 system section
-  进 `CompactionEntry.systemMessage` checkpoint，pre-compaction system messages 被折入该 checkpoint）**已由宿主覆盖**
+  进 `CompactionEntry.systemMessage` checkpoint，pre-compaction system messages 被折入该 checkpoint）**已由 Pi 覆盖**
   （`docs/session-format.md:84,127-131,248`、`docs/skills.md:43-45`），判 `V-PI`/`O-1`，**非缺口**；**(b) 正文逐字 re-inject**
   才是本条缺口。原判 `A-NONE`/`O-5` 系检索式只查 `compaction.md` 的字面 `skill` 所致（假阴性）。
 - **能力描述**：被调用过的 skill **正文**在压缩后仍能逐字恢复（而非被摘要截断），与 roster 是否存活无关。
 - **Norma 机制与证据**：`compaction/compaction.go:346-350,363+`（`reinjectSkills` 逐字重放最新一次调用，预算 5000/25000）、`llm/skillmsg.go:9-56`（自识别信封）；`R-T compaction_test.go:55,84,105`。
-- **Pi 现状（为什么宿主不给）**：`O-3`。宿主提供 **roster 侧**保留（system checkpoint，见上）与「扩展可拦截压缩」的原语（`docs/compaction.md:293-320`）；但**正文**（`/skill:name` 展开的 user 消息 / `read SKILL.md` 的 tool_result）被摘要，摘要序列化时还被截到 2000 字符（`docs/compaction.md:291`），**无逐字 re-inject**（`research/norma-ext-integrate.md §3` NEG-3，C1 改判）。
+- **Pi 现状（为什么 Pi 不给）**：`O-3`。Pi 提供 **roster 侧**保留（system checkpoint，见上）与「扩展可拦截压缩」的原语（`docs/compaction.md:293-320`）；但**正文**（`/skill:name` 展开的 user 消息 / `read SKILL.md` 的 tool_result）被摘要，摘要序列化时还被截到 2000 字符（`docs/compaction.md:291`），**无逐字 re-inject**（`research/norma-ext-integrate.md §3` NEG-3，C1 改判）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。无 re-inject；状态注入靠 `context` 重注入（属 `CTX` 域）。
 - **缺口判定**：`V-GAP`（正文 re-inject：Norma 有 ∧ Pi 无 ∧ myflow 无）。
 - **补足标准**：
   1. 目标**强制层级**：`E-C[myflow]`（记录每个 skill 最近一次正文调用并在压缩后由代码重放正文；拒绝路径 = 预算超限时丢弃最旧并保留「重读 base dir」提示，不得静默丢弃全部）。
   2. 目标**回归护栏**：`R-T`，新增 `tests/skill-reinject.test.ts`。
   3. 行为规格：Given 压缩前调用过 skill S；When 压缩后构造上下文；Then S 的**正文**被逐字重放（或有明确截断提示）。
-  4. **不作弊条件**：不得依赖模型「记得去 read SKILL.md」（那是行为，非机制保证）；也不得把「roster 存活」算作本条完成（roster 已由宿主覆盖）。
+  4. **不作弊条件**：不得依赖模型「记得去 read SKILL.md」（那是行为，非机制保证）；也不得把「roster 存活」算作本条完成（roster 已由 Pi 覆盖）。
 - **依赖与代价**：不需新依赖；触碰 Pi 压缩/`context` 契约；规模**中**。
 - **优先级**：`P2`。
 - **证据等级**：`E1`/`E4`。
@@ -520,7 +520,7 @@
 
 - **能力描述**：skill 可声明其依赖的 MCP 工具集；调用该 skill 时自动解锁对应工具。
 - **Norma 机制与证据**：`skill/skill.go:48-53,149-156,255-258` — frontmatter `mcps:`；调用时把对应 server 的 deferred 工具加入 `UnlockSet` 并附名单；`R-T mcps_test.go:10,28`。
-- **Pi 现状（为什么宿主不给）**：`O-5`。方向相反：`allowed-tools` 是**预授权**列表（`docs/skills.md:78`）；MCP 侧由 `deferred`/`tool_search` 驱动（`docs/mcp.md:191-217`），与 skill 调用**无联动**（`research/norma-ext-integrate.md §3` NEG-4）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。方向相反：`allowed-tools` 是**预授权**列表（`docs/skills.md:78`）；MCP 侧由 `deferred`/`tool_search` 驱动（`docs/mcp.md:191-217`），与 skill 调用**无联动**（`research/norma-ext-integrate.md §3` NEG-4）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。8 个 `SKILL.md` 无 `mcps:`；myflow 无 MCP 集成。
 - **缺口判定**：`V-GAP`。（本环境 MCP 由 `A-EXT:pi-mcp-adapter` 提供，见 `02-matrix.md §0`；补足时须与之联动，见「依赖与代价」。）
 - **补足标准**：
@@ -538,7 +538,7 @@
 
 - **能力描述**：provider 调用有共享速率限制，避免突发并发触顶。
 - **Norma 机制与证据**：`llm/ratelimit.go:18`（Provider 级共享限流）、`llm/provider.go:71-92`（配置）。重试子项 Norma 亦有 `llm/retry.go:21,64,79`。
-- **Pi 现状（为什么宿主不给）**：`O-1`（重试：`docs/settings.md:126-135`、`docs/rpc-commands.md:423`）+ `O-5`（**限流**无人提供；`research/norma-llm-tool.md §3` NEG-1 命中 0）。
+- **Pi 现状（为什么 Pi 不给）**：`O-1`（重试：`docs/settings.md:126-135`、`docs/rpc-commands.md:423`）+ `O-5`（**限流**无人提供；`research/norma-llm-tool.md §3` NEG-1 命中 0）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。不实现 provider 层，全委托 Pi。
 - **缺口判定**：`V-GAP`（**仅限流**子项；重试子项为 `V-PI`）。
 - **补足标准**：
@@ -556,7 +556,7 @@
 
 - **能力描述**：编程式扇出（parallel）有并发上限、保序返回，且有 run 内预算/收尾语义。
 - **Norma 机制与证据**：`coordinator/coordinator.go:41,112-116,125` — `RunParallel` 信号量限流（默认 4）+ `results[i]` 保序；`R-T coordinator_test.go:49-71`。
-- **Pi 现状（为什么宿主不给）**：`O-6`（本环境由 `A-EXT:pi-subagents-lite` 提供）/ core `O-2`（`README.md:19`）。`docs/codemode.md:3` 的 parallel 指脚本内工具调用并行，非代理编排。
+- **Pi 现状（为什么 Pi 不给）**：`O-6`（本环境由 `A-EXT:pi-subagents-lite` 提供）/ core `O-2`（`README.md:19`）。`docs/codemode.md:3` 的 parallel 指脚本内工具调用并行，非代理编排。
 - **myflow 现状**：`E-C[myflow]` / `R-T sbt:389,ch:179`。`parallel` 用 `Promise.all`（`sb:673`）→ 保序；prompt 上限 6（`sb:57,633`，schema `maxItems` `:262`）；channel 并发上限 3（`channel.py:77,506`）。
 - **缺口判定**：`V-QUAL`（myflow 有并发上限与保序，但**无信号量限流语义、无 run 内预算/收尾**）。
 - **差距实证**：`Norma:E-C + R-T`（`coordinator.go:112-116` + `coordinator_test.go:49-71`）**vs** `myflow:E-C + R-T`（`sb:57,633,673` + `tests/subagent.test.ts:389`）——强度同层，差在无 per-run 结算（与 `GAP-LOOP-06` 同源）。
@@ -575,7 +575,7 @@
 
 - **能力描述**：子代理继承父会话的上下文账本（块/引用/快照），并明确继承边界（上溯层数）。
 - **Norma 机制与证据**：`noaadapter/inherit.go:47-108` — `DeriveChildState` 继承 Blocks/Refs/Snapshot，重置 Nudge/Stats，归档绝对路径可读，上溯 ≤8。
-- **Pi 现状（为什么宿主不给）**：`O-5`。core 无子代理；`A-EXT` 子代理 `--no-session`。Pi 无账本原语。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。core 无子代理；`A-EXT` 子代理 `--no-session`。Pi 无账本原语。
 - **myflow 现状**：`E-C[myflow]` / `R-T sbt`。仅继承任务指针（`sb:446`），无账本继承。
 - **缺口判定**：`V-GAP`（账本继承缺席；任务指针继承已存在）。
 - **补足标准**：
@@ -591,7 +591,7 @@
 
 - **能力描述**：从 provider 错误文本解析**真实上下文窗口**并据此校准压缩目标（并验证压缩后确实变小）。
 - **Norma 机制与证据**：`noaadapter/overflow.go:9-57`（4 正则 + 95% ceiling）、`noaadapter/compactor.go §Reactive`（验证确实变小否则返回 false）。
-- **Pi 现状（为什么宿主不给）**：`O-4`。有 overflow 压缩 + 重试序（`docs/compaction.md:39,85-96`），但**未文档化**从错误取数值窗口。
+- **Pi 现状（为什么 Pi 不给）**：`O-4`。有 overflow 压缩 + 重试序（`docs/compaction.md:39,85-96`），但**未文档化**从错误取数值窗口。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：
@@ -607,7 +607,7 @@
 
 - **能力描述**：ref 标签以尾部标签形式渲染给模型，且在计算内容哈希前先剥离标签（保证标签不改变身份）。
 - **Norma 机制与证据**：`noaadapter/tags.go` — 尾置 `<noa-ref id="m\d{5}">`，先剥再哈希、首渲染冻结。
-- **Pi 现状（为什么宿主不给）**：`O-5`。无等价机制（`research/norma-noaa-trans-core.md §4` NEG 命中 0）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。无等价机制（`research/norma-noaa-trans-core.md §4` NEG 命中 0）。
 - **myflow 现状**：`E-N[myflow]` / `R-∅`。
 - **缺口判定**：`V-GAP`（依赖 `GAP-NOA-01` 的 ref 层）。
 - **补足标准**：
@@ -625,7 +625,7 @@
 
 - **能力描述**：子代理拥有独立 transcript（sidechain），其 token 与父会话分离、可单独回溯。
 - **Norma 机制与证据**：`transcript/transcript.go:59-72,146-196` — `<sid>/subagents/agent-<id>.jsonl`，token 独立。
-- **Pi 现状（为什么宿主不给）**：`O-5`。core 无子代理；`A-EXT` 子代理无会话（myflow 子进程以 `--no-session` 启动，`sb:394`）。
+- **Pi 现状（为什么 Pi 不给）**：`O-5`。core 无子代理；`A-EXT` 子代理无会话（myflow 子进程以 `--no-session` 启动，`sb:394`）。
 - **myflow 现状**：`E-C[myflow]` / `R-T sbt:208`。仅原始 stdout 日志（`sb:67`），无结构化 sidechain、无 token 分离。
 - **缺口判定**：`V-GAP`。
 - **补足标准**：

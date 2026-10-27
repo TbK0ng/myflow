@@ -1,4 +1,4 @@
-# 04 — 宿主契约风险登记册（`RISK-*`）
+# 04 — Pi 契约风险登记册（`RISK-*`）
 
 > **版本锚点**：myflow@`0a702fa`、Norma@`52f17dd`、Pi **1.2.0**（`E0`/`E1`/`E2`，见 `research/00-baseline.md`）。
 > **判定规则**：`design.md` §5.3（风险码）、§4（强制层级/回归轴）、§8.5（条目模板）、§2.2（归属域，含 `A-EXT` 分级规则）、§6（误判防呆三测）。
@@ -49,7 +49,7 @@
 - **钉住手段**（≥1）：
   1. **断言测试**：`tests/task-bridge.test.ts` 增「键在而 `<key>.json` 缺失 → 显式告警而非静默 `no_task`」（`GAP-CTX-04` 的护栏，本册不复制其补足标准）；
   2. **启动期校验**：`worktree.py create` 复制 `.runtime/sessions/`，或 `worktree.py start` 在派发前断言指针存在；
-  3. **上游登记**：无（纯 myflow 侧，不需上游）。
+  3. **运行时登记**：无（纯 myflow 侧，不需运行时）。
 
 ---
 
@@ -61,7 +61,7 @@
   且**fork/clone 后两侧同步换新 id**。
 - **依赖的 Pi 行为**：
   - bash 工具收到「当前 session id」（`docs/environment-variables.md:20-31`，**未言**与扩展 API 的关系）；
-  - 扩展侧 id 来自 `sessionManager.getSessionId()`（`pi-coding-agent.d.ts:16-18`，属仓库内宿主类型快照 = 弱化 `E2`）；
+  - 扩展侧 id 来自 `sessionManager.getSessionId()`（`pi-coding-agent.d.ts:16-18`，属仓库内 Pi 类型快照 = 弱化 `E2`）；
   - `/fork`·`/clone` 生成新会话新 id（`docs/session-format.md:72-75`），`/tree` 同文件（`docs/sessions.md:20-26`）。
 - **证据与强度**：`E1` + `E2`；**无跨进程一致性文档**。文档化程度：**未文档化**（两侧等价为推断）。
   两侧规范化逐字符等价已核对：`[^A-Za-z0-9._-]+→_`、去首尾 `._-`、截 160
@@ -81,19 +81,19 @@
 - **myflow 的假设**：`pi-rounded-tools` 保持本机补丁（转发 `shellPath`），使 `bash` 命中 Git for Windows 而非 WSL 启动器。
 - **依赖的 Pi 行为**：该包重注册 `read/write/edit/bash/grep/find/ls`，须转发 `shellPath`
   （`~/.pi/agent/npm/node_modules/pi-rounded-tools/extensions/rounded-tools.ts:38-47,286-294`，B3 已复核）；
-  Pi 内建 `createBashTool(cwd,{shellPath})` 本可正确解析（`docs/cli.md:111-120`）。
-  ⇒ 这是 **`A-EXT` 覆盖了 `A-PI` 原语**，而非宿主契约本身。
+ Pi 内建 `createBashTool(cwd,{shellPath})` 本可正确解析（`docs/cli.md:111-120`）。
+  ⇒ 这是 **`A-EXT` 覆盖了 `A-PI` 原语**，而非 Pi 契约本身。
 - **证据与强度**：`E0`（本机包实存）+ `E3`/工作区 `AGENTS.md`。文档化程度：**明示**（`AGENTS.md` 记录了补丁与还原步骤）。
 - **失效后果**：更新该包即丢补丁 → `bash` 命中 `System32\bash.exe`（WSL 启动器）→ **每条命令报 WSL 错误**；
-  **响亮失败**但易被误判为宿主故障（`AGENTS.md` 已列出该误判）。
+  **响亮失败**但易被误判为 Pi 故障（`AGENTS.md` 已列出该误判）。
 - **现有补偿**：补丁副本 `~/.pi/agent/patches/rounded-tools.shellPath-patched.ts`；
-  Pi 自身回退与补丁指向**同一** Git 安装（`C:\Program Files\Git\bin\bash.exe`）；
+ Pi 自身回退与补丁指向**同一** Git 安装（`C:\Program Files\Git\bin\bash.exe`）；
   `AGENTS.md` 记录「更新后还原补丁」步骤。
 - **风险码**：`R-SOFT`（可见、可恢复，且该扩展可被 Pi 内建工具替代）。
 - **钉住手段**：
   1. **启动期校验**：`uname -a` 须报 `MINGW64_NT`，否则停止使用 bash 工具；
   2. **防御性自愈**：把补丁文件与还原步骤沉淀为可重放的脚手架（`.myflow/spec/` 候选，见 `08-coverage.md`）；
-  3. **上游登记**：在 `AGENTS.md` 保留「更新即还原补丁」条款（已存在）。
+  3. **运行时登记**：在 `AGENTS.md` 保留「更新即还原补丁」条款（已存在）。
 
 ### RISK-05 两侧「无键」回退口径不一致
 
@@ -150,7 +150,7 @@
 - **风险码**：`R-OK`（定向自愈，最坏 1 回合失败窗口）。
 - **钉住手段**：
   1. **断言测试**：扩展 `tests/extension.test.ts:224-255`，增「压缩标记先置、无后续事件仍能重挂」（`QGAP-CMPT-05` 的 `P1` 护栏，本册不复制其补足标准）；
-  2. **上游登记**：在本册登记「宿主若改切点规则或事件时序，本补偿**静默**失效」——监控点，触发即转 `R-HARD`；
+  2. **运行时登记**：在本册登记「Pi 若改切点规则或事件时序，本补偿**静默**失效」——监控点，触发即转 `R-HARD`；
   3. **代码前置**：把缺失判定提前到 `ix:384` 早退之前，去掉对事件到达顺序的依赖。
 
 ---
@@ -164,12 +164,12 @@
   但实际注册 **7** 个事件（`ix:273,302,319,340,420,455,464`，`agent_before_settle` 注册于 `ix:464`）；
   同文件 `:110` 另段单列了 `agent_before_settle`（`myflow-meta/SKILL.md:60-68` 同样漂移）。
   出处：`research/norma-ext-integrate.md §2`、`research/contract-risks-and-advantages.md §4`、`02-matrix.md §5.2 C-4`。
-- **为什么**不进 `RISK-*`**：`RISK-*` 的定义是「myflow 对**宿主行为**的假设 + 假设不成立的后果」
+- **为什么**不进 `RISK-*`**：`RISK-*` 的定义是「myflow 对**Pi 行为**的假设 + 假设不成立的后果」
   （`design.md` §5.3）。本条是 myflow **自身文档与自身代码**不一致，**不依赖任何 Pi 行为**，
   且已由测试兜住实际行为（`tests/extension.test.ts:166` 的「all hooks registered」断言含 `agent_before_settle`；
   `tests/scaffold.test.ts:148-156` 更以 `deepEqual` 锁定全部 7 个 handler 键）。**C2 注意**：`tests/subagent.test.ts:415`
   的用例标题为「all 6 hooks」且只断言 6 个 handler（**不含** `agent_before_settle`），是一条陈旧的弱护栏，**不足以**支撑「7 个」判定；
-  本条据以钉住的是 `tests/extension.test.ts:166` 与 `tests/scaffold.test.ts:148-156`。它属文档卫生，不属宿主契约风险（`T3 §4` 同判）。
+  本条据以钉住的是 `tests/extension.test.ts:166` 与 `tests/scaffold.test.ts:148-156`。它属文档卫生，不属 Pi 契约风险（`T3 §4` 同判）。
 - **建议的钉住测试**：在 `tests/scaffold.test.ts` 增断言「文档 hook 名集合 == `extension()` 内 `pi.on()` 的 handlers 键集合」
   （或反向：扫描 `harness-conventions.md` 的 hook 列表并与 `Object.keys(handlers)` 比对），
   把**文档契约钉成测试**——与 `tests/workflow-invariant.test.ts:71` 的既有先例同法。

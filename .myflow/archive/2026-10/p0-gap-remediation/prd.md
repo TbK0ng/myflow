@@ -37,11 +37,11 @@
 
 ### W3 `P0-1` 任务启动空上下文门禁（⚠️ **不可半搬**）
 
-- **目标**：对齐上游三件套 —— `create` seed 空 `implement.jsonl`/`check.jsonl` → `validate` 把「0 条 curated」判为失败 → **`start` 拒绝**（`--allow-empty-context` 放行）。
+- **目标**：对齐参考实现的三件套 —— `create` seed 空 `implement.jsonl`/`check.jsonl` → `validate` 把「0 条 curated」判为失败 → **`start` 拒绝**（`--allow-empty-context` 放行）。
 - **硬约束**：myflow **没有 jsonl 写入口**（无 `add-context`）。因此：
   - 只加 `start` 门禁会造出**无法满足**的关 → **必须同时给出写入口**（`add-context <task> <action> <file> [reason]`）或明确记录「模型手写 jsonl」为受支持路径。
   - 若选择「模型手写」，`--allow-empty-context` 就是常规逃生口；这一点要写进 `workflow.md` 的 1.3 说明，不能只留在 `--help` 里。
-- **别照搬错**：上游在**文件不存在时不拦**（`cmd_validate` 对缺失返回 None），只拦「已 seed 但未 curate」。**不要**改成「缺失即拦」，那会让当前所有已存在的任务目录全部无法 `start`。
+- **别照搬错**：参考实现在**文件不存在时不拦**（`cmd_validate` 对缺失返回 None），只拦「已 seed 但未 curate」。**不要**改成「缺失即拦」，那会让当前所有已存在的任务目录全部无法 `start`。
 - **同族修正（`DRIFT-05` 附带）**：`.myflow/scripts/task.py:8` 的 usage 承诺 `task.py finish`，但 `main():395-427` 无该子解析器 → 运行即 argparse `invalid choice`（exit 2）。**二选一**：实现 `finish`（清活动任务、不改 status），或从 usage 里删掉该承诺。**不允许留现状**。
 - **验收**：`start` 一个已 seed 但未 curate 的任务 → 非零退出并给出可操作提示；`--allow-empty-context` 可放行；`finish`（或删除后的 usage）实际行为与文档一致。
 
@@ -62,7 +62,7 @@
 - [ ] `node --test tests/` 全绿（**在 main session 跑**，或先清 `MYFLOW_AGENT_TYPE`/`MYFLOW_CONTEXT_ID`/`MYFLOW_SKIP_BREADCRUMB`/`MYFLOW_WRITES_UNDER`）。
 - [ ] W1 的不变式测试：删掉任一必做步骤的执行行 → 变红。
 - [ ] W2 的包含性校验：读侧与写侧各有可独立触发的拒绝测试（`..` / 绝对路径 / 大小写）。
-- [ ] W3：`start` 对「已 seed 未 curate」拒绝且可 `--allow-empty-context` 放行；**文件缺失仍不拦**（与上游一致）；`finish` 的 usage 与实现一致。
+- [ ] W3：`start` 对「已 seed 未 curate」拒绝且可 `--allow-empty-context` 放行；**文件缺失仍不拦**（与参考实现一致）；`finish` 的 usage 与实现一致。
 - [ ] W4：`design.md`/`implement.md` 出现在 `<task-context>` 内；缺文件不报错；总量上限行为与 `prd.md` 一致。
 - [ ] 未触碰 `omp/`/`opencode/`/`shared-hooks/` 任何内容。
 

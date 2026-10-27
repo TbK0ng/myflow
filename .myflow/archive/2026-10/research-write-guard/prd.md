@@ -6,7 +6,7 @@
 
 动机：`subagent.ts:593` 的写者守卫按 **agent** 判定，于是 `research` 为了保住并行能力**被迫放弃 `write`**，结论只能经 prompt 回传（子代理不继承父会话对话 → token 走两遍），且 `workflow.md` §1.2「persist findings to `research/<topic>.md`」的契约长期悬空。
 
-本任务要把两头都拿到：**research 有 write 且能并行**，而写范围由**代码**兜住（严格于上游）。
+本任务要把两头都拿到：**research 有 write 且能并行**，而写范围由**代码**兜住（严格于参考实现）。
 
 ## Requirements
 

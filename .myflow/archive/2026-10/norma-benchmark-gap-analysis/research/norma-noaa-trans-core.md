@@ -27,10 +27,10 @@ N 侧 R-T：`state_store_test.go`、`materialize_test.go`、`transcript_test.go`
 
 ## 2. 会话身份与状态绑定（三层）
 
-**N**：身份=内容哈希（tag 先剥再算 `project.go §projectBlock`+`tags.go`），随 prune/nudge/resume 不变；`Reassemble` 明确不写回宿主历史。账本按 `ArchiveBaseDir/<SessionID>` 落盘 `session.go:24-58`，压缩即落 `session.go §applyCompression`。子代理继承账本、重置节律、沿用父归档绝对路径 `inherit.go:47-63`。
+**N**：身份=内容哈希（tag 先剥再算 `project.go §projectBlock`+`tags.go`），随 prune/nudge/resume 不变；`Reassemble` 明确不写回 Pi 历史。账本按 `ArchiveBaseDir/<SessionID>` 落盘 `session.go:24-58`，压缩即落 `session.go §applyCompression`。子代理继承账本、重置节律、沿用父归档绝对路径 `inherit.go:47-63`。
 **P**：单 jsonl，entry 树 `id/parentId`；恢复取当前分支、可见范围由最新 compaction 定。`/tree` 同文件换分支（id 不变）；`/fork`·`/clone` 生成带 `parentSession` 的**新会话**（`sessions.md:24-28`、`session-format.md:75`）→ id 变；ephemeral 时 `PI_SESSION_FILE` 未设 `environment-variables.md:27`。
 **M**：键=`pi_<sanitize(getSessionId())>`，退化 `pi_transcript_<sha256(file)[:24]>`（`index.ts:161-193`；类型面 `pi-coding-agent.d.ts:16-21`）；指针=`current_task` 于 `.myflow/.runtime/sessions/<key>.json`（`task.py:16,96-117`；读 `turn-cache.ts:38-108`），runtime 被 gitignore（`.gitignore:5`）→ 指针=机器本地+会话本地。
-后果：①`/fork`·`/clone` 或换机/清 runtime → 找不到 `<key>.json` → `no_task`（`turn-cache.ts:45-51`），注入消失；可观测（`/myflow-status`）非静默 → `R-SOFT`。②子代理 `--no-session`，靠显式 `MYFLOW_CONTEXT_ID` 覆盖继承指针（`subagent.ts:446`；`index.ts:181-182`）→ `R-OK`，但属 myflow 自建契约。③键派生不对称：TS 空 sanitize 回落 `hashValue`（`index.ts:174-175`）、Python 回落 `None`→默认文件（`task.py:112-117,381-392`）→ 理论错配，UUID 形状不触发 → `R-SOFT`(低)。④注入可被压缩吃掉：`custom_message` 是合法切割点（`compaction.md:134`）；补偿=每回合重注入（`index.ts:319-337`）+ `lastInjectionTs > lastCompactionTs` 判定（`index.ts:384`）+ `session_before_compact` 记时（`index.ts:455-457`）→ 自愈 `R-OK`，但宿主改切点规则/事件时序即**静默**失效 → 登记 `R-HARD`（O-4）。
+后果：①`/fork`·`/clone` 或换机/清 runtime → 找不到 `<key>.json` → `no_task`（`turn-cache.ts:45-51`），注入消失；可观测（`/myflow-status`）非静默 → `R-SOFT`。②子代理 `--no-session`，靠显式 `MYFLOW_CONTEXT_ID` 覆盖继承指针（`subagent.ts:446`；`index.ts:181-182`）→ `R-OK`，但属 myflow 自建契约。③键派生不对称：TS 空 sanitize 回落 `hashValue`（`index.ts:174-175`）、Python 回落 `None`→默认文件（`task.py:112-117,381-392`）→ 理论错配，UUID 形状不触发 → `R-SOFT`(低)。④注入可被压缩吃掉：`custom_message` 是合法切割点（`compaction.md:134`）；补偿=每回合重注入（`index.ts:319-337`）+ `lastInjectionTs > lastCompactionTs` 判定（`index.ts:384`）+ `session_before_compact` 记时（`index.ts:455-457`）→ 自愈 `R-OK`，但 Pi 改切点规则/事件时序即**静默**失效 → 登记 `R-HARD`（O-4）。
 
 ## 3. N 有而 M 另法解决
 

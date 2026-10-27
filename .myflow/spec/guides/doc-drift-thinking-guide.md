@@ -11,7 +11,7 @@ Work out which one is older before editing either:
    the code?
 2. `git blame <file>` — which commit wrote the sentence, and what did that
    commit promise?
-3. The upstream origin — a claim ported from another layout may still be correct
+3. The origin — a claim carried over from an earlier layout may still be correct
    even when the file it names is gone, because the file is what went missing.
 
 Deleting the claim is the tempting fix and often the wrong one: prose that
@@ -19,7 +19,7 @@ survives a rewrite is evidence of intent.
 
 ## Case Study: `guides/`
 
-- `.myflow/spec/guides/` comes from the upstream Trellis spec layout, and
+- `.myflow/spec/guides/` is part of the spec-tree layout, and
   `spec-system.md` at `a0e3525` documents it as part of the directory model.
 - The tree itself landed here in `844b7cd`. `97a0382` then rewrote
   `.myflow/spec/index.md` and dropped its `guides/` entry, while three skills

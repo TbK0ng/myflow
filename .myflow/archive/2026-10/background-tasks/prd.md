@@ -27,7 +27,7 @@
 
 **结论**：`/loop` 解决的是「无人值守反复跑」，与「并发独立进程」**正交**。本任务不改它、不依赖它。
 
-### 宿主能力与边界（已取证）
+### Pi 能力与边界（已取证）
 - **扩展跑在 Pi 进程内、拥有同等 OS 权限**（`docs/extensions.md:5`）→ 可用 `node:child_process`。
 - **不得在工厂函数里起进程/定时器**（`docs/extensions.md:58`）；**会话级资源必须在 `session_shutdown` 释放，且必须幂等**（`:60`、`:265-266`）；`ctx.shutdown()` 可请求有序退出（`:267`）。
 - 现有 `bash` 工具（由 `A-EXT:pi-rounded-tools` 注册）schema 只有 `command` + `timeout`，**没有** `run_in_background`；且它是**别人的包**，不该改。

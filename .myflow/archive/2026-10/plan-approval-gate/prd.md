@@ -24,7 +24,7 @@
   （空上下文门禁，`task.py:496-512`），**不检查是否问过问题、是否获批准**。
 - `.pi/extensions/myflow/` 9 个 TS 文件里**从未调用** `ctx.ui.*`（全仓 + 全 A-EXT 检索确认）。
 
-### 宿主能力（E1/E2，本回合新取证 —— 这改变了「要不要自己造」的结论）
+### Pi 能力（E1/E2，本回合新取证 —— 这改变了「要不要自己造」的结论）
 - **Pi 提供交互式问答 API**：`ExtensionContext.ui`
   （`.pi/extensions/myflow/pi-coding-agent.d.ts:22-27`）：
   - `confirm(title, message): Promise<boolean>` —— 是/否
@@ -39,7 +39,7 @@
 - **已有先例**：`A-EXT` 的 `pi-mcp-adapter` 自带 `tool-approval.ts` 与
   `elicitation-handler.ts`，已经在用 `ctx.ui.confirm` 做工具审批
   （`~/.pi/agent/npm/node_modules/pi-mcp-adapter/tool-approval.ts:198` 用 `ui.select`）；
-  Pi 随包还带 `examples/extensions/confirm-destructive.ts` 与 `permission-gate.ts` 两个官方范本。
+ Pi 随包还带 `examples/extensions/confirm-destructive.ts` 与 `permission-gate.ts` 两个官方范本。
   → 机制在本机已被验证可用；同时意味着**可能出现两处审批互相干扰**，设计时须考虑。
 
 ### 工具处理器能不能弹对话框（**决定 Q2 的关键取证**）
@@ -50,14 +50,14 @@
   （`examples/extensions/bookmark.ts:15,24`，其中直接调 `ctx.ui.notify`）。
 - ⇒ **myflow 可以注册一个「提问工具」**：模型调用 → 处理器 `await ctx.ui.select(...)` 弹出选项列表
   → 答案作为工具结果返回给模型 → **不结束回合**即可继续。
-  这正是 Norma `AskUserQuestion` 的语义，且用宿主原生 API 实现。
+  这正是 Norma `AskUserQuestion` 的语义，且用 Pi 原生 API 实现。
 - **限制（必须写进设计）**：Pi 的 `select` 签名是 `options: string[]` —— **只有单选**，
   无 `multiSelect`、无 per-option description（Norma 的 Option 有 `Label + Description`）。
   ⇒ 「选择性提问」在本机只能做到「单行文本选项的单选」，多选/选项说明需自己拼进字符串。
 
 ### Norma 的等价物（E4，参照，不要求对齐）
 - `AskUserQuestion`（`../Norma/tool/ask.go`）：结构化多选提问，**不结束回合**即拿到答案；
-  由宿主提供 `AskUserFunc` 回调决定 UI（CLI / GUI / 网页表单）。
+  由 Pi 提供 `AskUserFunc` 回调决定 UI（CLI / GUI / 网页表单）。
 - plan 模式：只读探索 → `ExitPlanMode` 交出计划待批准 → **权限模式中途翻转**开始实现。
 - `permission.CanUseTool`：逐调用审批。
 

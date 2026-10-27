@@ -31,7 +31,7 @@
      {compaction:{summary, firstKeptEntryId, tokensBefore, details}}（compaction.md:302-320）= 扩展可**自选保留边界**；
      compaction.md:138「advances … only when … no unomitted context-producing entries」= 保护性不变量
    已排除的同义命中=keep.{0,20}verbatim|pinned message → 0
-   修正后的结论=「无命名工具硬保护名单」成立；「宿主无原语」不成立 → O-5 改 O-3（V-GAP 不翻转）
+   修正后的结论=「无命名工具硬保护名单」成立；「Pi 无原语」不成立 → O-5 改 O-3（V-GAP 不翻转）
  C 能力=上下文压力触发、改写「已存」工具结果的紧急截断阀 ——【C1 裁决：假阴性，已修正】
    原检索式=truncate.*context|emergency.*truncate|shrink.*tool result|rewrite.*result|compress.*tool output
    原命中=仅建时上限 codemode.md:12,43；mcp.md:232；compaction.md:291（仅摘要请求内 2000 字符）
@@ -42,7 +42,7 @@
      agent_before_settle 可链式追加 context_edit 条目）
    已排除的同义命中=codemode.md:12,43、mcp.md:232（建时上限，非运行期改写）；compaction.md:291（摘要请求内截断）
    修正后的结论=「只改发出的、不改存储」原语**存在**且语义逐字对应 Norma；缺「压力触发 + 选最大未截断结果」→ O-3
-   残余=触发时机仍无宿主机制
+   残余=触发时机仍无 Pi 机制
  D 能力=压缩/context_edit 后的运行期 tool pair 孤儿修复
    检索式=orphan|unpaired|repair.*pair|tool_calls must be followed|synthetic.*result
    命中=compaction.md:39（length 响应保留合成失败 result，属建时）；余 0
@@ -71,7 +71,7 @@
 
 - **配对等价覆盖（NOA-05/06）**：myflow 不自建配对修复，直接吃 Pi「只切整条消息、禁切 tool result」（`compaction.md:136`）→ `V-PI` 而非缺口。仅当 myflow 将来**使用 `context_edit`** 才会暴露 Pi 无运行期孤儿修复的空白（登记潜在 `RISK`，见 T3）。
 - **常驻提示词存活（NOA-11）**：Norma 靠 system prompt 常驻；myflow 主会话改用每回合 `custom_message` 重注入（`ix:319-337`）。目标达成但**存活性弱于 Pi 的 system checkpoint**（`session-format.md:134`）——正是 `CAP-CTX` 的 `RISK` 源头。
-- **紧急截断的部分目的**：myflow 的注入预算截断自控（`ci`）；模型工具输出侧**宿主已给原语**（`context_edit`，属 `O-3`），myflow 缺的是**压力触发判定**（C1 修正，见 `GAP-NOA-08`）。
+- **紧急截断的部分目的**：myflow 的注入预算截断自控（`ci`）；模型工具输出侧**Pi 已给原语**（`context_edit`，属 `O-3`），myflow 缺的是**压力触发判定**（C1 修正，见 `GAP-NOA-08`）。
 
 ## 5. 自我声明（design.md §10）
 

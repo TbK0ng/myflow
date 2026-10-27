@@ -460,7 +460,7 @@ test("F7 -6 既有守卫未回归：递归守卫与 ASK 守卫照旧", async () 
   }
 });
 
-test("F7 -7 hasUI:false 时静默：即使宿主仍然提供 ui.notify", async () => {
+test("F7 -7 hasUI:false 时静默：即使 Pi 仍然提供 ui.notify", async () => {
   const root = makeProject();
   const pids: unknown[] = [];
   try {

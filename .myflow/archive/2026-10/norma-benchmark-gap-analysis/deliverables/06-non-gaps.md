@@ -10,10 +10,10 @@
 
 ## 1. `NG-*` 非缺口清单
 
-### 1.1 `V-PI` 宿主内建（32 项）
+### 1.1 `V-PI` Pi 内建（32 项）
 
 > 判定：`A-PI` 且 `E1`/`E2` 正向命中（`O-1`）或 `O-3`（原语在 Pi、语义由 myflow 补齐）。
-> **「重复造轮子」核查**：myflow 在这些行**一律记 `E-N[myflow]`、完全委托 Pi**，**未重复实现任何宿主能力**（`02-matrix.md §3.3`）。
+> **「重复造轮子」核查**：myflow 在这些行**一律记 `E-N[myflow]`、完全委托 Pi**，**未重复实现任何 Pi 能力**（`02-matrix.md §3.3`）。
 
 | # | 能力项 | 域 / 归属码 | 归属证据 `[v1.2.0]` | 为什么不补 | 重复造轮子核查 |
 | --- | --- | --- | --- | --- | --- |
@@ -63,14 +63,14 @@
 | `NG-33` | `CAP-MCP-01` stdio JSON-RPC 客户端 | `A-EXT:pi-mcp-adapter`（core 有但停用）/ `O-6`（core `O-1`） | `~/.pi/agent/settings.json` 的 `extensions:["-builtin:mcp"]` + `pi-mcp-adapter/pi-builtin-mcp.ts:10-25`、`index.ts:1725`；`docs/mcp.md:264`「Replace the built-in MCP support」 | 扩展已接管；myflow **无 MCP 集成**（`sb:69` 仅注释），不构成 myflow 缺口。若未来 `GAP-SKILL-04` 补足将新增此依赖 → 已在 `04-risk-register.md §5` 标注 |
 | `NG-34` | `CAP-MCP-03` 工具暴露与命名 | `A-EXT:pi-mcp-adapter` / `O-6`（core `O-1`） | `pi-mcp-adapter/namespace-tools.ts:12-18`、`mcp-references.ts:38-40`；`docs/mcp.md:77,191-217,225` | 同上 |
 
-### 1.3 `V-UP` 上游约束（2 项）
+### 1.3 `V-UP` 运行时约束（2 项）
 
 > 判定：只能改 Pi 才能补 → 登记 `UP-*`，**不列为缺口**（`design.md` §5.2）。
 
-| # | 能力项 | 约束内容 | 证据 `[v1.2.0]` | 为什么不补 | 上游依赖登记 |
+| # | 能力项 | 约束内容 | 证据 `[v1.2.0]` | 为什么不补 | 运行时依赖登记 |
 | --- | --- | --- | --- | --- | --- |
 | `NG-35` | `CAP-LOOP-03` tool pair 配对（运行期孤儿修复） | Pi 以「禁切 tool result」**预防**孤儿（`docs/compaction.md:136`），但**无运行期孤儿修复**；myflow 不用 `context_edit`，未触发该场景 | `docs/compaction.md:130-136`、`docs/message-types.md:161-169` | 修复原语在 Pi 执行器内；myflow 补不了，只能靠 Pi 或避免使用 `context_edit` | 已在 `02-matrix.md` 表 B #18 记 `V-UP`；若未来 myflow 使用 `context_edit`，转为 `RISK-*` 候选（`research/norma-noa-integrity.md §4`） |
-| `NG-36` | `CAP-LOOP-04` 终止原因建模（「为何续跑」） | Pi 有 `stopReason` 7 值（`docs/message-types.md:134`），但**无 ContinueReason 建模**；myflow 只**只读** `agent_before_settle.outcome`（`ix:472-473`） | `docs/message-types.md:134`、`docs/extensions.md:67` | 需要在 Pi 循环内部暴露「续跑原因」，属宿主行为 | 已在 `02-matrix.md` 表 B #19 记 `V-UP`；myflow 不补 |
+| `NG-36` | `CAP-LOOP-04` 终止原因建模（「为何续跑」） | Pi 有 `stopReason` 7 值（`docs/message-types.md:134`），但**无 ContinueReason 建模**；myflow 只**只读** `agent_before_settle.outcome`（`ix:472-473`） | `docs/message-types.md:134`、`docs/extensions.md:67` | 需要在 Pi 循环内部暴露「续跑原因」，属 Pi 行为 | 已在 `02-matrix.md` 表 B #19 记 `V-UP`；myflow 不补 |
 
 ### 1.4 `V-NA` 场景无关（0 项）
 
@@ -90,7 +90,7 @@
 
 ## 2. 「看似缺口实际不是」专题（8 项）
 
-> 这些是最容易被误判为「宿主或 myflow 缺了 X」的条目。每项写清「为什么看起来像缺口 / 实际归属 / 证据 / 误判后果」。
+> 这些是最容易被误判为「Pi 或 myflow 缺了 X」的条目。每项写清「为什么看起来像缺口 / 实际归属 / 证据 / 误判后果」。
 > 判据来源为 `design.md` §6 的误判防呆三测（测 A 卸载测试 / 测 B 归属方向 / 测 C 自证 vs 推断）。
 
 ### MIS-01 `Agent`/`StopAgent`/`MessageAgent`/`AgentStatus` 看起来像 Pi 内建子代理
@@ -98,14 +98,14 @@
 - **为什么像缺口**：四个工具名都直接叫「代理」，且从**会话内部**看与 Pi core 工具**融合**在同一个工具表里；若误判为 `A-PI`，则 `CAP-SUB-*` 会被记为「非缺口」，myflow 的 `myflow_subagent` 就成了「重复造轮子」。
 - **实际归属**：**`A-EXT:pi-subagents-lite`**（v1.17.0），既非 `A-PI` 也非 `A-MF`。
 - **证据**：`~/.pi/agent/npm/node_modules/pi-subagents-lite/src/registration.ts:66,121,132,143`（四个 `name:` 字面量）+ `:112,129,140,149`（`pi.registerTool`）；`(NEG)` 卸载测试确认唯一注册者（`research/norma-sub-coord.md` NEG-3，命中仅该包）。
-- **误判后果**：`CAP-SUB-*` 被错误记为「宿主已给」，**恰好掩盖真缺口**（`design.md` §3.5 的认知陷阱）。故 `02-matrix.md §0` 专列归属表钉死。
+- **误判后果**：`CAP-SUB-*` 被错误记为「Pi 已给」，**恰好掩盖真缺口**（`design.md` §3.5 的认知陷阱）。故 `02-matrix.md §0` 专列归属表钉死。
 
 ### MIS-02 MCP 工具看起来像 Pi 内建
 
 - **为什么像缺口**：Pi 1.2.0 **确实有**内建 MCP（`docs/mcp.md` 全篇：stdio+HTTP、OAuth、resources、`pi mcp` CLI），因此极易记为 `A-PI`。
 - **实际归属**：本环境内建 MCP 被 `settings.json` 的 `extensions:["-builtin:mcp"]` **显式关闭**，由 **`A-EXT:pi-mcp-adapter`** 接管；配置载体为 `A-PI` 文件 ∪ `A-EXT` 文件。
 - **证据**：`~/.pi/agent/settings.json`；`pi-mcp-adapter/pi-builtin-mcp.ts:10-25`、`index.ts:1725`；`docs/mcp.md:264`「Replace the built-in MCP support」。
-- **误判后果**：把「扩展接管」记成「宿主内建」，从而**低估**卸载/上游改动风险（`04-risk-register.md §5` 的 `A-EXT` 专节正是为此设立）。
+- **误判后果**：把「扩展接管」记成「Pi 内建」，从而**低估**卸载/运行时改动风险（`04-risk-register.md §5` 的 `A-EXT` 专节正是为此设立）。
 
 ### MIS-03 `cbmem.ts` 注册的裸名工具（`search_graph` 等 15 个）看起来像 MCP
 
@@ -117,7 +117,7 @@
 ### MIS-04 `AGENTS.md` 的「persistent instructions」看起来像长期记忆
 
 - **为什么像缺口**：Pi `docs/quickstart.md:108` 称 `AGENTS.md` 为 "persistent instructions"；且 `AGENTS.md` 内容跨会话存在，直觉上像 Norma 的 `memory`。
-- **实际归属**：`AGENTS.md`/context files 是**宿主注入的静态文件**（`docs/configuration.md:18`），由**人**维护、无条件全量加载；**不是** agent 自累积、带召回与陈旧告警的长期记忆。故 `CAP-MEM-*` 不能因 `AGENTS.md` 存在而记为「已给」。
+- **实际归属**：`AGENTS.md`/context files 是**Pi 注入的静态文件**（`docs/configuration.md:18`），由**人**维护、无条件全量加载；**不是** agent 自累积、带召回与陈旧告警的长期记忆。故 `CAP-MEM-*` 不能因 `AGENTS.md` 存在而记为「已给」。
 - **证据**：`docs/configuration.md:18,45`、`docs/quickstart.md:108`；`research/norma-plan-mem.md` NEG-2（Pi 无 memory store）。
 - **误判后果**：`GAP-MEM-03/04`（召回 / 陈旧告警）会被误判为已覆盖。
 
@@ -133,7 +133,7 @@
 - **为什么像缺口**：`docs/` 40 篇**逐篇检索**均无 `plan mode` 字样（`research/norma-ext-integrate.md` NEG、`research/norma-plan-mem.md` NEG-1），只扫 `docs/` 会判「无依据」而无法定 `O-2`。
 - **实际归属**：`O-2`（刻意外包）的**唯一权威原文在包根 `README.md:19`**：「Pi ships with powerful defaults but skips features like **sub-agents and plan mode**」。这正是 `docs` 的覆盖缺口（T1 §4）。
 - **证据**：`README.md:19`（`research/norma-ext-integrate.md` F3、`research/pi-surface-completeness.md §4`）。
-- **误判后果**：若不查包根 README，`PLAN-01`/`PLAN-02` 会被误记为 `O-5`（双方皆无）而非 `O-2`，从而错判「宿主是否刻意推给扩展层」——这是 `design.md` §5.1 对 `O-2` 要求引原文的直接动机。
+- **误判后果**：若不查包根 README，`PLAN-01`/`PLAN-02` 会被误记为 `O-5`（双方皆无）而非 `O-2`，从而错判「Pi 是否刻意推给扩展层」——这是 `design.md` §5.1 对 `O-2` 要求引原文的直接动机。
 
 ### MIS-07 `noa`/`noaadapter`/`transcript` 未出现在 README Packages 表 → 看起来像示例代码
 

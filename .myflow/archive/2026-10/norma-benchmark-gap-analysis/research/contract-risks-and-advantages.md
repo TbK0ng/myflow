@@ -1,4 +1,4 @@
-# T3 — 宿主契约风险（`RISK-*`）与相对优势（`ADV-*`）
+# T3 — Pi 契约风险（`RISK-*`）与相对优势（`ADV-*`）
 
 覆盖 `CAP-CTX-01..03`。证据码同 design §3.1（`E0` 自证/`E1` Pi 1.2.0 docs/`E2` 安装类型快照/`E3` myflow/`E4` Norma）。
 Pi 侧一律 `[v1.2.0]`；本片未使用 `E5`。
@@ -30,7 +30,7 @@ Pi 侧一律 `[v1.2.0]`；本片未使用 `E5`。
 
 ### RISK-03 `.runtime` 机器本地性 → 子代理上下文静默丢失
 - **假设**：任务指针文件与被派发子代理同树可见。
-- **依赖行为**：无宿主依赖；`.runtime` 被 gitignore（`.gitignore:5`），worktree 只复制 `copy:` 白名单（`worktree.py:279-289`），本仓无 `worktree.yaml` → 不复制。
+- **依赖行为**：无 Pi 依赖；`.runtime` 被 gitignore（`.gitignore:5`），worktree 只复制 `copy:` 白名单（`worktree.py:279-289`），本仓无 `worktree.yaml` → 不复制。
 - **失效后果**：换机 / 新 clone / 新 worktree → 扩展判 `no_task`（`turn-cache.ts:45-51`；`get_context.py:118-127` 记 `context-missing`），子代理带父键在无该文件的树里运行 → **静默零 spec 注入**（同 P0「空上下文门禁」成因）。
 - **补偿**：`worktree.py start` 以提示词携带 `Active task:` + `MYFLOW_SKIP_BREADCRUMB=1`（`worktree.py:411-424`）；`task.py create` 即写指针（`tests/task-bridge.test.ts:206-216`）。对「键在而文件缺」**无**告警 → 补偿不完整。
 - **码 / 钉住**：`R-HARD`；`get_context.py` 对 `context-missing` 输出显式告警；派发前断言指针存在；`worktree create` 复制 `.runtime/sessions/`。
@@ -38,7 +38,7 @@ Pi 侧一律 `[v1.2.0]`；本片未使用 `E5`。
 ### RISK-04 A-EXT 落在核心流程上（shell 工具）
 - **假设**：`pi-rounded-tools` 保持本机补丁。
 - **依赖行为**：该包重注册 `read/write/edit/bash/grep/find/ls`，须转发 `shellPath`（`~/.pi/agent/npm/node_modules/pi-rounded-tools/extensions/rounded-tools.ts:38-47,286-294`）；Pi 内建 `createBashTool(cwd,{shellPath})` 本可用（`cli.md:111-120`）。
-- **失效后果**：更新该包即丢补丁 → bash 命中 `System32\bash.exe` → 每条命令报 WSL 错误；**响亮失败**但易误判为宿主故障。
+- **失效后果**：更新该包即丢补丁 → bash 命中 `System32\bash.exe` → 每条命令报 WSL 错误；**响亮失败**但易误判为 Pi 故障。
 - **补偿**：AGENTS.md 记录还原步骤；补丁副本 `~/.pi/agent/patches/rounded-tools.shellPath-patched.ts`；Pi 自身回退与补丁指向同一 Git 安装。
 - **码 / 钉住**：`R-SOFT`（可见、可恢复，且该扩展可被 Pi 内建工具替代）；启动自检 `uname -a` 须为 `MINGW64_NT`，并把补丁与还原写入 `.myflow/spec/`。
 
@@ -80,7 +80,7 @@ Pi 侧一律 `[v1.2.0]`；本片未使用 `E5`。
 
 ## 4 其他发现与取证边界
 
-- **DOC-DRIFT-01**（**建议登记，但不是 `RISK-*`**）：`.pi/skills/myflow-meta/references/harness-conventions.md:101-102` 写「All six hooks」并漏 `agent_before_settle`，实际注册 7 个（`index.ts`；`tests/scaffold.test.ts:148-156`）。它不是宿主契约风险（不依赖 Pi 行为），属文档漂移 → 建议在 `tests/scaffold.test.ts` 增断言「文档 hook 名集合 == handlers 键集合」，而非列为风险项。
+- **DOC-DRIFT-01**（**建议登记，但不是 `RISK-*`**）：`.pi/skills/myflow-meta/references/harness-conventions.md:101-102` 写「All six hooks」并漏 `agent_before_settle`，实际注册 7 个（`index.ts`；`tests/scaffold.test.ts:148-156`）。它不是 Pi 契约风险（不依赖 Pi 行为），属文档漂移 → 建议在 `tests/scaffold.test.ts` 增断言「文档 hook 名集合 == handlers 键集合」，而非列为风险项。
 - **修正 PRD Q3 的示例**：递归守卫实为 `E-C`（代码）+ `E-G`（白名单），**非**仅提示词（与本片、S3 一致）；该「名义有、实际靠约定」反例应改指仍属 `E-P` 的条目（如 research 的「一文件一主题」纪律）。
 - **全量读**：`.pi/extensions/myflow/{index,turn-cache,subagent,agents,context-injection}.ts`、`.myflow/scripts/{task,get_context}.py` 相关函数、`tests/{extension,task-bridge,session-context,subagent,scaffold}.test.ts` 相关用例、`.gitignore`。
 - **抽样读（非逐行）**：`noaadapter/{state_store,materialize,overflow,inherit}.go`、`noa/state.go`、`subagent/subagent.go`、`coordinator/coordinator.go`、`harness/query.go`。

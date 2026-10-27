@@ -9,6 +9,7 @@ __pycache__/
 .myflow/.runtime/
 .codebase-memory/
 dist/
+book/.vitepress/cache/
 # mattpocock/skills output (setup, domain-modeling, to-spec/to-tickets, triage); local only, never shipped.
 /AGENTS.md
 /GLOSSARY.md

@@ -56,7 +56,7 @@ WSL 入口，`Sysnative` 是它在 32 位进程下的别名，`SysWOW64` 是 32 
 
 ### R4 shutdown 的"无 UI"判据
 `session_shutdown` 只在 `ctx.hasUI !== false` 且 `ctx.ui.notify` 存在时提示。
-`hasUI === false` 时**静默**，即使宿主仍提供了 `notify`。
+`hasUI === false` 时**静默**，即使 Pi 仍提供了 `notify`。
 
 ### R5 `cwd` 参数
 `myflow_bg_start` 新增可选 `cwd`：

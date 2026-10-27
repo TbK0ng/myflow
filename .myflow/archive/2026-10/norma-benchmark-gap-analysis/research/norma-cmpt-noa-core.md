@@ -13,7 +13,7 @@
 | CMPT-03 PTL 反应式 | `Reactive` 复用 AutoCompact + `IsOverflow` + 摘要 PTL 重试(≤3,丢最老 20% API round) `c.go:200,212` `s.go:14,151` | overflow / `stopReason:"length"` → 一次 compact-and-retry `compaction.md:39,85` | A-PI | O-1 | 委托 Pi | V-PI |
 | CMPT-04 非破坏 boundary | 留全历史，tail 前插 boundary+summary `c.go:295,344` | `CompactionEntry`+`firstKeptEntryId`，原文不删 `compaction.md:79,152` `sessions.md:40` | A-PI | O-1 | 委托 Pi | V-PI |
 | CMPT-05 压缩×注入共存 | summary 后按 5k/25k 逐条重注入 skill 原文 `c.go:349,370` | `custom_message` 是合法切割点，压缩可摘要掉注入；Pi 不重注入扩展消息 `compaction.md:130,134` | A-PI+A-MF | O-3 | 自补：每回合注入 + `session_before_compact` 记时 + `lastInjectionTs>lastCompactionTs` 重注入 `index.ts:319,384,455`，回归 `tests/extension.test.ts:244` | V-QUAL |
-| NOA-01 ref 寻址 | `mNNNNN` 永不重编号、`BLOCKED` 硬保护、双向 map `refs.go:15,25,74,78` `const.go:5,12` | 模型无 ref；仅宿主 entry id(8hex) 可被扩展经 `context_edit.targetId` 定位 `session-format.md:143,235` | A-NONE | O-5 | 无 | **V-GAP** |
+| NOA-01 ref 寻址 | `mNNNNN` 永不重编号、`BLOCKED` 硬保护、双向 map `refs.go:15,25,74,78` `const.go:5,12` | 模型无 ref；仅 Pi entry id(8hex) 可被扩展经 `context_edit.targetId` 定位 `session-format.md:143,235` | A-NONE | O-5 | 无 | **V-GAP** |
 | NOA-02 tier 分层 | 一次只压一层；`bN` tier 1..3 创建即固定；终层重写检测 `tier.go:22,30,78` `types.go:56,61` `config.go:105` | 单层；重复压缩靠 previousSummary 迭代 `compaction.md:83` | A-NONE | O-5 | 无 | **V-GAP** |
 | NOA-03 block 与 rebuild | `bN` 块 + `ApplyCompression` 原子尺寸门 + `RebuildStateFromLog` 回放得**字节一致**摘要 `compress.go:77,225` `state.go:38` `rebuild.go:37,45` | 无块模型；摘要落 `CompactionEntry`，原文留 JSONL（可读但无法按 ref 重建） `compaction.md:79` `session-format.md:226` | A-NONE | O-5 | 无 | **V-GAP** |
 | NOA-09 压缩建议/死区 | `BuildRecommendation`+`ViableRanges`(<200 token 死区)+死区重复拒绝(2) `recommend.go:256,267` `const.go:31,43` | 无对模型暴露的压缩建议面 | A-NONE | O-5 | 无 | **V-GAP** |
@@ -30,7 +30,7 @@
  B 检索式=compress|context_edit|model-selectable|choose.*messages.*summar
    命中=compress=0；context_edit 5 处(compaction.md:93,138; extensions.md:118; session-format.md:144,235)
    残余=「模型自选压缩范围」可能有未枚举同义词；已做同义枚举复查，0 命中。
-   结论=Pi 无模型可调用的压缩工具；context_edit 是扩展经 turn_end 追加的宿主条目。
+   结论=Pi 无模型可调用的压缩工具；context_edit 是扩展经 turn_end 追加的 Pi 条目。
  C 检索式=tier 分层|layered summary|multi-level compact → 0
    残余=previousSummary 迭代(compaction.md:83)形似分层但语义不同：迭代把上轮摘要与新消息合压一遍，
         无「同层不合压」约束。
@@ -58,7 +58,7 @@
 ## 4. Norma 有、myflow 用别的办法解决（供 ADV-* / V-OWNED）
 
 - **注入存活(CMPT-05)**：目标达成路径不同；myflow 依赖 Pi 事件时序 → RISK（见 T3），有 `R-T`(`tests/extension.test.ts:244`)。
-- **原文保留(CMPT-04)** / **溢出恢复(CMPT-03)**：myflow 直接用 Pi 的 JSONL 与恢复流程，不自建 → **宿主已覆盖**。
+- **原文保留(CMPT-04)** / **溢出恢复(CMPT-03)**：myflow 直接用 Pi 的 JSONL 与恢复流程，不自建 → **Pi 已覆盖**。
 
 ## 5. 自我声明（design.md §10）
 

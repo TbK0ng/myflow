@@ -24,7 +24,7 @@ Files audited:
 | `references/mcp-setup.md` | **Stale tooling claims.** Config *locations* are right (`~/.pi/agent/mcp.json`, project `.pi/mcp.json` — `docs/mcp.md:32`; `~/.pi/agent/extensions/` — `docs/extensions.md:17`). The *wiring* is wrong: the bare tool names every reference instructs come from a spawned-CLI extension, not from the MCP server, and "move it to another machine" only adds the MCP entry, which yields `mcp__codebase-memory-mcp__*` names. Nothing on this machine matches the doc. |
 | `references/repository-analysis.md` | **Consistent with the rest, inherits the backend problem.** Tool names are internally consistent with `mcp-setup.md` and the evidence discipline is good, but it tells an agent to call bare names it cannot see. |
 
-Upstream check: `tests/skills-hygiene.test.ts` cannot catch any of the findings
+Provenance check: `tests/skills-hygiene.test.ts` cannot catch any of the findings
 below — it validates `.pi/`/`.myflow/` tokens (`payloadTokens`, and it lists
 `.pi/mcp.json` as `RUNTIME_FILES`), skips `~/...` machine paths, and `src/`
 prefixes are invisible to it.

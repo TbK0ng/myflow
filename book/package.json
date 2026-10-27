@@ -1,0 +1,14 @@
+{
+  "name": "myflow-book",
+  "private": true,
+  "type": "module",
+  "description": "The myflow book: how the harness works, why it is built this way, and where it is still weak.",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

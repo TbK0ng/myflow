@@ -18,7 +18,7 @@ myflow 相对 Norma 的实况可以概括为三点。**第一，myflow 强在「
 而带 **P0** 的仅 2 项、且都只需 myflow 侧小改动（`GAP-TOOL-06` 结果不截断、`GAP-CTX-04` 指针缺失静默零注入）。
 **第三，最大的实际威胁是「静默」性质**：唯一 `R-HARD` 是 `.myflow/.runtime/` 的机器本地性导致子代理静默零 spec 注入，
 另有两类半静默失效（压缩吃掉注入的 1 回合窗口、channel peer worker 旁路递归/写范围守卫）。
-换言之，myflow 与 Norma 的差距主要不在「有没有」，而在**「是否被代码强制」与「宿主契约是否稳」**。
+换言之，myflow 与 Norma 的差距主要不在「有没有」，而在**「是否被代码强制」与「Pi 契约是否稳」**。
 
 ---
 
@@ -65,9 +65,9 @@ myflow 相对 Norma 的实况可以概括为三点。**第一，myflow 强在「
    `GAP-CTX-04`（键在而 `.runtime/sessions/<key>.json` 缺失时静默零 spec 注入）。
    两者均满足「状态/数据丢失风险 ∨ 仅 myflow 侧改动且代价小」，故记 `P0`。
 
-3. **缺口最集中的 `NOA`(7) + `PERM`(5) 多为 Pi 与 myflow 的共同空白（`O-5`，全表 21 项），少数为「宿主给原语、语义待补」（`O-3`）。**
+3. **缺口最集中的 `NOA`(7) + `PERM`(5) 多为 Pi 与 myflow 的共同空白（`O-5`，全表 21 项），少数为「Pi 给原语、语义待补」（`O-3`）。**
    `NOA` 的分层压缩（ref `mNNNNN` / tier 一次一层 / block 回放 / nudge 节律）与 `PERM` 的三态/mode/deny 优先/四阶段，
-   Pi `docs/` 均无对应**求值/调度**能力；但硬保护与紧急截断 Pi 已给原语（`session_before_compact` 自选保留边界、
+ Pi `docs/` 均无对应**求值/调度**能力；但硬保护与紧急截断 Pi 已给原语（`session_before_compact` 自选保留边界、
    `context_edit` 改写发出视图），myflow 缺的是「命名名单 / 压力触发判定」（见 `08-coverage.md` 的 NEG 清单与 `research/c1-neg-recheck.md`）。
    这说明补足成本高、优先级低（多为 `P2`），应作为「增强路线」而非「救火」。
 
@@ -86,10 +86,10 @@ myflow 相对 Norma 的实况可以概括为三点。**第一，myflow 强在「
    换机/新 clone/新 worktree 后扩展判 `no_task`，**无任何「键在而文件缺」告警**，子代理静默失去 spec 语境。
    它与上一轮 P0「空上下文门禁」同成因，是本任务最应优先钉住的风险（`RISK-03`）。
 
-7. **第二类静默风险是「宿主契约依赖」：压缩事件时序与 channel worker 旁路。**
+7. **第二类静默风险是「Pi 契约依赖」：压缩事件时序与 channel worker 旁路。**
    `RISK-02`（`R-OK`）——`custom_message` 是合法压缩切点（`compaction.md:134`），
    myflow 靠 `lastInjectionTs > lastCompactionTs` 自愈（`ix:384,455-457`），最坏有 1 回合失败窗口；
-   宿主一旦改切点规则或事件时序即**静默**失效。
+ Pi 一旦改切点规则或事件时序即**静默**失效。
    `RISK-06`（`R-SOFT`）——`channel.py` 启动 peer worker 时不设 `MYFLOW_AGENT_TYPE`，
    使 `ix:241` 判 `isSubAgent=false`，递归守卫与 `writesUnder` 路径守卫对其**旁路**。
 
@@ -100,7 +100,7 @@ myflow 相对 Norma 的实况可以概括为三点。**第一，myflow 强在「
    按 `R-STR-3`，这三处**不得**记为已覆盖。
 
 9. **`O-2`（刻意外包）的唯一权威原文在包根 `README.md:19`，不在 `docs/`。**
-   Pi 1.2.0 `docs/` 40 篇**无** sub-agent / plan mode 的语义表述（`08-coverage.md` NEG 清单）；
+ Pi 1.2.0 `docs/` 40 篇**无** sub-agent / plan mode 的语义表述（`08-coverage.md` NEG 清单）；
    「skips features like sub-agents and plan mode」只出现在包根 `README.md:19`。
    这是 docs 的覆盖缺口，也是 `SUB`/`COORD`/`PLAN` 判 `O-2` 而非 `O-5` 的唯一依据（`06-non-gaps.md` MIS-06）。
 
@@ -123,7 +123,7 @@ myflow 相对 Norma 的实况可以概括为三点。**第一，myflow 强在「
 | `P0` | `GAP-CTX-04` 上下文键-指针一致性告警与自愈 | 键在而指针缺失时静默零 spec 注入，是最贵的静默失败；仅需 myflow 侧小改 |
 | `P0` | `GAP-TOOL-06` 工具输出上限与全局 net | 单次 `myflow_subagent` 输出可挤爆上下文；仅需 myflow 侧小改（可复用现有 `logPath`） |
 | `P0-R` | `QGAP-CTX-02` 会话身份↔任务指针绑定强度对齐 | `RISK-03`（`R-HARD`）+ `RISK-01`（键派生等价）的钉住动作，纯 myflow 侧断言测试 |
-| `P1` | `QGAP-CMPT-05` 压缩与注入共存语义强度对齐 | 状态注入在核心流程上；去掉对宿主事件时序的依赖（`RISK-02`） |
+| `P1` | `QGAP-CMPT-05` 压缩与注入共存语义强度对齐 | 状态注入在核心流程上；去掉对 Pi 事件时序的依赖（`RISK-02`） |
 | `P1` | `GAP-PLAN-01` 只读探索阶段的代码强制 | 唯一「名义有、实际靠约定」还在裸奔的核心门；补足即复用既有 `{block}` 模式 |
 | `P1` | `QGAP-PLAN-02` `ExitPlanMode` + 审批门强度对齐 | 任务生命周期核心门；把「已批准」变成可判定字段（与 verify 门并存） |
 | `P1` | `GAP-NOA-07` 硬保护 vs 软保护 | 上下文完整性缺口，直接关系状态注入能否存活 |

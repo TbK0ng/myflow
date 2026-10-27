@@ -100,9 +100,9 @@
 | 28 | `norma-noaa-trans-core.md` §4-3 | Pi core 无子代理/sidechain | 同上 | `subagent\|sub-agent\|sidechain\|nested agent\|spawn` | 0（仅 `A-EXT` `pi-subagents-lite` 命中，域 `A-EXT`，非 `A-PI`） | 仅有 `A-EXT` 提供 |
 | 29 | `norma-noaa-trans-core.md` §4-4 | Pi 无「从错误解析真实窗口」 | 同上 | `parse.*window\|learned window\|actual limit\|真实窗口` | 0（`custom-provider.md:152` 仅「recognized context-overflow errors」= 仅识别错误） | 可能内部实现未公开 → 判 `V-GAP` 前须过归属测试 |
 | 30 | `norma-noaa-trans-core.md` §4-5 | myflow 无账本/归档 | `.pi/` + `.myflow/`（myflow） | `state.json\|archive\|CompressionState\|blocks\|token snapshot` | 0 | 或作 cache/snapshot（已检 `turn-cache`） |
-| 31 | `norma-ext-integrate.md` §3-NEG-1 | Pi 无 `SubagentStart` 等价宿主钩子 | `pi-coding-agent` 1.2.0：`docs/*.md`(40)、`dist/.../types.d.ts`、包根 `README.md` | `sub-?agents?\|SubagentStart\|subagent`(i) | `README.md:19`（唯一，语义为「跳过 sub-agent 特性」）；`on()` 全表 **41** 项无对应（C1 `F-1` 更正原记 42） | child session/worker 等别名会漏；已人工通读 `on()` 全表（`types.d.ts:1186-1228`） |
+| 31 | `norma-ext-integrate.md` §3-NEG-1 | Pi 无 `SubagentStart` 等价 Pi 钩子 | `pi-coding-agent` 1.2.0：`docs/*.md`(40)、`dist/.../types.d.ts`、包根 `README.md` | `sub-?agents?\|SubagentStart\|subagent`(i) | `README.md:19`（唯一，语义为「跳过 sub-agent 特性」）；`on()` 全表 **41** 项无对应（C1 `F-1` 更正原记 42） | child session/worker 等别名会漏；已人工通读 `on()` 全表（`types.d.ts:1186-1228`） |
 | 32 | `norma-ext-integrate.md` §3-NEG-2 | Pi 无进程内 MCP server 原语 | 同上 | `in-?process\|InProcess\|registerMcpServer.*function\|MCP server API` | 0；`registerMcpServer(name, config)` 只收**配置**（`extensions.md:195-206`）；**更强正证**：`pi-mcp/README.md:132`「servers … outside the initial core」（C1 `F-5`） | 「registerTool+namespace 模拟」不含关键字，属替代方案，已记 `O-3` |
-| 33 | `norma-ext-integrate.md` §3-NEG-3 | Pi 无 skill 跨压缩保留机制 | `docs/*.md` 全文逐篇检索 `skill` | `skill`（重点 `compaction.md`） | 原式（`compaction.md` 查 `skill`）**=0**；**正面命中** `session-format.md:84,127-131,248`（`CompactionEntry.systemMessage`=完整 system checkpoint；pre-compaction system messages 折入该 checkpoint）、`skills.md:43-45`（roster 进 system prompt）〔C1: **假阴性**〕 | 保留逻辑在 `dist/` 已有旁证（`chunk-HACVPRBJ.js:11` `collapseSystemMessages`）；正文 re-inject 仍无宿主机制 |
+| 33 | `norma-ext-integrate.md` §3-NEG-3 | Pi 无 skill 跨压缩保留机制 | `docs/*.md` 全文逐篇检索 `skill` | `skill`（重点 `compaction.md`） | 原式（`compaction.md` 查 `skill`）**=0**；**正面命中** `session-format.md:84,127-131,248`（`CompactionEntry.systemMessage`=完整 system checkpoint；pre-compaction system messages 折入该 checkpoint）、`skills.md:43-45`（roster 进 system prompt）〔C1: **假阴性**〕 | 保留逻辑在 `dist/` 已有旁证（`chunk-HACVPRBJ.js:11` `collapseSystemMessages`）；正文 re-inject 仍无 Pi 机制 |
 | 34 | `norma-ext-integrate.md` §3-NEG-4 | Pi 无 skill→MCP 解锁联动 | `docs/skills.md` + `docs/mcp.md` + 全事件表 | `allowed-tools\|unlock\|reveal\|deferred.{0,40}skill\|skill.{0,40}mcp` | `skills.md:78`（`allowed-tools` 方向相反）；`mcp.md:191-217`（deferred/hidden 由 `tool_search` 与配置驱动） | 中文或别名表述会漏；本语料为英文全篇扫描 |
 | 35 | `norma-plan-mem.md` §2-NEG-1 | Pi core 无 plan mode | `docs/*.md`(40)+README.md+cli.md+settings.md+configuration.md | `(?i)plan[ -]?mode\|EnterPlanMode\|ExitPlanMode\|--plan\|\b/plan\b` | `README.md:19`（skips → `O-2` 正证）；docs 正文 0；`plan-mode` 示例与 `CHANGELOG.md:4913-4918` 为示例/历史 | 改名词（read-only mode/approval）；补检 `(?i)read-?only\|approv` → 仅 `extensions.md:104`、`security.md` 项目信任 |
 | 36 | `norma-plan-mem.md` §2-NEG-2 | Pi core 无长期记忆（存储/召回/自写入） | `docs/*.md`(40) + sdk.md | `(?i)long-?term memory\|RecallMemory\|RecordMemory\|remember across\|persistent memory\|memory (store\|dir\|file)` | 0；「memory」命中均为进程内存（`codemode.md:226`、`llama-cpp.md:28`）或 in-memory session（`cli.md:99`、`sdk.md:38,42-48`） | `quickstart.md:108` 称 `AGENTS.md` 为 "persistent instructions"；`skills.md:45` 的按需加载——均非动态记忆 |
@@ -164,15 +164,15 @@
 | D-5 | **文档契约回归契约**：文档 hook 名集合 == `extension()` 内 `pi.on()` 的 handlers 键集合 | `DOC-DRIFT-01`（`harness-conventions.md` 写 6、实际 7）；有 `tests/workflow-invariant.test.ts:71` 先例 |
 | D-6 | **`pi-rounded-tools` `shellPath` 补丁与还原步骤** | `RISK-04`：把 `AGENTS.md` 的口头步骤沉淀为可重放脚手架 |
 | D-7 | **verify gate 契约**（含 `channel.py` 把 review worker 并入同一门） | `ADV-08`：一关注点两路强制，是质量基线 |
-| D-8 | **Pi 1.2.0 宿主契约快照**：压缩切点规则（禁切 tool result、`custom_message` 是合法切点）、事件时序、`tool_call` fail-safe 阻塞 | `RISK-02`/`NEG` #13–#15：把这些宿主行为固化成快照，便于版本升级时比对 |
+| D-8 | **Pi 1.2.0 Pi 契约快照**：压缩切点规则（禁切 tool result、`custom_message` 是合法切点）、事件时序、`tool_call` fail-safe 阻塞 | `RISK-02`/`NEG` #13–#15：把这些 Pi 行为固化成快照，便于版本升级时比对 |
 | D-9 | **`A-EXT` 核心流程依赖清单**（当前仅 `pi-rounded-tools` 落在 `bash` 核心路径） | `04-risk-register.md` §5：防止未来静默引入 `A-EXT` 核心依赖 |
-| D-8b | **宿主文档不一致（待观察）**：`docs/compaction.md:130-138` 未列 `CompactionEntry.systemMessage`，而 `docs/session-format.md:127-131` 列出并定义为完整 system checkpoint | C1 `F-6`；**不据此改判定**（两文档同属 1.2.0，以更完整的 `session-format.md` 为准；差异可能只是 `compaction.md` 未穷举字段，无能力冲突） |
+| D-8b | **Pi 文档不一致（待观察）**：`docs/compaction.md:130-138` 未列 `CompactionEntry.systemMessage`，而 `docs/session-format.md:127-131` 列出并定义为完整 system checkpoint | C1 `F-6`；**不据此改判定**（两文档同属 1.2.0，以更完整的 `session-format.md` 为准；差异可能只是 `compaction.md` 未穷举字段，无能力冲突） |
 
 ---
 
 ## 6. 六问之六：已知薄弱点
 
-1. **无法验证 Pi 未来版本行为**。全部结论锚定 1.2.0；宿主一旦改压缩切点规则或事件时序，
+1. **无法验证 Pi 未来版本行为**。全部结论锚定 1.2.0；Pi 一旦改压缩切点规则或事件时序，
    `RISK-02`（`R-OK`）的补偿会**静默**失效。
 2. **`noa` 域为抽样而非逐行**（29 文件 / 11 能力项，实为「关键文件全量 + 其余抽样」）；
    `Norma/examples/`、`Norma/cmd/` 未读。
@@ -210,7 +210,7 @@
 | 同上 | `deliverables/03-gap-register.md` | `GAP-SKILL-03` 拆为 (a) roster（`V-PI`/`O-1`，非缺口）与 (b) 正文 re-inject（`V-GAP`），改写能力描述/补足标准/不作弊条件，`O-5`→`O-3`；新增裁定 `C-9` 与头部声明 | 同上 |
 | `#14` **假阴性**：Pi 有 `context_edit` 运行期改写原语 | `research/norma-noa-integrity.md` | 重写 `NEG-C`（补 `context_edit` 决定性命中与已排除项）；表 A `NOA-08` 行改 `A-PI(原语)`/`O-3`；§4 末条改「缺压力触发判定」 | `session-format.md:143-147,235`、`extensions.md:118` |
 | 同上 | `deliverables/02-matrix.md` | 表 A `CAP-NOA-08` 行 `O-5`→`O-3`；表 B 回归 `R-T cit`→`R-∅`（C1 `F-3` 统一口径，邻近 `cit` 保留说明） | 同上 |
-| 同上 | `deliverables/03-gap-register.md` | `GAP-NOA-08` 的「Pi 现状」改 `O-3`，缺口收窄为「谁来自动触发 + 选最大未截断结果」；行为规格改为「myflow 侧压力检测/触发」；依赖与代价补宿主契约登记；`P1` 重核后仍为 `P1` | 同上 |
+| 同上 | `deliverables/03-gap-register.md` | `GAP-NOA-08` 的「Pi 现状」改 `O-3`，缺口收窄为「谁来自动触发 + 选最大未截断结果」；行为规格改为「myflow 侧压力检测/触发」；依赖与代价补 Pi 契约登记；`P1` 重核后仍为 `P1` | 同上 |
 | `#11` 部分：Pi 已有有界单次恢复重试 | `research/norma-cmpt-noa-core.md`；`deliverables/02-matrix.md`；`deliverables/03-gap-register.md` | 表 A `CAP-CMPT-02` 行与 `GAP-CMPT-02` 的 `O-5`→`O-3`，措辞窄化为「无**连败计数**熔断」 | `compaction.md:39,372` |
 | `#13` 部分：`session_before_compact` 可选 `firstKeptEntryId` | `research/norma-noa-integrity.md`；`deliverables/02-matrix.md`；`deliverables/03-gap-register.md` | `NEG-B` 补正面命中；表 A `CAP-NOA-07` 行与 `GAP-NOA-07` 的 `O-5`→`O-3`；`V-GAP` 不翻转（仍无命名名单） | `compaction.md:302-320,138` |
 | `#21` 部分：core 给互斥原语 + 读写注解 | `research/norma-perm-loop.md`；`deliverables/02-matrix.md`；`deliverables/03-gap-register.md` | 表 A `LOOP-02` 行与 `GAP-LOOP-02` 的 `A-NONE`/`O-5`→`A-PI(原语)`/`O-3` | `extensions.md:144,167,172-174`、`mcp.md:254` |
@@ -219,7 +219,7 @@
 | `#17`/`#18`/`#19` 部分：措辞化/窄化 | `research/norma-llm-tool.md`、`research/norma-perm-loop.md`；`deliverables/03-gap-register.md` | `#17` 明写「校验能力存在」（`CAP-TOOL-02` 仍 `O-1`）；`#18` 窄化 `GAP-TOOL-06` 的「Pi 无统一 net」为「只对内建工具」；`#19` 措辞改「无内建求值器；决策点由 core 提供」（`PERM-01/04` 仍 `O-2`） | `extensions.md:135,145,170-178`、`codemode.md:48`、`dist/index.js:30` |
 | 附带 `F-1`：`on()` 实为 41 项 | `research/norma-ext-integrate.md`、`deliverables/02-matrix.md`、`deliverables/01-verdict.md`、本文 §3 | 42 → 41（表 A `HOOK-01`、表 B `HOOK`、记分卡 `HOOK`、`NEG#31`） | `types.d.ts:1186-1228` |
 | 附带 `F-5`：`pi-mcp/README.md:132` 更强正证 | `deliverables/02-matrix.md`、`deliverables/03-gap-register.md`、本文 §3 | 补入 `CAP-MCP-02` 行与 `GAP-SKILL-04` 依赖说明、`NEG#32` 命中列 | `pi-mcp/README.md:132` |
-| 附带 `F-6`：宿主文档字段描述不一致 | 本文 §5（`D-8b`） | 登记为「宿主文档不一致（待观察）」；**不据此改判定**（以 `session-format.md` 为准） | `compaction.md:130-138` vs `session-format.md:127-131` |
+| 附带 `F-6`：Pi 文档字段描述不一致 | 本文 §5（`D-8b`） | 登记为「Pi 文档不一致（待观察）」；**不据此改判定**（以 `session-format.md` 为准） | `compaction.md:130-138` vs `session-format.md:127-131` |
 | 附带 `F-2`：NEG 语料漏 Pi `examples/**` | 本文 §2 | 未读清单补 `examples/**` 与 `CHANGELOG.md`，并说明其**强化** `O-2` 证据 | `03-gap-register.md`（`GAP-PLAN-01`，C1 原引 `:330`） |
 
 ---
@@ -296,10 +296,10 @@
 | `Agent`/`StopAgent`/`MessageAgent`/`AgentStatus`（`MIS-01`） | `A-EXT:pi-subagents-lite` | 删包即消失；唯一注册者 `~/.pi/agent/npm/node_modules/pi-subagents-lite/src/registration.ts:66,121,132,143`（`name:`）+ `:112,129,140,149`（`registerTool`），版本 1.17.0 | 维持 |
 | MCP 工具（`MIS-02`、`NG-33`/`NG-34`） | `A-EXT:pi-mcp-adapter`（core 有但停用） | Pi core **确**有内建，但 `~/.pi/agent/settings.json` 的 `extensions:["-builtin:mcp"]` 显式关闭；写开关者 `pi-mcp-adapter/pi-builtin-mcp.ts:10-25`、`index.ts:1725` | 维持 |
 | `cbmem.ts` 裸名工具（`MIS-03`） | `A-EXT`（**非** MCP、非 core） | 源码 `~/.pi/agent/extensions/cbmem.ts:8-14` 以 `spawn` 直调 `codebase-memory-mcp.exe cli` 注册裸名工具，无 MCP 协议；删扩展即消失 | 维持（**分片已修**：`norma-plan-mem.md` 原记 `A-MCP`） |
-| O-1 宿主内建（31 项） | `A-PI` | 逐项落 `docs/*.md` 或 `dist/core/extensions/types.d.ts`；`~/.pi/agent/` 下无任何扩展注册同名能力 | 维持 |
+| O-1 Pi 内建（31 项） | `A-PI` | 逐项落 `docs/*.md` 或 `dist/core/extensions/types.d.ts`；`~/.pi/agent/` 下无任何扩展注册同名能力 | 维持 |
 | `bash`（`RISK-04`） | `A-PI` 原语 + `A-EXT:pi-rounded-tools` 重注册 | core 提供 `createBashTool(cwd,{shellPath})`（`docs/cli.md:111-120`）；扩展仅重注册并依赖本机补丁 | 维持 |
 | `V-EXT` 2 项（`MCP-01`/`MCP-03`） | `A-EXT` | 同上（MCP 行） | 维持 |
-| `V-UP` 2 项（`LOOP-03`/`LOOP-04`） | 上游约束 | core 行为，删 `A-MF`/`A-EXT` 仍在 | 维持 |
+| `V-UP` 2 项（`LOOP-03`/`LOOP-04`） | 运行时约束 | core 行为，删 `A-MF`/`A-EXT` 仍在 | 维持 |
 | `MIS-04` `AGENTS.md` 非长期记忆 | `A-PI` 静态 context file | `docs/configuration.md:18`、`docs/quickstart.md:108`；无召回/陈旧告警 | 维持 |
 | `MIS-06` `O-2` 唯一原文 | `README.md:19` | 逐字命中「skips features like sub-agents and plan mode」 | 维持 |
 | `MIS-07` `noa`/`noaadapter`/`transcript` | 实现包 | 行数实测 5392 / 1918 / 268 | 维持 |
@@ -307,7 +307,7 @@
 
 - **结论**：核实 `O-1`/`V-EXT`/`V-UP`/`MIS-*` 全部条目，**修正 1 条**（`cbmem.ts`：`A-MCP`→`A-EXT`，发生在分片，成品 `MIS-03` 原本即正确）。
 - **额外排查（防 `A-EXT` 隐形提供）**：对 `~/.pi/agent/npm/node_modules/` 与 `~/.pi/agent/extensions/` 全包检索 `plan[- ]?mode|read-?only`、`registerTool` 与已注册工具名，确认：
-  `pi-subagents-lite` 只有一个**提示词级**的「read-only exploration agent」（`src/agents/default-agents.ts:30-52`，非 plan-mode / 非阶段门），不构成 `CAP-PLAN-01` 的宿主提供；
+  `pi-subagents-lite` 只有一个**提示词级**的「read-only exploration agent」（`src/agents/default-agents.ts:30-52`，非 plan-mode / 非阶段门），不构成 `CAP-PLAN-01` 的 Pi 提供；
   `pi-ask-side` 是隔离子会话的 side-question 扩展（无审批工具），不构成 `CAP-PERM-01` 的 `ask`；
   `pi-agent-loop` 仅注册 `loop_control`（外层 goal/pass 循环），不是核心 agent 循环（`CAP-LOOP-01` 仍 `A-PI`）；
   `pi-rounded-tools` 的 `mode` 是 UI frame 模式，不是 read/write 调度器。故 `PLAN-01` 的 `A-NONE`/`O-2` 与 `LOOP`/`PERM` 的 `A-PI`/`A-NONE` 判定均不变。
@@ -377,7 +377,7 @@
 | 仅 `MYFLOW_CONTEXT_ID=pi_01a13a2f-…` | 215 | 200 | **15** | `deriveContextKey`/session-start/task.py 指针类用例 |
 | 两者皆设（= 本会话实际环境） | 215 | 198 | **17** | 上述两组 |
 
-- 定性：失败**全部**由宿主会话泄漏的 `MYFLOW_*` 环境变量造成（前者令 `isSubAgent` 误判、后者覆盖会话键派生），
+- 定性：失败**全部**由 Pi 会话泄漏的 `MYFLOW_*` 环境变量造成（前者令 `isSubAgent` 误判、后者覆盖会话键派生），
   清空即 **215/215 通过**。B4 报告的「2 个失败」与「仅 `MYFLOW_AGENT_TYPE`」一栏**完全吻合**；
   本会话实测为 17，差异源于 `MYFLOW_CONTEXT_ID` 亦泄漏。**结论：预存环境敏感性，非本任务引入。**
 

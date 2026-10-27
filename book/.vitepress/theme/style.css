@@ -1,0 +1,79 @@
+/* Accent + CJK typography only. Everything else is the default theme. */
+
+:root {
+  --vp-c-brand-1: #4c8dff;
+  --vp-c-brand-2: #3a7ae8;
+  --vp-c-brand-3: #2f66cc;
+  --vp-c-brand-soft: rgba(76, 141, 255, 0.14);
+
+  --vp-font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'Noto Sans SC', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  --vp-font-family-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro',
+    Consolas, 'Courier New', monospace;
+}
+
+.dark {
+  --vp-c-brand-1: #6ba4ff;
+  --vp-c-brand-2: #4c8dff;
+  --vp-c-brand-3: #3a7ae8;
+  --vp-c-brand-soft: rgba(107, 164, 255, 0.16);
+}
+
+/* CJK needs more air than the default line-height gives it. */
+.vp-doc p,
+.vp-doc li,
+.vp-doc blockquote {
+  line-height: 1.78;
+}
+
+.vp-doc h2 {
+  margin-top: 2.6em;
+  padding-top: 1.2em;
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+  font-size: 14px;
+}
+
+.vp-doc th {
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* Home: hero + the three reading-path cards. */
+.VPHero .name {
+  letter-spacing: -0.02em;
+}
+
+.VPHero .text {
+  max-width: 40ch;
+}
+
+.VPFeature {
+  transition: border-color 0.2s ease;
+}
+
+.VPFeature:hover {
+  border-color: var(--vp-c-brand-1);
+}
+
+/* The "numbers" strip under the hero cards. */
+.numbers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 40px 0 0;
+  padding: 18px 22px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  font-size: 13px;
+  color: var(--vp-c-text-2);
+}
+
+.numbers b {
+  color: var(--vp-c-text-1);
+  font-weight: 600;
+}

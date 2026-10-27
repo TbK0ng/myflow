@@ -30,11 +30,11 @@ does it your way.」这是 1.2.0 语料里**唯一**支持「刻意外包」的�
 | HOOK-03 可改写/注入 | `UpdatedInput` 末个非空生效(:89-98)；`AdditionalContext` 拼接注入(:135-143)；Stop 的 block→注入并续跑(:115-131) | 原地改 `event.input`(`types.d.ts:1090`)；`before_agent_start`→`{message}`(:1125-1129)；`tool_result` 换 content/details/isError(:1114-1120)；`turn_end`/`agent_before_settle`→`entries+continue`(:786-795) | A-PI | O-1 |
 | HOOK-04 Stop 门控 | 两态：`PreventContinuation` 硬停 vs `block` 续跑(`hook.go:115-131`；`harness/query.go:475-478`)，`stopHookActive` 防死循环(:472-474)；测 `hook_test.go:24,45` | `agent_before_settle` 为「最后一个可动作边界」，可 append entries + `continue:true` 请求一次下一请求(`extensions.md:67,118`；`types.d.ts:796-799`)；`agent_settled` 纯通知终局(:800-805) | A-PI | O-1（无硬停原语，语义等价；`terminate` 仅 `tool_call` 提示位 `:1093-1097`） |
 | MCP-01 stdio 客户端 | JSON-RPC 2.0 换行分帧、`initialize` 2024-11-05、`tools/list`→CoreTool(`mcp/mcp.go:179-208`)、`NewStdioClient`(`mcp/stdio.go:32`)、权限 `AskUser`(:41-43,216-218)；测 `mcp_test.go:12,62` | 内建：stdio+HTTP、`mcp.json`(`mcp.md:32`)、`timeout` 默认 60s、progress 重置(:68)、20KB 中段截断(:232)、HTTP 重试 2 次(:141)、OAuth(:111+)、resources(:236+)、`pi mcp` CLI(:9-31) | **A-PI，本环境被 A-EXT 接管** | O-1 + O-6 |
-| MCP-02 进程内 server | `InProcessServer` 把宿主函数适配为 `mcp__<server>__<tool>`(`mcp.go:21,34-57`) | 无此概念；等价物 `pi.registerTool()`(`extensions.md:133-151`) + `namespace` 分组(:163) | A-PI | O-3（可替代，非缺口） |
+| MCP-02 进程内 server | `InProcessServer` 把 Pi 函数适配为 `mcp__<server>__<tool>`(`mcp.go:21,34-57`) | 无此概念；等价物 `pi.registerTool()`(`extensions.md:133-151`) + `namespace` 分组(:163) | A-PI | O-3（可替代，非缺口） |
 | MCP-03 命名与暴露 | 三段式 `mcp__<server>__<tool>`(`mcp.go:21`) | 同名三段式，非法字符→`_`，冲突加 hash(`mcp.md:77,191`)；四档 `exposure` + 逐工具 `toolExposure`(:191-217)；`--tools 'mcp__x__*'`(:225) | A-PI；本环境另由 A-EXT 自建 `mcp__<server>` 代理(`namespace-tools.ts:12-18`、`mcp-references.ts:38-40`) | O-1 + O-6 |
 | SKILL-01 SKILL.md + frontmatter | YAML 头 `name/description/license/compatibility/whenToUse/mcps`，坏头降级不丢 skill(`skill/skill.go:248-293`)；`LoadDir`(:207-245) | 实现 agentskills.io 规范；字段表含 `metadata/allowed-tools/disable-model-invocation`(`skills.md:5,70-78`)；坏文件**不加载**，同名保留首个并警告(:85) | A-PI | O-1 |
 | SKILL-02 按需注入 | `Skill` 工具：listing 常驻 tool prompt，正文作**独立 user 消息** `Result.Extra`(`skill.go:100-163`)；listing 预算 8000 字符/描述 500，超预算退化为仅名字但**永不丢弃**(:94-96,174-201；测 `skill_test.go:86`) | 启动时把 name+description+path 放进 system prompt，正文由模型 `read SKILL.md` 按需加载(`skills.md:43-45`；`how-pi-works.md:19-21`)；`/skill:name` 强载(`skills.md:45-47`)、`enableSkillCommands`(`settings.md:158`) | A-PI | O-1 |
-| SKILL-03 **存活于压缩** | 压缩后 `reinjectSkills` 把边界前每个 skill **最新一次**调用正文逐字重放，预算 5000/25000 tok、超限丢最旧(`compaction/compaction.go:346-350,363+`；`llm/skillmsg.go:9-56`)；测 `compaction_test.go:55,84,105`、`skills_reinject_test.go` | **宿主给一半**（C1 修正）：skill **roster**（name+description+path）经 system section 存活于压缩（`session-format.md:84,127-131,248`、`skills.md:43-45`）；**正文**（`/skill:name` 展开的 user 消息 / `read SKILL.md` 的 tool_result）被摘要、无逐字 re-inject（§5 + NEG-3） | **A-PI(部分)** | **O-3** |
+| SKILL-03 **存活于压缩** | 压缩后 `reinjectSkills` 把边界前每个 skill **最新一次**调用正文逐字重放，预算 5000/25000 tok、超限丢最旧(`compaction/compaction.go:346-350,363+`；`llm/skillmsg.go:9-56`)；测 `compaction_test.go:55,84,105`、`skills_reinject_test.go` | **Pi 给一半**（C1 修正）：skill **roster**（name+description+path）经 system section 存活于压缩（`session-format.md:84,127-131,248`、`skills.md:43-45`）；**正文**（`/skill:name` 展开的 user 消息 / `read SKILL.md` 的 tool_result）被摘要、无逐字 re-inject（§5 + NEG-3） | **A-PI(部分)** | **O-3** |
 | SKILL-04 解锁 skill 声明的 MCP | frontmatter `mcps:`/`mcp:`(`skill.go:255-258`)；调用时 `OnInvoke` 把该 server 的 deferred 工具加入 unlock 集合并附名字清单(:48-53,149-156)；测 `mcps_test.go:10,28`；门控见 `agentcore/deferred_test.go:104`(`UnlockSet`) | 方向相反：`allowed-tools` 是「实验性**预授权**列表」(`skills.md:78`)，非解锁；MCP 侧由 `deferred`+`tool_search`、`hidden` 逐工具召回(`mcp.md:191-217`)，**与 skill 调用无联动**（NEG-4） | A-PI(部分) | O-5 |
 
 ## 2 myflow 行（逐 CAP）
@@ -62,7 +62,7 @@ does it your way.」这是 1.2.0 语料里**唯一**支持「刻意外包」的�
 
 ## 3 NEG 块
 
-**(NEG-1) Pi 无 SubagentStart 等价宿主钩子**
+**(NEG-1) Pi 无 SubagentStart 等价 Pi 钩子**
 语料 = `pi-coding-agent` 1.2.0：`docs/*.md`(40)、`dist/core/extensions/types.d.ts`、包根 `README.md`
 检索式 = `sub-?agents?|SubagentStart|subagent`（忽略大小写）
 命中 = `README.md:19`（唯一，语义为「跳过 sub-agent 特性」）；`on()` 全表 **41** 项无对应（C1 `F-1` 更正）
@@ -81,7 +81,7 @@ does it your way.」这是 1.2.0 语料里**唯一**支持「刻意外包」的�
 **正面命中（决定性）**：`docs/skills.md:43`「adds each skill's name, description, and path **to the system prompt**」；`docs/session-format.md:84` system message 形如 `{"role":"system","content":"","sections":{"skills":"…"}}`；`docs/session-format.md:127-131` `CompactionEntry.systemMessage` = 「… becomes the leading system message of the compacted context, and system messages among the kept entries are dropped in its favor」；`docs/session-format.md:248`「**Pre-compaction system messages are folded into the complete checkpoint**」
 **已排除的同义命中**：`dist/bundle/chunks/chunk-HACVPRBJ.js:11` 的 `collapseSystemMessages()`（`E2` 代码旁证，非权威面）；`skills.md:45` 的 `/skill:name` 强载（属**正文**注入，不是 roster 保留）
 **修正后的结论**：Pi **有** roster 侧的跨压缩保留（`O-3`，`A-PI(部分)`）；**无**正文逐字 re-inject——后者才是 `GAP-SKILL-03` 的缺口。
-**残余风险**：正文存活仍无宿主机制；`context_edit` 可改写但不自动重放正文。
+**残余风险**：正文存活仍无 Pi 机制；`context_edit` 可改写但不自动重放正文。
 
 **(NEG-4) Pi 无 skill→MCP 解锁联动**
 语料 = `docs/skills.md` + `docs/mcp.md` + `types.d.ts` 全事件表
@@ -100,7 +100,7 @@ does it your way.」这是 1.2.0 语料里**唯一**支持「刻意外包」的�
 | SessionStart | `session_start`，带 `reason: startup\|reload\|new\|resume\|fork`(`:574-581`) | 更强 |
 | SessionEnd | `session_shutdown`（须幂等清理，`extensions.md:265-266`） | 等价 |
 | Stop | `agent_before_settle`：`entries`+`continue`(`:792-799`)；无硬停原语 | 等价 |
-| SubagentStart | **无**（NEG-1；A-MF/A-EXT 子代理无宿主级启动钩子） | 缺失 |
+| SubagentStart | **无**（NEG-1；A-MF/A-EXT 子代理无 Pi 级启动钩子） | 缺失 |
 
 （`:NNN` 均指 `dist/core/extensions/types.d.ts` 1.2.0。）
 Pi 独有且有价值（Norma 无）：`project_trust`、`resources_discover`、`session_before_switch/fork/compact`、

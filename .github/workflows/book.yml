@@ -1,0 +1,57 @@
+name: Book
+
+# The book publishes itself from `main`: the site is built from `book/` and
+# deployed as a Pages artifact, so no build output is ever committed.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: book
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: book/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      # VitePress fails on a dead internal link, so this step is also the link
+      # check the design asks for.
+      - name: Build
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: book/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -63,7 +63,7 @@
 | 29 | `CAP-CMPT-03` prompt-too-long 反应式恢复 | Reactive 复用 Auto + 摘要 PTL 重试(≤3, 丢最老 20%) | `compaction/compaction.go:200,212`、`compaction/summarizer.go:14,151` | overflow / `stopReason:"length"` → 一次 compact-and-retry | `docs/compaction.md:39,85` | `A-PI` | `O-1` |
 | 30 | `CAP-CMPT-04` 非破坏 boundary | 留全历史，tail 前插 boundary+summary | `compaction/compaction.go:295,344` | `CompactionEntry`+`firstKeptEntryId`，原文不删 | `docs/compaction.md:79,152`、`docs/sessions.md:40` | `A-PI` | `O-1` |
 | 31 | `CAP-CMPT-05` 压缩与注入共存语义 | summary 后逐条重注入 skill 原文(5k/25k) | `compaction/compaction.go:349,370` | `custom_message` 是合法切割点，Pi 不重注入扩展消息 | `docs/compaction.md:130,134` | `A-PI` + `A-MF` | `O-3` |
-| 32 | `CAP-NOA-01` ref 寻址 | `mNNNNN` 永不重编号 + BLOCKED 硬保护 + 双向 map | `noa/refs.go:15,25,74,78`、`noa/const.go:5,12` | 模型无 ref；仅宿主 entry id 可经 `context_edit.targetId` 定位 | `docs/session-format.md:143,235` | `A-NONE` | `O-5` |
+| 32 | `CAP-NOA-01` ref 寻址 | `mNNNNN` 永不重编号 + BLOCKED 硬保护 + 双向 map | `noa/refs.go:15,25,74,78`、`noa/const.go:5,12` | 模型无 ref；仅 Pi entry id 可经 `context_edit.targetId` 定位 | `docs/session-format.md:143,235` | `A-NONE` | `O-5` |
 | 33 | `CAP-NOA-02` tier 分层（一次一层） | tier 创建即固定；终层重写检测 | `noa/tier.go:22,30,78`、`noa/types.go:56,61`、`noa/config.go:105` | 单层；重复压缩靠 `previousSummary` 迭代 | `docs/compaction.md:83` | `A-NONE` | `O-5` |
 | 34 | `CAP-NOA-03` block 与 rebuild | `bN` 块 + 原子尺寸门 + 回放得字节一致摘要 | `noa/compress.go:77,225`、`noa/state.go:38`、`noa/rebuild.go:37,45` | 无块模型，摘要落 `CompactionEntry`，原文留 JSONL | `docs/compaction.md:79`、`docs/session-format.md:226` | `A-NONE` | `O-5` |
 | 35 | `CAP-NOA-04` nudge 节律 | 双波段成长节律 + 压缩后重锚 + tier 独立节律 | `noa/nudge.go:11,20,56,114,206,300`、`noa/config.go:99-116` | 无压缩 nudge，只有阈值自动压缩与 `/compact` | `docs/compaction.md:32,37,41` | `A-NONE` | `O-5` |
@@ -94,11 +94,11 @@
 | 60 | `CAP-HOOK-03` 可改写/注入 | `UpdatedInput` + `AdditionalContext` + Stop block 注入续跑 | `hook/hook.go:89-98,115-131,135-143` | 改 `event.input`；`before_agent_start→{message}`；`tool_result` 换 content；`turn_end`/`agent_before_settle`→`entries+continue` | `dist/core/extensions/types.d.ts:1090,1114-1120,1125-1129,786-795` | `A-PI` | `O-1` |
 | 61 | `CAP-HOOK-04` Stop 门控 | `PreventContinuation` 硬停 vs `block` 续跑；`stopHookActive` 防死循环 | `hook/hook.go:115-131`、`harness/query.go:472-478` | `agent_before_settle` 最后可动作边界，一次续跑；`agent_settled` 纯通知 | `docs/extensions.md:67,118`、`dist/core/extensions/types.d.ts:796-805` | `A-PI` | `O-1`（无硬停原语） |
 | 62 | `CAP-MCP-01` stdio JSON-RPC 客户端 | JSON-RPC 2.0 换行分帧 + `NewStdioClient` + 权限 `AskUser` | `mcp/mcp.go:179-208`、`mcp/stdio.go:32,41-43` | core **有**内建 stdio+HTTP/OAuth/resources；本环境 `-builtin:mcp` **关闭**，由 A-EXT 接管 | `docs/mcp.md:9-31,32,111,141,232,236,264`；`~/.pi/agent/settings.json` | `A-EXT:pi-mcp-adapter`（core 有但停用） | `O-6`（core `O-1`） |
-| 63 | `CAP-MCP-02` 进程内 server | `InProcessServer` 把宿主函数适配为 `mcp__<server>__<tool>` | `mcp/mcp.go:21,34-57` | 无此概念；等价物 `pi.registerTool()`+namespace 分组。官方明示 server 侧不在内建范围 | `docs/extensions.md:133-151,163`、`pi-mcp/README.md:132` | `A-PI` | `O-3` |
+| 63 | `CAP-MCP-02` 进程内 server | `InProcessServer` 把 Pi 函数适配为 `mcp__<server>__<tool>` | `mcp/mcp.go:21,34-57` | 无此概念；等价物 `pi.registerTool()`+namespace 分组。官方明示 server 侧不在内建范围 | `docs/extensions.md:133-151,163`、`pi-mcp/README.md:132` | `A-PI` | `O-3` |
 | 64 | `CAP-MCP-03` 工具暴露与命名 | 三段式 `mcp__<server>__<tool>` | `mcp/mcp.go:21` | 同名三段式 + 四档 `exposure` + `--tools 'mcp__x__*'`；本环境由 A-EXT 自建代理 | `docs/mcp.md:77,191-217,225`；`pi-mcp-adapter/namespace-tools.ts` | `A-EXT:pi-mcp-adapter`（core 有但停用） | `O-6`（core `O-1`） |
 | 65 | `CAP-SKILL-01` `SKILL.md` + frontmatter | YAML 头 + 坏头降级不丢 skill | `skill/skill.go:207-245,248-293` | agentskills.io 规范；坏文件**不加载**，同名保留首个并警告 | `docs/skills.md:5,70-78,85` | `A-PI` | `O-1` |
 | 66 | `CAP-SKILL-02` 按需注入 | `Skill` 工具：listing 常驻，正文作独立 user 消息，listing 预算 8000 字符**永不丢弃** | `skill/skill.go:94-96,100-163,174-201` | 启动放 name+description+path 进 system prompt；正文由模型 `read` 按需加载 | `docs/skills.md:43-47`、`docs/how-pi-works.md:19-21`、`docs/settings.md:158` | `A-PI` | `O-1` |
-| 67 | `CAP-SKILL-03` 存活于压缩 | `reinjectSkills` 逐字重放边界前每个 skill 最新一次调用，预算 5000/25000 | `compaction/compaction.go:346-350,363+`、`llm/skillmsg.go:9-56` | **宿主给一半**（C1 修正）：roster（name+description+path）经 `sections.skills` 随 `CompactionEntry.systemMessage` checkpoint 存活于压缩；**正文**无逐字 re-inject（摘要时截 2000 字符） | `docs/session-format.md:84,127-131,248`、`docs/skills.md:43-45`、`docs/compaction.md:130-136,291`（S7 NEG-3，C1 改判；与 `CAP-NOA-11` 的 system checkpoint 判定对齐） | `A-PI(部分)` | `O-3` |
+| 67 | `CAP-SKILL-03` 存活于压缩 | `reinjectSkills` 逐字重放边界前每个 skill 最新一次调用，预算 5000/25000 | `compaction/compaction.go:346-350,363+`、`llm/skillmsg.go:9-56` | **Pi 给一半**（C1 修正）：roster（name+description+path）经 `sections.skills` 随 `CompactionEntry.systemMessage` checkpoint 存活于压缩；**正文**无逐字 re-inject（摘要时截 2000 字符） | `docs/session-format.md:84,127-131,248`、`docs/skills.md:43-45`、`docs/compaction.md:130-136,291`（S7 NEG-3，C1 改判；与 `CAP-NOA-11` 的 system checkpoint 判定对齐） | `A-PI(部分)` | `O-3` |
 | 68 | `CAP-SKILL-04` 解锁 skill 声明的 MCP 工具 | frontmatter `mcps:`；调用时把 deferred 工具加入 unlock 集合并附名单 | `skill/skill.go:48-53,149-156,255-258` | 方向相反：`allowed-tools` 是预授权列表；MCP 侧由 deferred/tool_search 驱动，与 skill **无联动** | `docs/skills.md:78`、`docs/mcp.md:191-217`（S7 NEG-4） | `A-PI`(部分) | `O-5` |
 | 69 | `CAP-PLAN-01` 只读探索阶段 | `EnterTool`；只读由权限层**代码**强制 | `plan/plan.go:81-98`、`permission/permission.go:52,100-103` | core 无（`README.md` 明示跳过）；原语充足；随包示例**未装载** | `README.md:19`、`docs/extensions.md:106,165,170-178,187,263` | `A-NONE` | `O-2` |
 | 70 | `CAP-PLAN-02` `ExitPlanMode`+审批门 | `Approver` 回调；拒绝则 `tool.Errorf` 且留在 plan | `plan/plan.go:100-144` | 无内建；审批原语 `before_agent_start` 改 prompt/工具 | `docs/extensions.md:104` | `A-NONE` | `O-2` |
@@ -112,8 +112,8 @@
 | 78 | `CAP-CTX-03` 注入预算与降级 | 分层压缩 + 溢出学习窗 + `OnWarn` | `noa/tier.go`、`noaadapter/overflow.go:9-57` | 无「注入预算」，只有压缩阈值 | `docs/compaction.md:43-49` | `A-MF` | `O-5` |
 | 79 | `CAP-OBS-01` 状态可观测 | 无对应目录（跨切面） | — | 无工作流状态等价物（`/session`、UsageEntry 为用量账目，非阶段状态；T1 P12） | `docs/rpc-commands.md:526-560`、`docs/session-format.md:113-128` | `A-MF` | `O-5` |
 | 80 | `CAP-OBS-02` 子代理日志与可追溯 | 无对应目录（跨切面） | — | core 无子代理；A-EXT 给结果文本 + 可选 log | `pi-subagents-lite/README.md:219-221` | `A-MF` | `O-5` |
-| 81 | `CAP-TEST-01` 自查/门禁（verify gate） | 无对应目录（跨切面） | — | 无宿主 verify 门 | — | `A-MF` | `O-5` |
-| 82 | `CAP-TEST-02` harness 自身回归 | 无对应目录（跨切面） | — | 无宿主等价 | — | `A-MF` | `O-5` |
+| 81 | `CAP-TEST-01` 自查/门禁（verify gate） | 无对应目录（跨切面） | — | 无 Pi verify 门 | — | `A-MF` | `O-5` |
+| 82 | `CAP-TEST-02` harness 自身回归 | 无对应目录（跨切面） | — | 无 Pi 等价 | — | `A-MF` | `O-5` |
 
 **覆盖自检**：19 域 / 82 项（`LLM`4 + `TOOL`6 + `PERM`5 + `LOOP`6 + `SUB`3 + `COORD`2 + `CMPT`5 + `NOA`11 + `NOAA`7 + `TRANS`4 + `CORE`4 + `HOOK`4 + `MCP`3 + `SKILL`4 + `PLAN`3 + `MEM`4 + `CTX`3 + `OBS`2 + `TEST`2）。
 满足 AC：Norma 16 个实现包全覆盖；`NOA`≥9（实为 11）、`NOAA`≥5（实为 7）、`TRANS`≥3（实为 4）。
@@ -122,7 +122,7 @@
 
 ## 2. 表 B — myflow 承担度与强度（design.md §8.3）
 
-> 「强制层级」标出**施加强制者**：`E-C[myflow]`、`E-G[myflow→Pi]`、`E-N[myflow]`（有效宿主强制括注 `(有效=E-*[Pi])`）。
+> 「强制层级」标出**施加强制者**：`E-C[myflow]`、`E-G[myflow→Pi]`、`E-N[myflow]`（有效 Pi 强制括注 `(有效=E-*[Pi])`）。
 > 「优先级」按 `design.md` §9 规则给出的**初判**，最终以 `03-gap-register.md`（B2）为准；
 > `P0-R` 依据 `research/contract-risks-and-advantages.md` 的 `RISK-*` 码，最终以 `04-risk-register.md`（B3）为准。
 
@@ -145,8 +145,8 @@
 | 15 | `CAP-PERM-05` | 未用 `setActiveTools` | — | `E-N[myflow]` | `R-∅` | 无 | `V-GAP` | P2 |
 | 16 | `CAP-LOOP-01` | 依赖 Pi 循环 | — | `E-N[myflow]`(有效 `E-C[Pi]`) | `R-∅` | 无 | `V-PI` | 不补 |
 | 17 | `CAP-LOOP-02` | dispatch 级写者互斥（无界写者禁并行） | `sb:636-648` | `E-C[myflow]` | `R-T sbt:308,334` | 仅 dispatch 粒度，无消息级只读/写调度 | `V-GAP` | P2 |
-| 18 | `CAP-LOOP-03` | 依赖 Pi 切割/配对，无校验 | — | `E-N[myflow]`(有效 `E-C[Pi]`) | `R-∅` | 只能靠宿主 | `V-UP` | 不补 |
-| 19 | `CAP-LOOP-04` | 只读 `agent_before_settle.outcome` | `ix:472-473` | `E-G[myflow]` | `R-∅` | 只读宿主终态，无自有建模 | `V-UP` | 不补 |
+| 18 | `CAP-LOOP-03` | 依赖 Pi 切割/配对，无校验 | — | `E-N[myflow]`(有效 `E-C[Pi]`) | `R-∅` | 只能靠 Pi | `V-UP` | 不补 |
+| 19 | `CAP-LOOP-04` | 只读 `agent_before_settle.outcome` | `ix:472-473` | `E-G[myflow]` | `R-∅` | 只读 Pi 终态，无自有建模 | `V-UP` | 不补 |
 | 20 | `CAP-LOOP-05` | `signal`+`timeoutMs` 杀进程树 | `sb:456-476,527-538,545` | `E-C[myflow]` | `R-∅` | 子代理取消有代码强制 | `V-OWNED` | 不补 |
 | 21 | `CAP-LOOP-06` | 墙钟 900s 杀进程/exit124/留日志；verify 门控续跑 | `sb:64,473-484,519`、`ix:464-495` | `E-C[myflow]` / `E-G[myflow]` | `R-T sbt:208,269` | 仅子代理与 verify；主会话无 turn/时长预算 | `V-GAP` | P2 |
 | 22 | `CAP-SUB-01` | 单/并行/链子代理；子进程带隔离 prompt/工具 | `sb:394,403,431,573` | `E-C[myflow]` | `R-T sbt:415` | myflow 有独立实现且带隔离（带 log 更强） | `V-OWNED` | 不补 |
@@ -158,7 +158,7 @@
 | 28 | `CAP-CMPT-02` | 无熔断 | — | `E-N[myflow]`(有效 `E-C[Pi]`) | `R-∅` | 缺连败熔断 | `V-GAP` | P2 |
 | 29 | `CAP-CMPT-03` | 委托 Pi | — | `E-N[myflow]`(有效 `E-C[Pi]`) | `R-∅` | — | `V-PI` | 不补 |
 | 30 | `CAP-CMPT-04` | 委托 Pi | — | `E-N[myflow]`(有效 `E-C[Pi]`) | `R-∅` | — | `V-PI` | 不补 |
-| 31 | `CAP-CMPT-05` | 每回合重注入 + `lastInjectionTs>lastCompactionTs` 重挂 + 缺失扫描 | `ix:319-338,384-406,455-457` | `E-C[myflow]` | `R-T ext:224` | 有补偿但依赖宿主事件时序 | `V-QUAL` | P1（核心流程：状态注入） |
+| 31 | `CAP-CMPT-05` | 每回合重注入 + `lastInjectionTs>lastCompactionTs` 重挂 + 缺失扫描 | `ix:319-338,384-406,455-457` | `E-C[myflow]` | `R-T ext:224` | 有补偿但依赖 Pi 事件时序 | `V-QUAL` | P1（核心流程：状态注入） |
 | 32 | `CAP-NOA-01` | 无 | — | `E-N[myflow]` | `R-∅` | — | `V-GAP` | P2 |
 | 33 | `CAP-NOA-02` | 无 | — | `E-N[myflow]` | `R-∅` | — | `V-GAP` | P2 |
 | 34 | `CAP-NOA-03` | 无 | — | `E-N[myflow]` | `R-∅` | — | `V-GAP` | P2 |
@@ -166,7 +166,7 @@
 | 36 | `CAP-NOA-05` | 无自身机制，靠 Pi 消息粒度 | — | `E-N[myflow]` | `R-∅` | 任务粒度够用 | `V-PI` | 不补 |
 | 37 | `CAP-NOA-06` | 无自身机制，靠 Pi 禁切 tool result | — | `E-N[myflow]` | `R-∅` | — | `V-PI` | 不补 |
 | 38 | `CAP-NOA-07` | 无工具级硬保护/尾部保护 | — | `E-N[myflow]` | `R-∅` | 上下文完整性缺口 | `V-GAP` | P1 |
-| 39 | `CAP-NOA-08` | 无上下文级紧急阀；`ci` 截断仅作用于**注入的 task 文件** | `ci:22-26,250-256` | `E-N[myflow]` | `R-∅`（邻近 `cit`，C1 `F-3` 统一口径） | 模型工具输出无紧急阀（宿主给原语、无触发） | `V-GAP` | P1 |
+| 39 | `CAP-NOA-08` | 无上下文级紧急阀；`ci` 截断仅作用于**注入的 task 文件** | `ci:22-26,250-256` | `E-N[myflow]` | `R-∅`（邻近 `cit`，C1 `F-3` 统一口径） | 模型工具输出无紧急阀（Pi 给原语、无触发） | `V-GAP` | P1 |
 | 40 | `CAP-NOA-09` | 无 | — | `E-N[myflow]` | `R-∅` | — | `V-GAP` | P2 |
 | 41 | `CAP-NOA-10` | 无自建账本/归档 | — | `E-N[myflow]` | `R-∅` | Pi 原文可回溯，等价 | `V-PI` | 不补 |
 | 42 | `CAP-NOA-11` | 子代理 system prompt 经 `--append-system-prompt`；主会话**无常驻** myflow 提示词 | `sb:427-431`、`ix:319-337` | `E-C[myflow]` | `R-T ext` | 机制 Pi 已给，主会话未用 | `V-PI`（机制）/ 用法偏弱 | P2 |
@@ -194,7 +194,7 @@
 | 64 | `CAP-MCP-03` | 无 | — | `E-N[myflow]` | `R-∅` | — | `V-EXT`（本环境）/ `V-PI`(core 有但停用) | 不补 |
 | 65 | `CAP-SKILL-01` | 8 个 `SKILL.md` 仅 `name`/`description`；结构卫生由测试锁定 | `sh:29-65` | `E-C[myflow]` | `R-T sh:29,54` | 强于 Pi（Pi 仅警告） | `V-PI` | 不补 |
 | 66 | `CAP-SKILL-02` | 依赖 Pi 按需加载；自建物是 agent/prompt 解析 `tools:` | `ag:164-171` | `E-C[Pi]`(加载) + `E-G[myflow]`(白名单) | `R-T sh` | — | `V-PI` | 不补 |
-| 67 | `CAP-SKILL-03` | 无 re-inject；状态靠 `context` 重注入（属 `CTX`）；roster 侧由宿主 checkpoint 承担 | — | `E-N[myflow]` | `R-∅` | 缺**正文**逐字 re-inject（roster 已由宿主覆盖） | `V-GAP` | P2 |
+| 67 | `CAP-SKILL-03` | 无 re-inject；状态靠 `context` 重注入（属 `CTX`）；roster 侧由 Pi checkpoint 承担 | — | `E-N[myflow]` | `R-∅` | 缺**正文**逐字 re-inject（roster 已由 Pi 覆盖） | `V-GAP` | P2 |
 | 68 | `CAP-SKILL-04` | 无（无 `mcps:`，无 MCP） | — | `E-N[myflow]` | `R-∅` | 缺 | `V-GAP` | P2 |
 | 69 | `CAP-PLAN-01` | 无只读阶段代码守卫；仅文字 | `.pi/skills/myflow-brainstorm/SKILL.md:9-13` | `E-P[myflow]` | `R-∅` | 缺只读强制 | `V-GAP` | P1 |
 | 70 | `CAP-PLAN-02` | 评审门 + `task.py` 空 jsonl 拒绝 `start` | `.myflow/workflow.md:20,106-107`、`task.py:493-508` | `E-P[myflow]` / `E-C[myflow]` | `R-T tgt:81` | myflow 门在编码**开始前**，非探索期 | `V-QUAL` | P1（核心流程：任务生命周期） |
@@ -221,14 +221,14 @@
 
 > 计数口径：每个 `CAP-*` 计一次，取**主归属码**（`O-*`）；双码项在 §3.3 脚注列出。共 82 项。
 
-| `V-*` \ `O-*` | `O-1` 宿主内建 | `O-2` 刻意外包 | `O-3` 宿主部分 | `O-4` 契约依赖 | `O-5` 双方皆无 | `O-6` 扩展提供 | 合计 |
+| `V-*` \ `O-*` | `O-1` Pi 内建 | `O-2` 刻意外包 | `O-3` Pi 部分 | `O-4` 契约依赖 | `O-5` 双方皆无 | `O-6` 扩展提供 | 合计 |
 |---|---|---|---|---|---|---|---|
 | `V-GAP` 真缺口 | 1 | 5 | 8 | 1 | 14 | 0 | **29** |
 | `V-QUAL` 质量差 | 0 | 1 | 2 | 0 | 2 | 1 | **6** |
 | `V-OWNED` 已承担 | 1 | 0 | 1 | 0 | 1 | 4 | **7** |
 | `V-PI` 非缺口 | 29 | 0 | 3 | 0 | 0 | 0 | **32** |
 | `V-EXT` 扩展已给 | 0 | 0 | 0 | 0 | 0 | 2 | **2** |
-| `V-UP` 上游约束 | 0 | 0 | 2 | 0 | 0 | 0 | **2** |
+| `V-UP` 运行时约束 | 0 | 0 | 2 | 0 | 0 | 0 | **2** |
 | `V-ADV` 相对优势 | 0 | 0 | 0 | 0 | 4 | 0 | **4** |
 | `V-NA` 场景无关 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 | **合计** | **31** | **6** | **16** | **1** | **21** | **7** | **82** |
@@ -242,7 +242,7 @@
 | 已承担数（`V-OWNED`） | **7** |
 | 非缺口数（`V-PI`） | **32** |
 | 扩展已给数（`V-EXT`） | **2** |
-| 上游约束数（`V-UP`） | **2** |
+| 运行时约束数（`V-UP`） | **2** |
 | 场景无关数（`V-NA`） | **0** |
 | 相对优势数（`V-ADV`） | **4** |
 | **合计** | **82** |
@@ -255,8 +255,8 @@
   - `CTX-02`：`O-3` 为主码，兼 `O-4`（依赖 `PI_SESSION_ID` ↔ `getSessionId()` 的未文档化等价，见 `RISK-01`）。
   - `LLM-04`：`O-1` 为主码（重试），兼 `O-5`（限流无人提供）。
 - **按域统计**：真缺口最集中域 = `NOA`(7: 01/02/03/04/07/08/09) + `PERM`(5: 01–05) + `PLAN`(2) + `MEM`(2) + `CMPT`(2) + `NOAA`(3) + `TOOL`(2) + `SKILL`(2) + `LOOP`(2) + `TRANS`(1) + `LLM`(1)。
-- **C1 复核修正（B5）**：5 项主归属码由 `O-5` 上调为 `O-3`（`CAP-LOOP-02`、`CAP-CMPT-02`、`CAP-NOA-07`、`CAP-NOA-08`、`CAP-SKILL-03`）——它们并非「双方皆无」，而是宿主给原语/半边、语义靠 myflow 补齐；故 `O-3` 由 11 升至 16、`O-5` 由 26 降至 21（`V-GAP` 行：`O-3` 3→8、`O-5` 19→14）。依据见 `research/c1-neg-recheck.md`。
-- **`V-PI` 的「重复造轮子」检查**：`V-PI` 的 32 项中，myflow **未重复实现**任何宿主能力（myflow 在这些行一律记 `E-N[myflow]`、完全委托 Pi）。唯一「部分自建」的是 `CMPT-05`（压缩后重注入）与 `CTX-01`（状态注入），属 `O-3`/`V-OWNED`，为 Pi 只给原语、语义需 myflow 补齐，不构成重复造轮子。
+- **C1 复核修正（B5）**：5 项主归属码由 `O-5` 上调为 `O-3`（`CAP-LOOP-02`、`CAP-CMPT-02`、`CAP-NOA-07`、`CAP-NOA-08`、`CAP-SKILL-03`）——它们并非「双方皆无」，而是 Pi 给原语/半边、语义靠 myflow 补齐；故 `O-3` 由 11 升至 16、`O-5` 由 26 降至 21（`V-GAP` 行：`O-3` 3→8、`O-5` 19→14）。依据见 `research/c1-neg-recheck.md`。
+- **`V-PI` 的「重复造轮子」检查**：`V-PI` 的 32 项中，myflow **未重复实现**任何 Pi 能力（myflow 在这些行一律记 `E-N[myflow]`、完全委托 Pi）。唯一「部分自建」的是 `CMPT-05`（压缩后重注入）与 `CTX-01`（状态注入），属 `O-3`/`V-OWNED`，为 Pi 只给原语、语义需 myflow 补齐，不构成重复造轮子。
 
 ---
 
@@ -271,7 +271,7 @@
 | P2 | **环境契约**（`PI_*` 解析时机、`AI_AGENT=pi`、shell 解析顺序、终端能力探测） | `environment-variables.md:22-50`、`windows.md:19-25`、`shell-aliases.md:9-25`、`settings.md:137-143`、`terminal-setup.md:171-190` | **高**：`AGENTS.md` 依赖 `shellPath`；`PI_SESSION_ID` 形状/时机是 `RISK-01` 输入 | 建议新增域 `ENV`（≥3 项） |
 | P3 | **进程集成协议**（Print/JSON/RPC 四模式 + `RpcClient` + SDK 嵌入） | `cli-integration.md:10-22,32-56`、`json.md:8-30`、`rpc.md:16-30`、`sdk.md:6-31` | 中：myflow 仅 TUI；RPC/JSON 是无人值守通道 | 建议新增域 `IPC`（≥3 项） |
 | P4 | **codemode 沙箱**（QuickJS 内 `tools.<n>()`、`Promise.allSettled`、`store/load`、`searchTools`、`models.classify/generateImages`） | `cli.md:155-156`、`codemode.md:5-40,54-60,97-150`、`extensions.md:181-186` | 中高：可替代 myflow 自建批量取数/过滤 | 建议新增域 `CODE`（≥3 项） |
-| P5 | **非 LLM 模型 + 请求级路由 + prompt cache** | `models.md:94-100,130-200`、`virtual-models.md:37,93-110`、`settings.md:21` | 低：宿主已给 | 建议扩 `LLM-06..08` |
+| P5 | **非 LLM 模型 + 请求级路由 + prompt cache** | `models.md:94-100,130-200`、`virtual-models.md:37,93-110`、`settings.md:21` | 低：Pi 已给 | 建议扩 `LLM-06..08` |
 | P6 | **会话树与分支**（`/tree`·`/fork`·`/clone`、`label`、`branch_summary`、`get_tree`/`get_entries`） | `sessions.md:20-40,56-70`、`session-format.md:189-200,226-240`、`rpc-commands.md` | **高**：myflow 任务指针/会话键派生建立在会话身份上 | 建议新增域 `SESS` 或扩 `CORE`/`TRANS` |
 | P7 | **上下文文件与提示词装配**（`AGENTS.md` 祖先链、`SYSTEM.md` 替换、`APPEND_SYSTEM.md` 追加、模板参数） | `configuration.md:17-39,41-52`、`prompt-templates.md:8-18,28-45` | 中高：myflow 已用 `.pi/prompts/`；**未用** `SYSTEM.md`/`APPEND_SYSTEM.md` 与参数语法 | 建议新增域 `PROMPT`（≥2 项） |
 | P8 | **队列与续跑边界**（steering/follow-up 双队列、`queue_update`、`agent_end` vs `agent_settled`、`agent_before_settle` 单次续跑） | `usage.md:30-40`、`settings.md:31-32`、`extensions.md:63-67,118`、`json.md:121`、`cli-integration.md:50` | 中高：myflow **已用** `agent_before_settle` 做 verify gate；**未用**队列 | 建议扩 `LOOP-07` |

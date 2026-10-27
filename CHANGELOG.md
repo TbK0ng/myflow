@@ -6,6 +6,22 @@ reproducible zip). Dates are the tag dates.
 
 ## Unreleased
 
+### Added
+
+- **The book.** `book/` is a 27-page VitePress site published to
+  <https://tbk0ng.github.io/myflow/> by `.github/workflows/book.yml` on every
+  push to `main`. 序 / 系统篇 / 论证篇 (each unusual choice gets 别人怎么做 →
+  我怎么换 → 代价, with the trigger that would reverse it) / 诚实篇 (a 24-row
+  defect register split into 文档漂移, 主动权衡 and 真缺) / 附录. The site is
+  outside the release payload by construction: `release-payload.json` selects
+  `.pi/` and `.myflow/` only. No root `README.md` yet — the book is the entry
+  point.
+- **`.myflow/spec/harness/index.md` records the `ctx.cwd` dispatch gotcha.**
+  `myflow_subagent` treats `ctx.cwd` as the project root where every other
+  entry point calls `findProjectRoot`, so a dispatch from a subdirectory writes
+  its registry where `/mysubagents` cannot see it. Found while writing the book;
+  the call site is unchanged, the gotcha is documented.
+
 ## 0.3.0 — 2026-10-27
 
 ### Changed
