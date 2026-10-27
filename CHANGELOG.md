@@ -6,15 +6,7 @@ reproducible zip). Dates are the tag dates.
 
 ## Unreleased
 
-### Added
-
-- **`/mysubagents`**: one panel over every dispatched run and every detached
-  background task. `board` is read-only (front runs in accent, background tasks
-  in warning, Enter opens a transcript/output viewer); `tree` groups runs by the
-  dispatch call that produced them and can stop a run, cancel a group, steer it
-  with one line, or rerun it; `background` can stop, prune finished entries, or
-  replay a command. `npm` has no new dependencies and `pi-subagents-lite` is not
-  involved.
+## 0.3.0 — 2026-10-27
 
 ### Changed
 
@@ -29,18 +21,6 @@ reproducible zip). Dates are the tag dates.
 - **A run can be steered or aborted through `<runId>.ctl.jsonl`**, appended by
   the board and forwarded by the dispatcher's poll loop; this is the only path
   that works when the dispatching session is blocked inside its own tool call.
-
-### Refactored
-
-- The background tools' cores are now exported (`startBackgroundTask`,
-  `stopBackgroundTask`, `readLogTail`) so the panel and the tools share one
-  implementation; the `myflow_bg_*` behavior is unchanged (their tests ran
-  untouched).
-
-## 0.3.0 — 2026-10-27
-
-### Changed
-
 - **Windows only, with Git Bash.** Every non-win32 code path is deleted rather
   than kept "just in case": the shell resolver has no `platform` parameter, a
   tree dies by `taskkill /F /T`, a worker is spawned with `DETACHED_PROCESS |
@@ -65,6 +45,13 @@ reproducible zip). Dates are the tag dates.
 
 ### Added
 
+- **`/mysubagents`**: one panel over every dispatched run and every detached
+  background task. `board` is read-only (front runs in accent, background tasks
+  in warning, Enter opens a transcript/output viewer); `tree` groups runs by the
+  dispatch call that produced them and can stop a run, cancel a group, steer it
+  with one line, or rerun it; `background` can stop, prune finished entries, or
+  replay a command. `npm` has no new dependencies and `pi-subagents-lite` is not
+  involved.
 - Types are checked: `typescript` and `@types/node` are real dependencies,
   `npm run typecheck` is the gate, and `npm run check` runs it before the suite.
   The first run fixed a wrong `Dirent` type in agent discovery and made
@@ -79,6 +66,12 @@ reproducible zip). Dates are the tag dates.
 - Guards for the drift class this release fixes: a `.myflow/spec/` path named in
   an instruction file must exist, the `32768` injection default must agree across
   TypeScript and Python, and the verify child must not inherit `MYFLOW_*`.
+- **The release ships the whole harness.** The manifest copies `.pi/` and
+  `.myflow/` entire and excludes only machine state, task history and the live
+  verify config, so `.myflow/spec/` travels with the payload while
+  `.myflow/worktree.template.yaml` stands in for this repository's
+  `worktree.yaml`. `--verify` now also proves every shipped script starts under
+  its own interpreter and that the installer doc names no concrete version.
 
 ### Fixed
 
@@ -89,6 +82,13 @@ reproducible zip). Dates are the tag dates.
   `~/.pi/myflow/channels`.
 - The stopped-run test slept a fixed 1.5s for a Windows tree kill and failed
   about one run in seven; it now polls to a deadline.
+
+### Refactored
+
+- The background tools' cores are now exported (`startBackgroundTask`,
+  `stopBackgroundTask`, `readLogTail`) so the panel and the tools share one
+  implementation; the `myflow_bg_*` behavior is unchanged (their tests ran
+  untouched).
 
 ## 0.2.0 - 2026-10-21
 

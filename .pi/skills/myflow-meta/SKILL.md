@@ -49,8 +49,10 @@ the platform-specific work — the extension, `bg_runner.mjs`, `channel.py`,
 .myflow/
   agents/{architect,reviewer}.md      # channel runtime peers (design review, code review)
   workflow.md                       # phases, routing, per-turn state blocks
+  spec/                             # the harness's own specification (ships in the payload)
+  worktree.template.yaml            # ships: worktree + verify config template with no project commands
+  worktree.yaml                     # this repository's own verify config (not shipped)
   config.yaml                       # optional, project-owned: injection budgets, skip keyword, channel trust
-  worktree.yaml                     # optional, project-owned: parallel sessions + verify commands
   scripts/get_context.py            # session context (workflow + task + git)
   scripts/task.py                   # task lifecycle + session pointer
   scripts/bg_runner.mjs             # detached background-task wrapper (records its own exit)
@@ -70,18 +72,19 @@ tools/                              # harness development only, never in the pay
 
 ## Payload
 
-To install the harness in another project, copy:
+To install the harness in another project, copy `.pi/` and `.myflow/` whole:
 
 - `.pi/` — extension, agents, prompts, skills
-- `.myflow/agents/` — channel runtime agent definitions
-- `.myflow/workflow.md` and `.myflow/scripts/`
+- `.myflow/` — `workflow.md`, `scripts/`, `agents/`, `spec/`, `worktree.template.yaml`
 
-Do **not** copy `.myflow/spec/`, `.myflow/tasks/`, `.myflow/archive/`,
-`.myflow/.runtime/`, `.myflow/config.yaml`, or `.myflow/worktree.yaml` — those
-belong to the project. Both config files are optional: every reader falls back
-to built-in defaults, so a project without them is configured, not broken.
-`tests/`, `package.json`, `tsconfig.json`, and `tools/` are harness development
-and are not copied either.
+Do **not** copy `.myflow/tasks/`, `.myflow/archive/`, or `.myflow/.runtime/` —
+one project's deliverables and machine state. `.myflow/worktree.yaml` stays
+behind too: it names this repository's own `verify:` commands. The release
+carries `.myflow/worktree.template.yaml`, which the installer copies into place
+and edits. `.myflow/config.yaml` only exists in a project that overrides a
+default, so a release often has none: every reader falls back to a built-in
+default. `tests/`, `package.json`, `tsconfig.json`, and `tools/` are harness
+development and are not copied either.
 
 The payload list has exactly **one source**: `tools/release-payload.json`
 (`dirs` / `trees` / `files` / `exclude`). `tests/scaffold.test.ts` and

@@ -14,6 +14,10 @@ harness itself, so they hold in every project that carries the payload.
 - `.myflow/workflow.md`
 - `.myflow/scripts/`
 - `.myflow/agents/` — the channel runtime's worker definitions
+- `.myflow/spec/` — the harness's own specification (index, `harness/`, `guides/`)
+- `.myflow/worktree.template.yaml` — worktree sessions and the verify gate
+  template; the installer copies it to `.myflow/worktree.yaml` and replaces the
+  `verify:` list, because a scaffold cannot know the target project's checks
 
 The payload list has exactly **one source**: `tools/release-payload.json`
 (`dirs` / `trees` / `files` / `exclude`). `tests/scaffold.test.ts` and
@@ -22,8 +26,8 @@ a manifest edit — never a second list in either consumer.
 
 **Project-owned** — never copy between projects:
 
-- `.myflow/spec/` (this project's conventions), `.myflow/config.yaml`,
-  `.myflow/worktree.yaml`
+- `.myflow/config.yaml` — injection budgets, skip keyword, channel trust; absent
+  from a repository that runs on the defaults
 - `.myflow/tasks/`, `.myflow/archive/` — deliverables, committed with the code
 - `.myflow/.runtime/` — machine state (sessions, worktree registry, background
   tasks and their logs, sub-agent logs). Channel worker logs are **not** here:

@@ -1,0 +1,20 @@
+# Scaffold default. Copy it to `.myflow/worktree.yaml`, then replace `verify:`
+# with the target project's own check command (npm / pytest / cargo / ...).
+#
+# Every key is optional. The defaults are what this file shows: sessions live in
+# `../worktrees`, nothing is copied into a session, and only `verify:` runs.
+#
+# Keep comments on their own line: the reader used by `worktree.py` treats
+# everything after `key: ` as the value, so `key: value # note` would include
+# the note in the value.
+worktree_dir: ../worktrees
+
+# copy:                    # files copied into each worktree
+#   - .env
+
+# post_create:             # commands run once per created worktree
+#   - npm ci
+
+verify:
+  # As shipped this only proves the harness is alive. Replace it.
+  - python3 .myflow/scripts/task.py current

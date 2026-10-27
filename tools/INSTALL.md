@@ -4,24 +4,32 @@ This file ships **inside** a release (`myflow-<version>/INSTALL.md`). It is for
 the person installing it — it is not part of the payload, so do not copy it (or
 `RELEASE.md`) into the target project.
 
-The release directory contains exactly four things that belong to a project:
+The release directory contains the whole harness:
 
 ```
-.pi/                 the Pi extension, 3 agents, 3 prompts, 8 skills
-.myflow/agents/      channel-runtime worker definitions (architect, reviewer)
-.myflow/scripts/     5 scripts: task.py, get_context.py, worktree.py, channel.py, bg_runner.mjs
-.myflow/workflow.md  phases, routing, and the per-turn workflow-state blocks
+.pi/                            the Pi extension, 3 agents, 3 prompts, 8 skills
+.myflow/agents/                 channel-runtime worker definitions (architect, reviewer)
+.myflow/scripts/                5 scripts: task.py, get_context.py, worktree.py, channel.py, bg_runner.mjs
+.myflow/spec/                   the harness's own specification: index, harness/, guides/
+.myflow/workflow.md             phases, routing, and the per-turn workflow-state blocks
+.myflow/worktree.template.yaml  the worktree + verify config template, with no project commands
 ```
 
-Nothing in the release is project-specific: no task history, no spec tree, no
-machine state, no absolute paths.
+Nothing machine-specific rides along: no `.myflow/.runtime/`, no task history,
+no absolute paths, and no `verify:` command that only exists here.
+
+The payload has **no runtime dependencies**: the extension imports Node built-ins
+only, Pi strips the TypeScript itself, and the scripts are Python 3 plus one
+`.mjs`. There is nothing to `npm install`.
 
 **Windows only.** The harness runs on Windows with Git Bash: the background
 tools need a POSIX shell and `taskkill`, the channel runtime and the worktree
 sessions use `DETACHED_PROCESS` / `taskkill`, and the path guards assume NTFS
 case folding. Every entry point refuses to start anywhere else.
 
-Prerequisites: `python3` on `PATH`, Node.js 22 or newer, and Git for Windows.
+Prerequisites: a **git repository** (the harness reads git state and its worktree
+sessions are git worktrees), `python3` on `PATH`, Node.js 22 or newer, and Git for
+Windows.
 
 ## 1. Copy the payload
 
@@ -29,13 +37,21 @@ Unpack the zip, then copy from the release directory into the target project
 root, from Git Bash:
 
 ```bash
-REL=/c/src/myflow-0.2.0            # wherever you unpacked it
+REL=/c/src/myflow-<version>        # replace <version>: wherever you unpacked it
 DST=/c/work/target-project
 
 mkdir -p "$DST/.myflow"
 cp -r "$REL/.pi" "$DST/"
-cp -r "$REL/.myflow/agents" "$REL/.myflow/scripts" "$DST/.myflow/"
+cp -r "$REL/.myflow/agents" "$REL/.myflow/scripts" "$REL/.myflow/spec" "$DST/.myflow/"
 cp "$REL/.myflow/workflow.md" "$DST/.myflow/"
+cp "$REL/.myflow/worktree.template.yaml" "$DST/.myflow/worktree.yaml"
+```
+
+Then edit `.myflow/worktree.yaml` and replace `verify:` with the target project's
+own check command. The template ships with
+`python3 .myflow/scripts/task.py current`, which only proves the harness runs;
+the settle gate executes that list after a `myflow-check` sub-agent, so a project
+that never edits it gets a gate that checks nothing.
 ```
 
 Why a copy and not a symlink: the payload is meant to be edit-in-place once a
@@ -46,13 +62,18 @@ in the wrong repository.
 
 | Path | Why not |
 | --- | --- |
-| `.myflow/spec/` | The **target project's** own conventions. Copying another project's spec makes the model follow rules that do not apply. It may legitimately not exist yet. |
 | `.myflow/tasks/`, `.myflow/archive/` | One project's deliverables. They reference paths and history that do not exist in the target. |
 | `.myflow/.runtime/` | Machine state (session pointers, worktree registry, background tasks, worker logs). Copying it points sessions at tasks that are not there. |
-| `.myflow/config.yaml`, `.myflow/worktree.yaml` | Optional, project-owned configuration; the harness runs without them. |
+| `.myflow/config.yaml` | Absent on purpose: this repository runs on the built-in defaults. Create one in the target only when an injection budget, the skip keyword, or channel trust has to change. |
 | `tests/`, `package.json`, `tsconfig.json` | Harness development only — they run `node --test` against the harness's own source. Not needed to use the payload. |
 | `tools/` | Harness development only: the release manifest (`release-payload.json`), the build script (`release.py`), and this file. |
 | `INSTALL.md`, `RELEASE.md` | Instructions for the installer, not runtime files. |
+
+| `.myflow/worktree.yaml` | The live verify config; the release carries `.myflow/worktree.template.yaml` instead. Copy that one into place and edit its `verify:` list. |
+
+`.gitattributes`: if the target pins line endings, add `* text=auto eol=lf` so the
+shipped Markdown and scripts stay LF — several harness tests and prompts compare
+raw file content.
 
 ## 3. Let Pi load it
 
@@ -109,7 +130,8 @@ Then `/myflow-brainstorm` writes the plan (`prd.md` / `design.md` /
 `implement.md`) into `.myflow/tasks/first/`, and `task.py start` admits the task
 once the plan is approved.
 
-`.myflow/spec/` is **project-owned and may be empty** on day one:
-`myflow-before-dev` reports `NO_SPEC` and continues instead of inventing rules.
-Run the `myflow-spec-bootstrap` skill when you want real, source-backed project
-conventions, or let `myflow-update-spec` write them as the project grows.
+The spec tree ships with the payload: `.myflow/spec/` documents the harness
+itself. Add the target project's own areas beside it with
+`myflow-spec-bootstrap`, or let `myflow-update-spec` write them as the project
+grows. A project that deletes the tree is not broken — `myflow-before-dev`
+reports `NO_SPEC` and continues instead of inventing rules.

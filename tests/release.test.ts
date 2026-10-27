@@ -127,7 +127,7 @@ test("-3: --out ships the payload plus the docs, and nothing project-owned", () 
     assert.ok(existsSync(join(stage, "RELEASE.md")), "RELEASE.md must ship");
 
     const entries = entriesUnder(stage);
-    for (const forbidden of [".myflow/spec", ".myflow/tasks", ".myflow/archive", ".myflow/.runtime", "tests", "tools", "dist", "package.json", "tsconfig.json"]) {
+    for (const forbidden of [".myflow/tasks", ".myflow/archive", ".myflow/.runtime", "tests", "tools", "dist", "package.json", "tsconfig.json"]) {
       assert.deepEqual(
         entries.filter((rel) => isInside(rel, forbidden)),
         [],
@@ -249,8 +249,14 @@ test("-6: --verify smoke-tests the release in a throwaway project", () => {
     const outdir = join(work, "dist");
     const result = release(["--out", outdir, "--verify"]);
     assert.equal(result.status, 0, `--verify failed:\n${result.stderr}`);
-    // The three smoke steps must actually have run, not been skipped.
-    for (const step of [/extension imports/, /task\.py current reports no active task/, /get_context\.py emits/]) {
+    // The smoke steps must actually have run, not been skipped.
+    for (const step of [
+      /extension imports/,
+      /task\.py current reports no active task/,
+      /get_context\.py emits/,
+      /installer doc names no concrete version/,
+      /every shipped script loads on its own/,
+    ]) {
       assert.match(result.stdout, step, `--verify skipped a step (${step}):\n${result.stdout}`);
     }
   } finally {

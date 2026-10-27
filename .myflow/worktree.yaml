@@ -1,6 +1,7 @@
-# Project-owned, not part of the payload. The settle gate runs these commands
-# after a `myflow-check` sub-agent, so the gate is a real check and not a no-op.
-# The extension strips inherited `MYFLOW_*` vars before spawning, so the suite
-# runs hermetically here.
+# This repository's own verify config. The release ships
+# `.myflow/worktree.template.yaml` instead, because this file's commands only
+# exist here. The settle gate runs them after a `myflow-check` sub-agent, so the
+# gate is a real check and not a no-op. The extension strips inherited
+# `MYFLOW_*` vars before spawning, so the suite runs hermetically here.
 verify:
   - npm run check

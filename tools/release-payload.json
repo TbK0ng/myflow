@@ -1,8 +1,8 @@
 {
-  "version": 1,
-  "dirs": [".pi"],
-  "trees": [".myflow/scripts", ".myflow/agents"],
-  "files": [".myflow/workflow.md"],
+  "version": 2,
+  "dirs": [".pi", ".myflow"],
+  "trees": [],
+  "files": [],
   "exclude": [
     "**/__pycache__/**",
     "**/*.pyc",
@@ -11,6 +11,10 @@
     "**/*.log",
     ".pi/git/**",
     ".pi/npm/**",
-    ".pi/settings.json"
+    ".pi/settings.json",
+    ".myflow/.runtime/**",
+    ".myflow/tasks/**",
+    ".myflow/archive/**",
+    ".myflow/worktree.yaml"
   ]
 }

@@ -35,8 +35,14 @@ cat .myflow/spec/index.md 2>/dev/null || echo "NO_SPEC"
 ## Step 3: Run Project Checks
 
 ```bash
-env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLOW_WRITES_UNDER npm run check
+# the project's own check commands, from .myflow/worktree.yaml
+env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u MYFLOW_SKIP_BREADCRUMB -u MYFLOW_WRITES_UNDER python3 .myflow/scripts/worktree.py verify
 ```
+
+`worktree.py verify` runs the `verify:` list from `.myflow/worktree.yaml`, which
+is where the project names its own gate. When that list is empty it prints
+`no verify commands configured` — then run the project's suite directly
+(`npm run check`, `pytest`, `cargo test`, whatever it is).
 
 The `MYFLOW_*` scrub is not optional: a check sub-agent has `MYFLOW_AGENT_TYPE`
 set, and with it leaking in the suite is not hermetic (~23 false failures).

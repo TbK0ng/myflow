@@ -75,7 +75,7 @@ Before finishing:
 
 ```bash
 grep -RIn "To be filled\|TODO: fill\|placeholder\|<package>\|<layer>" .myflow/spec
-npm run check
+python3 .myflow/scripts/worktree.py verify
 ```
 
 Also check links, `index.md` files, and whether any spec still describes a

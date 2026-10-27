@@ -85,6 +85,7 @@ const SKILLS = [
 const AGENTS = ["myflow-implement", "myflow-check", "myflow-research"];
 const RUNTIME_AGENTS = ["architect", "reviewer"];
 const PROMPTS = ["myflow-continue", "myflow-finish-work", "myflow-parallel"];
+const SCRIPTS = ["bg_runner.mjs", "channel.py", "get_context.py", "task.py", "worktree.py"];
 
 /** Copy the payload described by the manifest, applying its `exclude` rules. */
 function copyPayload(destination: string, source: string = ROOT): void {
@@ -172,7 +173,7 @@ test("copied payload mirrors the manifest, and nothing machine-generated rides a
       ...PROMPTS.map((name) => `.pi/prompts/${name}.md`),
       ...SKILLS.map((name) => `.pi/skills/${name}/SKILL.md`),
       ".myflow/workflow.md",
-      ...["get_context.py", "task.py", "worktree.py", "channel.py"].map((name) => `.myflow/scripts/${name}`),
+      ...SCRIPTS.map((name) => `.myflow/scripts/${name}`),
       ...RUNTIME_AGENTS.map((name) => `.myflow/agents/${name}.md`),
     ];
     const copied = readdirSync(destination, { recursive: true })
@@ -188,6 +189,20 @@ test("copied payload mirrors the manifest, and nothing machine-generated rides a
       [],
       "machine-generated files must not be copied",
     );
+    // The whole-harness half of the payload: the spec layer and the worktree
+    // template travel with it, so a fresh project is not left without them. The
+    // live `worktree.yaml` does not: it names this repository's own verify
+    // command.
+    for (const path of [
+      ".myflow/spec/index.md",
+      ".myflow/worktree.template.yaml",
+    ]) {
+      assert.ok(copied.includes(path), `the payload must ship ${path}`);
+    }
+    assert.ok(!copied.includes(".myflow/worktree.yaml"), "the payload must not ship this repository's verify config");
+    for (const path of [".myflow/tasks", ".myflow/archive", ".myflow/.runtime"]) {
+      assert.ok(!copied.some((entry) => entry === path || entry.startsWith(`${path}/`)), `the payload must not ship ${path}`);
+    }
   } finally {
     rmSync(destination, { recursive: true, force: true });
   }

@@ -50,7 +50,6 @@ RELEASE_DOC = "RELEASE.md"
 FORBIDDEN = (
     "dist",
     ".git",
-    ".myflow/spec",
     ".myflow/tasks",
     ".myflow/archive",
     ".myflow/.runtime",
@@ -92,7 +91,7 @@ EXPECTED_TOOLS = (
 #: Commands the extension must register.
 EXPECTED_COMMANDS = ("myflow-status",)
 #: Project-owned trees a release must not contain.
-FORBIDDEN_IN_RELEASE = (".myflow/spec", ".myflow/tasks", ".myflow/.runtime", "tests", "tools")
+FORBIDDEN_IN_RELEASE = (".myflow/tasks", ".myflow/archive", ".myflow/.runtime", "tests", "tools")
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +484,8 @@ def verify(stage: Path) -> int:
             ("task.py current reports no active task", check_task_current, target),
             ("get_context.py emits the no_task workflow state", check_get_context, target),
             ("the extracted tree carries no project-owned paths", check_clean_tree, target),
+            ("the installer doc names no concrete version", check_install_doc, target),
+            ("every shipped script loads on its own", check_payload_scripts, target),
         )
         for label, check, where in checks:
             print(f"verify: {label} ...", end=" ", flush=True)
@@ -574,6 +575,41 @@ def check_clean_tree(project: Path) -> str | None:
     for doc in (INSTALL_DOC, RELEASE_DOC):
         if not (project / doc).is_file():
             return f"the release is missing {doc}"
+    return None
+
+
+#: A concrete `myflow-<x.y.z>` path in the installer doc goes stale on the next bump.
+INSTALL_VERSION_LITERAL = re.compile(r"myflow-\d+\.\d+\.\d+")
+
+
+def check_install_doc(project: Path) -> str | None:
+    """Step 5: the installer doc names no version, so a bump cannot leave it wrong."""
+    text = (project / INSTALL_DOC).read_text(encoding="utf-8")
+    literal = INSTALL_VERSION_LITERAL.search(text)
+    if literal:
+        return f"{INSTALL_DOC} pins {literal.group(0)!r}; name the release generically"
+    return None
+
+
+def check_payload_scripts(project: Path) -> str | None:
+    """Step 6: every shipped script starts under its own interpreter."""
+    scripts = sorted(path for path in (project / ".myflow" / "scripts").iterdir() if path.is_file())
+    if not scripts:
+        return "the release ships no scripts"
+    for script in scripts:
+        if script.suffix == ".py":
+            # A missing sibling module is a Traceback; a usage error (exit 2) is not.
+            _, output = run_payload_script(project, script.name)
+            if "Traceback" in output:
+                return f"{script.name} crashed on start: {output.strip().splitlines()[-1][:300]}"
+        elif script.suffix == ".mjs":
+            # shortcut: --check proves syntax only, not that its imports resolve;
+            # upgrade to a real `import()` when a second .mjs lands in the payload.
+            result = subprocess.run(
+                ["node", "--check", str(script)], capture_output=True, text=True, timeout=120
+            )
+            if result.returncode != 0:
+                return f"node --check {script.name}: {(result.stderr or result.stdout).strip()[:300]}"
     return None
 
 

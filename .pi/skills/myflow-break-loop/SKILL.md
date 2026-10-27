@@ -84,7 +84,8 @@ Do not stop at the table. Immediately:
 
 1. Update the spec files you listed.
 2. Add the regression test.
-3. Run `npm run check` (scrub the `MYFLOW_*` vars first in a sub-agent) and
+3. Run the project's verify commands (`python3 .myflow/scripts/worktree.py verify`,
+   scrubbing the `MYFLOW_*` vars first in a sub-agent) and
    confirm it passes.
 4. Commit the code fix and the spec/test update together.
 
