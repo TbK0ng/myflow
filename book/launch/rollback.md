@@ -37,7 +37,7 @@ title: 灰度与回滚：可重建，不可回滚
 1. **确认回到哪一版。** `git tag -l` 是唯一路标（`v0.1.0` / `v0.2.0` / `v0.3.0`）。tag 不存在就没有这个流程。
 2. **重建载荷。** 在那个 tag 的树上跑 `python tools/release.py --out dist --verify`。口径注意：重建只是**内容等价**，字节不一定相同（`epoch` 与 deflate 都不保证）。
 3. **覆盖。** 按 `INSTALL.md` §1 逐项拷：`.pi/` 整个，`.myflow/` 下的 `agents`、`scripts`、`spec`、`workflow.md`。**`worktree.yaml` 保持项目自己那份**——它是项目配置，不是你回滚的对象。
-4. **不碰这三样。** `.myflow/.runtime/`、`.myflow/tasks/` 与 `.myflow/archive/`、`config.yaml`。它们是项目状态，不随包走。代价是旧 harness 会看到新 harness 留下的条目与游标。
+4. **不碰这三样。** `.myflow/.runtime/`、`.myflow/tasks/` 与 `.myflow/archive/`。它们是项目状态，不随包走。代价是旧 harness 会看到新 harness 留下的条目与游标。
 5. **重启。** 重启 Pi 或 `/reload`，然后 `/myflow-status`：应打印 `myflow: no_task` 或当前任务，`Task:` 与 `Approval:` 两行不空。
 
 **残渣要自己处理。** 覆盖是逐文件拷贝，没有清单比对，「新版本有、旧版本没有」的文件会留在树里。`RELEASE.md` 的「Files by path」表按目录分组计数，不是逐文件清单；`--check` 也只说会拷多少文件。要清干净只能自己 `ls -R` 两棵树。

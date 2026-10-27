@@ -62,7 +62,7 @@ title: 发布载荷与安装
 
 ## 安装路径
 
-`INSTALL.md` 是唯一权威，要点有四步：复制 `.pi/` 与 `.myflow/` 下的 `agents`、`scripts`、`spec`、`workflow.md` 加模板配置；**不要**复制 `tasks/`、`archive/`、`.runtime/`、`config.yaml`、`tests/`、`tools/`；把 `worktree.template.yaml` 复制成 `worktree.yaml` 并改 `verify:`；然后把 Pi 的 shell 钉到本机的 Git Bash。
+`INSTALL.md` 是唯一权威，要点有四步：复制 `.pi/` 与 `.myflow/` 下的 `agents`、`scripts`、`spec`、`workflow.md` 加模板配置；**不要**复制 `tasks/`、`archive/`、`.runtime/`、`tests/`、`tools/`；把 `worktree.template.yaml` 复制成 `worktree.yaml` 并改 `verify:`；然后把 Pi 的 shell 钉到本机的 Git Bash。
 
 硬前置写在同一份文件里：一个 git 仓库（worktree 会话就是 git worktree）、`python3` 在 `PATH` 上（扩展要 shell 出去调 `gate-info` 和验证门）、Node.js、Git for Windows。载荷里没有 `node_modules`，扩展只 import Node 内置模块——但这不等于"没有依赖"：上面三样缺一个，功能就会残缺或拒绝运行。
 

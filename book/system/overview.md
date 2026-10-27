@@ -17,7 +17,7 @@ title: 一次会话的全景
 | 时机 | hook | 能做什么 | 落盘 |
 | --- | --- | --- | --- |
 | 会话开始 | `session_start` | 解析项目根与 context key；主会话注入 `<session-context>` 再注入 `<task-context>`，子代理只注入 `<task-context>` 后直接 return | 只读；子进程 `get_context.py` 读 `.myflow/workflow.md`、`.myflow/.runtime/sessions/<contextKey>.json`、`git status` |
-| 用户输入进入 | `input` | 读 `prompt_injection.skip_keyword`（默认 `no-myflow`），开始这一轮的 turn cache；`MYFLOW_SKIP_BREADCRUMB=1` 会让整个进程都不出现面包屑 | 只读 `.myflow/config.yaml` |
+| 用户输入进入 | `input` | 读 `prompt_injection.skip_keyword`（默认 `no-myflow`），开始这一轮的 turn cache；`MYFLOW_SKIP_BREADCRUMB=1` 会让整个进程都不出现面包屑 | 只读 |
 | run 启动 | `before_agent_start` | 从 turn cache 取出 `workflow-state` 文本，返回成一条 `display: false` 的 custom message | 只读 `turn-cache.ts` 读过的文件 |
 | 每个模型请求前 | `context` | 重投影过期的 `<task-context>` / `<session-context>`，去重，按本轮是否跳过决定补上还是删掉面包屑 | 只读 |
 | 每次工具调用 | `tool_call` | 四个守卫，只能 `{block: true, reason}`：子代理不许再派子代理、不许问用户/请求批准、不许管后台任务；声明了 `writesUnder` 的子代理只许写 `<active task>/<scope>/` | 只读 |

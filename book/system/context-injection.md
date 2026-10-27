@@ -51,7 +51,7 @@ title: 上下文注入
 
 清单里的一行不是"读这个路径"，而是"指向项目内的这个文件"。`resolveProjectFile` 先做 `realpath`，再判断是否落在项目根或某个 trusted root 内；都不在就**静默跳过**，连 notice 都不留。
 
-trusted roots 来自两处：`.myflow/config.yaml` 的 `channel.trusted_context_dirs`（默认空集），以及自动信任被符号链接走的 `.myflow/tasks`（`AUTO_TRUST_ENTRIES`），除非显式写了 `channel.auto_trust_myflow_symlinks: false`。后者是为"任务目录被链接到另一个工作树"这种布局准备的。
+trusted roots 来自两处：一份可配置的白名单 `channel.trusted_context_dirs`（默认空集），以及自动信任被符号链接走的 `.myflow/tasks`（`AUTO_TRUST_ENTRIES`），除非显式写了 `channel.auto_trust_myflow_symlinks: false`。后者是为"任务目录被链接到另一个工作树"这种布局准备的。
 
 二进制或非 UTF-8 的文件不内联，换成一条 omitted notice；磁盘上的文件存在但读不出来时，notice 说的是 `artifact is missing or unreadable`。
 
@@ -76,7 +76,7 @@ artifact 在前，curated 清单在后。算术很直白：三个 artifact 各�
 5. `implement.jsonl` 有 6 行：前 3 行指向 spec 与源码文件，逐个 `realpath` 校验后内联；第 4 行指向一个 200 KB 的文件 → 截断到 32768，末尾追加 `truncated` 提示；第 5 行预算已不够 → 换成 `omitted` 提示；第 6 行连同剩余内容被 terminal summary 取代。
 6. 最后拼成 `<task-context>…</task-context>`，作为隐藏消息进入子进程的第一个请求。
 
-子进程看到的开头是：`Context is bounded by .myflow/config.yaml. Files marked [truncated] or [omitted] remain authoritative on disk; use their required_read path before relying on missing detail.` 这句话是给模型的指令，不是一个关于本仓库配置状态的陈述。
+子进程看到的开头是：`Context is bounded by .myflow/config.yaml. Files marked [truncated] or [omitted] remain authoritative on disk; use their required_read path before relying on missing detail.` 这句话是给模型的指令。
 
 ## 常见误解
 

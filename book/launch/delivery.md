@@ -38,7 +38,7 @@ title: 构建、发布、更新、版本
 没有 registry、npm 包、官网、下载页、邮件。唯一权威是 `tools/INSTALL.md`，它被逐字拷进每个发布物，其余靠 Git Bash：
 
 - **复制**：`.pi/` 整个，加 `.myflow/` 的 `agents`、`scripts`、`spec`、`workflow.md`，`worktree.template.yaml` 复制成 `worktree.yaml`。
-- **不复制**：`tasks/`、`archive/`、`.runtime/`、`config.yaml`、`tests/`、`tools/`、`INSTALL.md`、`RELEASE.md`。
+- **不复制**：`tasks/`、`archive/`、`.runtime/`、`tests/`、`tools/`、`INSTALL.md`、`RELEASE.md`。
 - **必须改**：`worktree.yaml` 的 `verify:`，否则 settle 门什么都不查。
 - **必须钉**：项目 `.pi/settings.json` 的 `shellPath`。这里有个缺口：`myflow_bg_*` 的 shell 解析链（`bg_runner.mjs`）读环境变量、用户级 settings、标准安装位置、`PATH`，**不读项目文件**，`INSTALL.md` 明写了这一条。
 

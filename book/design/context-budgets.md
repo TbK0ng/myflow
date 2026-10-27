@@ -61,7 +61,7 @@ title: 字节预算，而不是塞满 prompt
 
 **四、字节不等于 token。** 预算上限和模型窗口之间没有换算代码，131072 只能当量级用。
 
-**五、配置读取是手写正则。** `readContextInjectionLimits` 逐行正则扫 `config.yaml`；嵌套 map、锚点、列表都会被静默忽略。这一条与[拒绝优于降级](./refuse-not-degrade.md)直接冲突：那里判不了就拒绝，这里判不了就**默默地**用了默认值。
+**五、配置读取是手写正则。** `readContextInjectionLimits` 用逐行正则解析配置；嵌套 map、锚点、列表都会被静默忽略。这一条与[拒绝优于降级](./refuse-not-degrade.md)直接冲突：那里判不了就拒绝，这里判不了就**默默地**用了默认值。
 
 ## 什么情况下我会改回去
 
