@@ -1,0 +1,9 @@
+{"file": "tests/subagent.test.ts", "reason": "现有派发测试：rpc 传输改动后必须仍覆盖 modes/timeout/并行拒绝/log 路径，断言按新语义等价改写需有注释"}
+{"file": "tests/bg-start.test.ts", "reason": "抽取 startBackgroundTask 后必须原样通过（只移动代码不改语义）"}
+{"file": "tests/bg-stop.test.ts", "reason": "terminateTree 复用边界：看板 stop 不得改变停止/失败语义与退出码归一化"}
+{"file": "tests/scaffold.test.ts", "reason": "payload 清单：新文件必须落在 .pi/extensions/myflow 树内、且不引入 node 之外的运行期依赖"}
+{"file": "tests/leak-audit.test.ts", "reason": "临时目录前缀必须是 myflow-，且视图定时器不得残留"}
+{"file": "tests/doc-numbers.test.ts", "reason": "文档里新增的数字必须与代码常量对齐，否则会静默漂移"}
+{"file": "tests/extension.test.ts", "reason": "扩展装配：新命令注册不得破坏 tool_call 守卫、context 注入与 escape hatch"}
+{"file": ".myflow/workflow.md", "reason": "状态块与路由文案是行为契约：/mysubagents 的只读/可管理边界必须写在这里"}
+{"file": ".pi/skills/myflow-meta/SKILL.md", "reason": "Layout 与 payload 描述必须与实际文件一致"}

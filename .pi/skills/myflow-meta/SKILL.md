@@ -24,6 +24,13 @@ the platform-specific work — the extension, `bg_runner.mjs`, `channel.py`,
 .pi/
   extensions/myflow/index.ts        # extension factory: hooks + /myflow-status
   extensions/myflow/subagent.ts     # myflow_subagent tool (single/parallel/chain)
+  extensions/myflow/transport.ts    # one child run: rpc transport, settle/abort/kill, log
+  extensions/myflow/runs.ts         # front-run registry (.myflow/.runtime/subagents)
+  extensions/myflow/ctl.ts          # control channel: steer/abort lines a board appends
+  extensions/myflow/board/           # /mysubagents: menu, board (read-only), tree, background
+    index.ts                         #   command + panel component (the only pi-tui import)
+    state.ts / render.ts / keys.ts   #   view data, pure renderers, key -> action reducer
+    actions.ts / transcript.ts       #   action side effects; log JSONL -> readable lines
   extensions/myflow/ask.ts          # myflow_ask_user tool (one choice question)
   extensions/myflow/approval.ts     # myflow_request_approval tool (writes approval.json)
   extensions/myflow/background/      # the myflow_bg_* tools + the on-disk registry
@@ -146,6 +153,19 @@ session started that are still running. The full contract lives in
 `/myflow-status` is a real Pi command (no model call): it prints the active
 task, the workflow phase, the plan-approval state, and git state.
 
+`/mysubagents` is the other real command: three views over the two project
+registries. `board` is read-only — front runs from
+`.myflow/.runtime/subagents/<runId>.json`, detached tasks from
+`.myflow/.runtime/background/` — with Enter opening a transcript or output
+tail. `tree` groups the runs of one dispatch call and can stop a run (`x`),
+cancel the group (`X`), steer it with one line (`s`), or rerun it (`r`); each of
+those writes a control line (`<runId>.ctl.jsonl`) or a registry entry, never
+in-memory state, which is why a *second* session can manage a run the first one
+dispatched. `background` stops, prunes and replays `myflow_bg_*` tasks through
+the same code the tools use. It needs a TUI: without one it prints the same
+state as a text report. Views and keys live in `.pi/extensions/myflow/board/`;
+the transport a run is driven over lives in `transport.ts`.
+
 ## Runtime: identity and the shell bridge
 
 - A **context key** is `pi_<sanitized id>` from Pi's session id, or an explicit
@@ -232,6 +252,9 @@ with this skill in `references/harness-conventions.md`.
 | Background tasks (start/output/list/stop) | `.pi/extensions/myflow/background/`; the wrapper in `.myflow/scripts/bg_runner.mjs` |
 | Which agent files exist / their tools | `.pi/agents/*.md`; discovery in `agents.ts` |
 | `/myflow-status` output | `.pi/extensions/myflow/status.ts` |
+| `/mysubagents` views, rendering, keys | `.pi/extensions/myflow/board/` (`render.ts` for layout, `keys.ts` for keys, `actions.ts` for what a key does) |
+| What a run records / how stale is decided | `.pi/extensions/myflow/runs.ts` |
+| How a child run is spawned, settled, steered, killed | `.pi/extensions/myflow/transport.ts`, `.pi/extensions/myflow/ctl.ts` |
 | Task context budgets or trust rules | `.myflow/config.yaml`, `.pi/extensions/myflow/context-injection.ts` |
 | Skip keyword behavior | `.myflow/config.yaml`, `.pi/extensions/myflow/escape-hatch.ts` |
 | Workflow phases, routing, breadcrumbs | `.myflow/workflow.md` |

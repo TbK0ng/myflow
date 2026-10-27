@@ -155,7 +155,7 @@ test("findNearestProjectAgentsDir: walks up from a nested directory", () => {
     mkdirSync(nested, { recursive: true });
     assert.equal(findNearestProjectAgentsDir(nested), join(root, CONFIG_DIR_NAME, "agents"));
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -261,7 +261,9 @@ test("myflow_subagent: a run past its cap is stopped, reported, and logged", asy
     const run = result.details.runs[0];
     assert.equal(result.isError, true, "a stopped run is an error result");
     assert.equal(run.timedOut, true);
-    assert.equal(run.exitCode, 124, "124 mirrors timeout(1)");
+    // The rpc transport reports the outcome through events, not the exit code:
+    // a capped run is a `timeout`, which is what makes it an error.
+    assert.equal(run.stopReason, "timeout");
     assert.match(result.content[0].text, /was stopped after \d+s/);
     assert.match(result.content[0].text, /timeoutMs/);
 
@@ -273,7 +275,7 @@ test("myflow_subagent: a run past its cap is stopped, reported, and logged", asy
     assert.ok(await waitForProcessGone(childPid), "the stopped run is killed, not orphaned");
   } finally {
     process.argv[1] = argv1;
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -286,8 +288,10 @@ test("myflow_subagent: a run inside its cap is unaffected", async () => {
   writeFileSync(
     childScript,
     [
-      'process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done early" }] } }) + String.fromCharCode(10));',
-      "process.exit(0);",
+      'process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done early" }], stopReason: "end" } }) + String.fromCharCode(10));',
+      // A run settles on `agent_settled`, not on the process exiting.
+      'process.stdout.write(JSON.stringify({ type: "agent_settled", aborted: false }) + String.fromCharCode(10));',
+      "setTimeout(() => process.exit(0), 20);",
     ].join(String.fromCharCode(10)),
     "utf-8",
   );
@@ -312,7 +316,7 @@ test("myflow_subagent: a run inside its cap is unaffected", async () => {
     assert.ok(existsSync(String(result.details.runs[0].logPath)));
   } finally {
     process.argv[1] = argv1;
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -536,7 +540,7 @@ test("tool_call: a scoped sub-agent may only write inside <active task>/<writesU
     restoreEnv(MYFLOW_AGENT_ENV, previousAgent);
     restoreEnv(MYFLOW_WRITES_UNDER_ENV, previousScope);
     restoreEnv("MYFLOW_CONTEXT_ID", previousContext);
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -565,7 +569,7 @@ test("tool_call: a scoped sub-agent fails closed when no active task resolves", 
     restoreEnv(MYFLOW_AGENT_ENV, previousAgent);
     restoreEnv(MYFLOW_WRITES_UNDER_ENV, previousScope);
     restoreEnv("MYFLOW_CONTEXT_ID", previousContext);
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -592,7 +596,7 @@ test("tool_call: a blank writesUnder declaration fails closed", async () => {
     restoreEnv(MYFLOW_AGENT_ENV, previousAgent);
     restoreEnv(MYFLOW_WRITES_UNDER_ENV, previousScope);
     restoreEnv("MYFLOW_CONTEXT_ID", previousContext);
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -623,7 +627,7 @@ test("tool_call: an escaping writesUnder scope fails closed", async () => {
     restoreEnv(MYFLOW_AGENT_ENV, previousAgent);
     restoreEnv(MYFLOW_WRITES_UNDER_ENV, previousScope);
     restoreEnv("MYFLOW_CONTEXT_ID", previousContext);
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -648,12 +652,19 @@ test("tool_call: an unscoped writer keeps full-tree access (implement/check unch
     restoreEnv(MYFLOW_AGENT_ENV, previousAgent);
     restoreEnv(MYFLOW_WRITES_UNDER_ENV, previousScope);
     restoreEnv("MYFLOW_CONTEXT_ID", previousContext);
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
 test("subagent helpers: isFailedResult and getPiInvocation", () => {
-  assert.equal(isFailedResult({ exitCode: 1 } as any), true);
+  // The outcome comes from what the child reported. `exitCode` is recorded as
+  // reference only: under rpc a child may exit 0 after failing, and exit
+  // non-zero after a clean stop.
+  assert.equal(isFailedResult({ exitCode: 1 } as any), false);
+  assert.equal(isFailedResult({ exitCode: 1, stopReason: "error" } as any), true);
+  assert.equal(isFailedResult({ exitCode: 0, stopReason: "aborted" } as any), true);
+  assert.equal(isFailedResult({ exitCode: 0, stopReason: "timeout" } as any), true);
+  assert.equal(isFailedResult({ exitCode: 0, timedOut: true } as any), true);
   assert.equal(isFailedResult({ exitCode: 0, stopReason: "end" } as any), false);
   const invocation = getPiInvocation(["--version"]);
   assert.equal(typeof invocation.command, "string");

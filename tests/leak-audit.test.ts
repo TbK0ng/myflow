@@ -27,10 +27,11 @@ const AUDIT_PREFIX = "myflow-";
 
 /**
  * 被审计的文件。它们的临时目录前缀由源码静态提取，不写死在这里。
- * 选这两个是因为它们正是 S4 修掉的两处泄漏点（`subagent.test.ts` 的空 PATH 目录、
- * `bg-start.test.ts` 的清理）。
+ * 选这三个是因为它们正是已知的泄漏点：`subagent.test.ts` 的空 PATH 目录、
+ * `bg-start.test.ts` 的清理，以及 `subagent-rpc.test.ts` 的工程目录（`settled`
+ * 早于子进程退出，一次 `rmSync` 会 EPERM）。
  */
-const AUDIT_FILES = ["subagent.test.ts", "bg-start.test.ts"];
+const AUDIT_FILES = ["subagent.test.ts", "bg-start.test.ts", "subagent-rpc.test.ts"];
 
 /** 匹配一处由 `tmpdir()` 提供前缀的临时目录调用，捕获其前缀。 */
 const MKDTEMP_CALL = /mkdtempSync\(\s*join\(\s*tmpdir\(\)\s*,\s*["'`]([^"'`]*)["'`]\s*\)\s*\)/g;

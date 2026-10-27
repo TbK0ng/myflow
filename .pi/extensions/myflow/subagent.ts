@@ -20,28 +20,52 @@
  * Every run is capped (`timeoutMs`, default 15 minutes, 0 disables it) and its
  * raw stream is kept under `.myflow/.runtime/subagent-logs/`, so a run that
  * never converges is reported and inspectable instead of blocking the caller.
+ * Each run also registers itself under `.myflow/.runtime/subagents/` before it
+ * starts, so the `/mysubagents` board and any other session can see it — and
+ * steer or stop it — while it runs.
+ *
+ * The child process itself (rpc transport, settle state machine, control-file
+ * polling) lives in `transport.ts`; this module decides *what* to dispatch and
+ * turns the results into the tool's answer.
  *
  * Live progress is reported through the tool's `onUpdate` callback and through
  * the `myflow-subagent-progress` event bus channel.
  *
- * Runtime imports are limited to Node builtins so the module stays importable
- * under `node --test` without installing the Pi package.
+ * Runtime imports are limited to Node builtins and the node-only modules of
+ * this directory, so the module stays importable under `node --test` without
+ * installing the Pi package.
  */
 
-import { execFileSync, spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { relative } from "node:path";
 import { type AgentConfig, discoverAgents, isSafeWriteScope } from "./agents.ts";
+import { resolveActiveTaskStatus } from "./turn-cache.ts";
+import { newGroupId, queueGroup, runsDir } from "./runs.ts";
+import {
+  MYFLOW_AGENT_ENV,
+  MYFLOW_CONTEXT_ENV,
+  MYFLOW_WRITES_UNDER_ENV,
+  SUBAGENT_LOG_DIR,
+  getPiInvocation,
+  isFailedResult,
+  killChildTree,
+  startRun,
+  type SingleResult,
+  type SubagentMessage,
+  type UsageStats,
+} from "./transport.ts";
 
-export const MYFLOW_AGENT_ENV = "MYFLOW_AGENT_TYPE";
-
-/**
- * Carries an agent's declared `writesUnder` scope to the child process. The
- * child's path guard blocks any write/edit outside `<active task>/<scope>/`.
- * Injected only when the agent declares a scope.
- */
-export const MYFLOW_WRITES_UNDER_ENV = "MYFLOW_WRITES_UNDER";
+// The transport owns the child process, so the pieces tied to it live there;
+// they are re-exported here because this module is the tool's public surface.
+export {
+  MYFLOW_AGENT_ENV,
+  MYFLOW_CONTEXT_ENV,
+  MYFLOW_WRITES_UNDER_ENV,
+  SUBAGENT_LOG_DIR,
+  getPiInvocation,
+  isFailedResult,
+  killChildTree,
+};
+export type { SingleResult, SubagentMessage, UsageStats };
 
 /**
  * Marks a process as a review worker for the verify gate. Dispatched
@@ -49,7 +73,6 @@ export const MYFLOW_WRITES_UNDER_ENV = "MYFLOW_WRITES_UNDER";
  * process, so its launcher flags it explicitly.
  */
 export const MYFLOW_VERIFY_GATE_ENV = "MYFLOW_VERIFY_GATE";
-export const MYFLOW_CONTEXT_ENV = "MYFLOW_CONTEXT_ID";
 export const PROGRESS_CHANNEL = "myflow-subagent-progress";
 
 export const AGENT_PREFIX = "myflow-";
@@ -63,22 +86,6 @@ export const MAX_PARALLEL_PROMPTS = 6;
  */
 export const SUBAGENT_TIMEOUT_MS = 900_000;
 
-/** Raw stdout/stderr of each run, kept so a long or failed run can be read back. */
-export const SUBAGENT_LOG_DIR = ".myflow/.runtime/subagent-logs";
-
-/**
- * Stop a child together with anything it started (MCP servers outlive a plain
- * kill). `taskkill /T` is the only way to reach the whole tree on Windows.
- */
-export function killChildTree(pid: number | undefined): void {
-  if (!pid) return;
-  try {
-    execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore" });
-  } catch {
-    /* already gone */
-  }
-}
-
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
@@ -88,64 +95,11 @@ export interface SubagentPi {
   events?: { emit(channel: string, data: unknown): void };
 }
 
-export interface UsageStats {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-  contextTokens: number;
-  turns: number;
-}
-
-export interface SubagentMessage {
-  role: string;
-  content?: unknown;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    cost?: { total?: number };
-    totalTokens?: number;
-  };
-  model?: string;
-  stopReason?: string;
-  errorMessage?: string;
-}
-
-export interface SingleResult {
-  agent: string;
-  prompt: string;
-  exitCode: number;
-  messages: SubagentMessage[];
-  stderr: string;
-  usage: UsageStats;
-  model?: string;
-  stopReason?: string;
-  errorMessage?: string;
-  /** Durability for a run that outlives the caller's patience: raw child stream. */
-  logPath?: string;
-  /** The run hit its cap and was stopped; whatever it changed stays in the tree. */
-  timedOut?: boolean;
-  durationMs?: number;
-}
-
 export interface SubagentDetails {
   mode: "single" | "parallel" | "chain";
   agent: string;
   runs: SingleResult[];
 }
-
-const EMPTY_USAGE = (): UsageStats => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  cost: 0,
-  contextTokens: 0,
-  turns: 0,
-});
 
 /** Tools that write to the shared working tree. */
 const WRITE_TOOLS = new Set(["write", "edit"]);
@@ -274,10 +228,6 @@ export function getFinalOutput(messages: SubagentMessage[]): string {
   return "";
 }
 
-export function isFailedResult(result: SingleResult): boolean {
-  return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-}
-
 function getResultOutput(result: SingleResult): string {
   if (result.timedOut) {
     const seconds = Math.round((result.durationMs ?? 0) / 1000);
@@ -299,71 +249,6 @@ function getResultOutput(result: SingleResult): string {
   return getFinalOutput(result.messages) || "(no output)";
 }
 
-/** Resolve how to invoke another Pi process. */
-export function getPiInvocation(args: string[]): { command: string; args: string[] } {
-  const currentScript = process.argv[1];
-  const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-  if (currentScript && !isBunVirtualScript && existsSync(currentScript)) {
-    return { command: process.execPath, args: [currentScript, ...args] };
-  }
-
-  const execName = basename(process.execPath).toLowerCase();
-  const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-  if (!isGenericRuntime) {
-    return { command: process.execPath, args };
-  }
-
-  return { command: "pi", args };
-}
-
-interface LazyLog {
-  write(chunk: Buffer): void;
-  close(): void;
-  path(): string | null;
-}
-
-/** Append-only log that only touches the disk once there is something to write. */
-function lazyLogStream(target: string, header: string): LazyLog {
-  let stream: ReturnType<typeof createWriteStream> | null = null;
-  let failed = false;
-  const open = () => {
-    if (stream || failed) return stream;
-    try {
-      mkdirSync(dirname(target), { recursive: true });
-      stream = createWriteStream(target, { flags: "a" });
-      stream.write(header);
-    } catch {
-      failed = true;
-      stream = null;
-    }
-    return stream;
-  };
-  return {
-    write(chunk: Buffer) {
-      open()?.write(chunk);
-    },
-    close() {
-      try {
-        stream?.end();
-      } catch {
-        /* the log is best-effort */
-      }
-    },
-    path() {
-      return stream ? target : null;
-    },
-  };
-}
-
-function applyUsage(usage: UsageStats, raw: NonNullable<SubagentMessage["usage"]>): void {
-  usage.input += raw.input ?? 0;
-  usage.output += raw.output ?? 0;
-  usage.cacheRead += raw.cacheRead ?? 0;
-  usage.cacheWrite += raw.cacheWrite ?? 0;
-  usage.cost += raw.cost?.total ?? 0;
-  usage.contextTokens = raw.totalTokens ?? usage.contextTokens;
-}
-
 interface RunOptions {
   projectRoot: string;
   agent: AgentConfig;
@@ -376,174 +261,43 @@ interface RunOptions {
   makeDetails: (runs: SingleResult[]) => SubagentDetails;
 }
 
-async function runSingleAgent(options: RunOptions): Promise<SingleResult> {
+/**
+ * Run one sub-agent and return its result.
+ *
+ * Everything about the child process — rpc argv, settle state machine, control
+ * poll, log file, registry entry — belongs to `startRun`; this function only
+ * turns the settled result into the caller's shape.
+ */
+async function runSingleAgent(options: RunOptions, runId: string): Promise<SingleResult> {
   const { agent, prompt, projectRoot, config, contextKey, signal, timeoutMs } = options;
 
-  // The parent process only has this tool because its own project is trusted.
-  // `--approve` lets the isolated child load the same project extension so it
-  // receives the myflow task context.
-  const args: string[] = ["--mode", "json", "-p", "--no-session", "--approve"];
-  if (config.model) {
-    const model = config.thinking && config.thinking !== "off" && !config.model.includes(":")
-      ? `${config.model}:${config.thinking}`
-      : config.model;
-    args.push("--model", model);
-  } else if (config.thinking && config.thinking !== "off") {
-    args.push("--thinking", config.thinking);
-  }
-  if (config.tools && config.tools.length > 0) args.push("--tools", config.tools.join(","));
-
-  let tmpPromptDir: string | null = null;
-  let tmpPromptPath: string | null = null;
-
-  const currentResult: SingleResult = {
-    agent: agent.name,
-    prompt,
-    exitCode: 0,
-    messages: [],
-    stderr: "",
-    usage: EMPTY_USAGE(),
-    model: config.model,
-  };
-
-  const emitUpdate = () => {
-    if (!options.onUpdate) return;
-    options.onUpdate({
-      content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
-      details: options.makeDetails([currentResult]),
-    });
-  };
-
-  try {
-    if (agent.systemPrompt.trim()) {
-      tmpPromptDir = mkdtempSync(join(tmpdir(), "myflow-subagent-"));
-      tmpPromptPath = join(tmpPromptDir, `prompt-${agent.name.replace(/[^\w.-]+/g, "_")}.md`);
-      writeFileSync(tmpPromptPath, agent.systemPrompt, { encoding: "utf-8", mode: 0o600 });
-      args.push("--append-system-prompt", tmpPromptPath);
-    }
-
-    args.push(prompt);
-
-    let wasAborted = false;
-    let timedOut = false;
-    const startedAt = Date.now();
-    const logPath = join(projectRoot, SUBAGENT_LOG_DIR, `${agent.name}-${startedAt}.log`);
-    // The file appears with the first byte of output: a run that never produced
-    // anything (a spawn failure, say) should not leave an empty log behind.
-    const logStream = lazyLogStream(logPath, `# ${agent.name} @ ${new Date(startedAt).toISOString()}\n# prompt: ${prompt.slice(0, 400)}\n`);
-
-    const invocation = getPiInvocation(args);
-    const env: NodeJS.ProcessEnv = { ...process.env, [MYFLOW_AGENT_ENV]: agent.name };
-    if (contextKey) env[MYFLOW_CONTEXT_ENV] = contextKey;
-    // Hand the declared write scope to the child so it can enforce it path-level.
+  const handle = startRun({
+    projectRoot,
+    runId,
+    agentName: agent.name,
+    systemPrompt: agent.systemPrompt,
     // Inject on any non-blank declaration (not only a *safe* one) so the child's
     // guard activates and blocks an escaping scope; clearing it otherwise keeps an
     // inherited value from silently bounding an unscoped writer such as
     // myflow-implement.
-    if (declaresWriteScope(agent)) env[MYFLOW_WRITES_UNDER_ENV] = agent.writesUnder!.trim();
-    else delete env[MYFLOW_WRITES_UNDER_ENV];
-
-    const exitCode = await new Promise<number>((resolveExit) => {
-      const proc = spawn(invocation.command, invocation.args, {
-        cwd: projectRoot,
-        shell: false,
-        // Not detached: the tree is stopped by `taskkill /T` on pid, not by
-        // signalling a process group.
-        stdio: ["ignore", "pipe", "pipe"],
-        env,
+    writesUnder: declaresWriteScope(agent) ? agent.writesUnder!.trim() : null,
+    prompt,
+    config,
+    contextKey,
+    timeoutMs,
+    signal,
+    onUpdate: (result) => {
+      if (!options.onUpdate) return;
+      options.onUpdate({
+        content: [{ type: "text", text: getFinalOutput(result.messages) || "(running...)" }],
+        details: options.makeDetails([result]),
       });
-      let buffer = "";
-      let settled = false;
-      const finish = (code: number) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolveExit(code);
-      };
+    },
+  });
 
-      const timer = setTimeout(() => {
-        timedOut = true;
-        killChildTree(proc.pid);
-      }, timeoutMs);
-      if (typeof timer.unref === "function") timer.unref();
-
-      const processLine = (line: string) => {
-        if (!line.trim()) return;
-        let event: { type?: string; message?: SubagentMessage };
-        try {
-          event = JSON.parse(line);
-        } catch {
-          return;
-        }
-
-        if (event.type === "message_end" && event.message) {
-          const message = event.message;
-          currentResult.messages.push(message);
-          if (message.role === "assistant") {
-            currentResult.usage.turns += 1;
-            if (message.usage) applyUsage(currentResult.usage, message.usage);
-            if (!currentResult.model && message.model) currentResult.model = message.model;
-            if (message.stopReason) currentResult.stopReason = message.stopReason;
-            if (message.errorMessage) currentResult.errorMessage = message.errorMessage;
-          }
-          emitUpdate();
-        }
-      };
-
-      proc.stdout.on("data", (data: Buffer) => {
-        logStream.write(data);
-        buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) processLine(line);
-      });
-
-      proc.stderr.on("data", (data: Buffer) => {
-        logStream.write(data);
-        currentResult.stderr += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        if (buffer.trim()) processLine(buffer);
-        if (timedOut) {
-          // 124 mirrors timeout(1): the run was stopped by its own cap.
-          finish(124);
-          return;
-        }
-        finish(code ?? 0);
-      });
-
-      proc.on("error", (error) => {
-        currentResult.stderr += String(error);
-        finish(1);
-      });
-
-      if (signal) {
-        const killProc = () => {
-          wasAborted = true;
-          killChildTree(proc.pid);
-        };
-        if (signal.aborted) killProc();
-        else signal.addEventListener("abort", killProc, { once: true });
-      }
-    });
-
-    currentResult.exitCode = exitCode;
-    currentResult.timedOut = timedOut;
-    currentResult.durationMs = Date.now() - startedAt;
-    logStream.close();
-    currentResult.logPath = logStream.path() ?? undefined;
-    if (wasAborted) throw new Error("Subagent was aborted");
-    return currentResult;
-  } finally {
-    if (tmpPromptDir) {
-      try {
-        rmSync(tmpPromptDir, { recursive: true, force: true });
-      } catch {
-        /* ignore cleanup failure */
-      }
-    }
-  }
+  // A cancelled caller still gets a result: the run is stopped and marked as an
+  // error instead of throwing out of the middle of a parallel dispatch.
+  return handle.settled;
 }
 
 export interface SubagentRegistration {
@@ -657,12 +411,32 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         makeDetails,
       });
 
-      emitProgress({ mode, agent: agentName, prompts: mode === "single" ? 1 : prompts.length });
+      const runPrompts = mode === "single" ? [prompt!] : prompts.length > 0 ? prompts : [prompt!];
+      const { taskDir } = resolveActiveTaskStatus(ctx.cwd, contextKey);
+      // Register the whole dispatch before any child starts, so a chain member
+      // that has not had its turn — and a run the caller never gets to await —
+      // is visible to (and stoppable from) the board. A chain member's entry
+      // records the prompt as dispatched; the "Previous output:" suffix is added
+      // per run and exists only in that run's log.
+      const queued = queueGroup(
+        runsDir(ctx.cwd),
+        runPrompts.map((entry) => ({
+          agent: agentName,
+          mode,
+          prompt: entry,
+          task: taskDir ? relative(ctx.cwd, taskDir).split("\\").join("/") : null,
+          model: config.model ?? null,
+        })),
+        { group: newGroupId(), contextKey },
+      );
+
+      emitProgress({ mode, agent: agentName, prompts: runPrompts.length });
 
       if (mode === "parallel") {
-        const runPrompts = prompts.length > 0 ? prompts : [prompt!];
         const runs = await Promise.all(
-          runPrompts.map((entry) => runSingleAgent(runOptions(entry, onUpdate as RunOptions["onUpdate"]))),
+          runPrompts.map((entry, index) =>
+            runSingleAgent(runOptions(entry, onUpdate as RunOptions["onUpdate"]), queued[index].runId),
+          ),
         );
         return {
           content: [{ type: "text", text: runs.map(getResultOutput).join("\n\n---\n\n") }],
@@ -672,12 +446,15 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
       }
 
       if (mode === "chain") {
-        const runPrompts = prompts.length > 0 ? prompts : [prompt!];
         const runs: SingleResult[] = [];
         let previous = "";
-        for (const entry of runPrompts) {
+        for (let index = 0; index < runPrompts.length; index += 1) {
+          const entry = runPrompts[index];
           const composed = previous ? `${entry}\n\nPrevious output:\n${previous}` : entry;
-          const result = await runSingleAgent(runOptions(composed, onUpdate as RunOptions["onUpdate"]));
+          const result = await runSingleAgent(
+            runOptions(composed, onUpdate as RunOptions["onUpdate"]),
+            queued[index].runId,
+          );
           runs.push(result);
           previous = getFinalOutput(result.messages);
           if (isFailedResult(result)) break;
@@ -689,7 +466,7 @@ export function registerMyflowSubagent(pi: SubagentPi, registration: SubagentReg
         };
       }
 
-      const run = await runSingleAgent(runOptions(prompt!, onUpdate as RunOptions["onUpdate"]));
+      const run = await runSingleAgent(runOptions(prompt!, onUpdate as RunOptions["onUpdate"]), queued[0].runId);
       return {
         content: [{ type: "text", text: getResultOutput(run) }],
         details: makeDetails([run]),

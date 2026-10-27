@@ -15,6 +15,7 @@ import {
   type SubagentPi,
 } from "./subagent.ts";
 import { buildStatusReport, formatStatusReport } from "./status.ts";
+import { registerMyflowSubagentsCommand } from "./board/index.ts";
 import { registerMyflowAsk } from "./ask.ts";
 import { registerMyflowApproval } from "./approval.ts";
 import {
@@ -342,6 +343,14 @@ export default function extension(pi: ExtensionAPI): void {
       }
       if (ctx.hasUI) ctx.ui?.notify(text.split("\n")[0] ?? "myflow status", "info");
     },
+  });
+
+  // `/mysubagents` is the run board: `board` (read-only), `tree`, or
+  // `background`; no argument opens the menu. Registered next to
+  // `/myflow-status` because it answers the same "what is going on?" question
+  // about dispatched runs and detached tasks.
+  registerMyflowSubagentsCommand(pi, {
+    deriveContextKey: (ctx) => deriveContextKey((ctx ?? {}) as HookContext),
   });
 
   pi.on("session_start", async (_event, ctx) => {

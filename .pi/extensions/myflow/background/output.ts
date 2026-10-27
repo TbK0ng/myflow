@@ -303,6 +303,30 @@ export function isFinishedStatus(status: BackgroundTaskStatus): boolean {
   return status === "exited" || status === "stopped";
 }
 
+/**
+ * Read at most `maxBytes` from the end of a task's log, as text.
+ *
+ * **Read-only by construction**: it never touches a cursor file, so a viewer (the
+ * board's background session) can show a task's output without consuming bytes
+ * the session's own `myflow_bg_output` still has to read. It shares
+ * `readTailChunk` with `tail` mode, so both agree on the byte window and the
+ * UTF-8 alignment; only the line policy differs — a window that opened mid-line
+ * drops that first partial line, because there is no cursor to complete it later.
+ * A missing or empty log is an empty string, never an error.
+ */
+export function readLogTail(dir: string, id: string, maxBytes: number = DEFAULT_MAX_BYTES): string {
+  const path = logPath(dir, id);
+  const budget =
+    typeof maxBytes === "number" && Number.isFinite(maxBytes) ? Math.max(1, Math.floor(maxBytes)) : DEFAULT_MAX_BYTES;
+  const { buffer, chunkStart } = readTailChunk(path, budget);
+  const decoded = buffer.toString("utf-8");
+  if (chunkStart === 0) return decoded;
+  // The window opened mid-line exactly when the byte before it is not an LF.
+  if (readByteAt(path, chunkStart - 1) === NEWLINE_BYTE) return decoded;
+  const firstBreak = decoded.indexOf("\n");
+  return firstBreak < 0 ? "" : decoded.slice(firstBreak + 1);
+}
+
 /** Bounded async sleep; the only timer lives inside one `execute` call. */
 export function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => {

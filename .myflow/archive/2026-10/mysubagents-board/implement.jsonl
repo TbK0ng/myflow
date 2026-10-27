@@ -1,0 +1,9 @@
+{"file": ".pi/extensions/myflow/subagent.ts", "reason": "派发编排主体：runSingle 的 -p --mode json 传输、killChildTree、processLine 事件解析、getFinalOutput/isFailedResult 全部要被 rpc 传输替换或保留"}
+{"file": ".pi/extensions/myflow/background/registry.ts", "reason": "原子写 writeFileAtomic、listEntries/resolveStatus/prune/PRUNE_AFTER_MS 是看板与后台视图的复用来源"}
+{"file": ".pi/extensions/myflow/background/stop.ts", "reason": "terminateTree(pid) 与停止失败语义，background 视图 x 必须复用"}
+{"file": ".pi/extensions/myflow/background/start.ts", "reason": "要抽出 startBackgroundTask() 供看板 r 复用，确认确认/校验/写入顺序（先写 entry 再 spawn）"}
+{"file": ".pi/extensions/myflow/background/output.ts", "reason": "tail 读取与 cursor 语义：查看器只读，不得推进 cursor；需抽出 readTail"}
+{"file": ".pi/extensions/myflow/index.ts", "reason": "命令注册范式（/myflow-status 的 mode/hasUI 处理）、tool_call 守卫、contextKey 推导"}
+{"file": ".pi/extensions/myflow/pi-coding-agent.d.ts", "reason": "手写类型面，需补 ui.custom / registerCommand handler ctx，保持不引入依赖"}
+{"file": ".pi/extensions/myflow/status.ts", "reason": "纯 report 构建 + 文本渲染范式，非 TUI 降级报告照此写"}
+{"file": ".pi/extensions/myflow/agents.ts", "reason": "AgentConfig/writesUnder/parseFrontmatter 契约，重跑要按 agent 声明重建 config"}

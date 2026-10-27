@@ -6,6 +6,37 @@ reproducible zip). Dates are the tag dates.
 
 ## Unreleased
 
+### Added
+
+- **`/mysubagents`**: one panel over every dispatched run and every detached
+  background task. `board` is read-only (front runs in accent, background tasks
+  in warning, Enter opens a transcript/output viewer); `tree` groups runs by the
+  dispatch call that produced them and can stop a run, cancel a group, steer it
+  with one line, or rerun it; `background` can stop, prune finished entries, or
+  replay a command. `npm` has no new dependencies and `pi-subagents-lite` is not
+  involved.
+
+### Changed
+
+- **A sub-agent run is now a long-lived rpc child** (`pi --mode rpc`), not a
+  one-shot `-p --mode json` process: it settles on `agent_settled`, closes stdin
+  for an orderly exit, and is killed by tree when it ignores that. The reason is
+  steering — the same change is what lets a run be redirected while it works.
+- **Every run writes `.myflow/.runtime/subagents/<runId>.json`** (agent, mode,
+  group, status, heartbeat, steers, log path), which is what makes a run visible
+  to another session instead of only as a log file name. A run whose dispatcher
+  died is reported `stale` rather than `running` forever.
+- **A run can be steered or aborted through `<runId>.ctl.jsonl`**, appended by
+  the board and forwarded by the dispatcher's poll loop; this is the only path
+  that works when the dispatching session is blocked inside its own tool call.
+
+### Refactored
+
+- The background tools' cores are now exported (`startBackgroundTask`,
+  `stopBackgroundTask`, `readLogTail`) so the panel and the tools share one
+  implementation; the `myflow_bg_*` behavior is unchanged (their tests ran
+  untouched).
+
 ## 0.3.0 — 2026-10-27
 
 ### Changed

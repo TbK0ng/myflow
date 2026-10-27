@@ -357,6 +357,55 @@ long-running commands. That is orientation, not a gate: a background task is an
 execution facility the model reaches for when a command must outlive the
 session, and the invariants above are what keep it honest.
 
+### Front runs: the registry, `stale`, and the control channel
+
+A dispatched run is no longer only a log file. Three on-disk contracts make it
+visible and steerable from *any* session in the project:
+
+| Path | Contract |
+| --- | --- |
+| `.myflow/.runtime/subagents/<runId>.json` | one entry per run: `runId`/`group`/`index`/`total`, `agent`, `mode`, `prompt`, `status`, `startedAt`/`endedAt`/`heartbeatAt`, `pid`, `owner{contextKey,pid}`, `logPath`, `task`, `steers[]` |
+| `.myflow/.runtime/subagents/<runId>.ctl.jsonl` | append-only commands `{"type":"steer","message"}` / `{"type":"abort"}`; the dispatcher polls it every 1s and deletes it on settle |
+| `.myflow/.runtime/subagent-logs/<agent>-<ts>.log` | unchanged: the raw rpc stream, still the only source of transcript text |
+
+- **Settle is `agent_settled`, never the process exiting.** A child that leaves
+  after a turn has *not* finished: retries, compaction recovery and steering can
+  still follow. `agent_end` is likewise not a settle signal.
+- **Every wait is bounded.** prompt accepted ≤10s, abort grace 5s, exit grace
+after `stdin.end()` 5s, and each ends in `clearTimers()` + exactly one terminal
+  write (`isSettled` guard) + ctl removal + temp-prompt removal.
+- **`running` is believed, `stale` is inferred.** A reader never probes pids: a
+  `running` entry whose `heartbeatAt` is older than `STALE_AFTER_MS` (30s, while
+  the dispatcher beats every 1s) renders as `stale`. The `x` key is the only
+  place that pays for a real `taskkill /T /F` on the recorded pid.
+- **The dispatcher must not overwrite a board-recorded `stopped`.** A board `x`
+  kills at once, possibly before the dispatcher polled the abort line, so
+  `finalize` re-reads the entry and keeps `stopped` + its reason instead of
+  rewriting it `failed` / `"unexpected exit"`.
+- **Two writers, one append-only file.** Steering is safe because the ctl file
+  is never rewritten: each session appends its own line, the dispatcher dedupes
+  by command `id` and forwards in file order. The registry's `steers[]` is a
+  display copy, not the transport.
+- **Unchanged by all of this**: the `MYFLOW_AGENT_TYPE` / `MYFLOW_CONTEXT_ID` /
+  `MYFLOW_WRITES_UNDER` env trio, `--append-system-prompt` / `--tools` /
+  `--model`, and the log path. `exitCode` is now informational only —
+  `isFailedResult` reads `stopReason` / `errorMessage`.
+- **Display order is liveness first, then recency.** `listRuns` sorts by group:
+  a group with any non-terminal member first, then newest group first; members
+  keep `index` order so a chain still reads `1..n`. Recency comes from the
+  group's `g-<epoch>` prefix (shared by its members), *not* from `startedAt` —
+  a run that was marked running later must not split its own group apart.
+- **A live run cannot be deleted, only stopped.** `deleteRun` refuses anything
+  not terminal, because its dispatcher still writes that entry and the next
+  transition would resurrect the row the user just removed. `deleteFinishedRuns`
+  is the manual prune; `board` produces neither (it is read-only).
+- **Breaks if**: settle goes back to process exit or `agent_end`; a wait loses
+  its cap; the reader starts probing pids per row; `x` is implemented by writing
+  only a terminal status (nothing would be killed); `ctl` is ever rewritten or a
+  half-written trailing line is consumed; `MYFLOW_*` is injected from anywhere
+  other than the dispatcher; or the board claims a stop succeeded without the
+  child being gone.
+
 ## Design Decisions
 
 ### Design Decision: bound the write scope, do not try to exclude writers
@@ -407,6 +456,41 @@ session, and the invariants above are what keep it honest.
 > *unsafe* scope's writes **unbounded** instead of blocked. Injection keys off
 > `declaresWriteScope` (any non-blank value); only the parallel gate uses the
 > stricter `hasWriteScope`.
+
+> **Gotcha**: a child pipe's `error` event is asynchronous and crashes the host.
+>
+> Happens when: writing a steer/abort to a child that has already exited
+> (`EPIPE`), or a log `createWriteStream` failing on a full disk. A `try`/`catch`
+> around `write()` cannot catch it — Node raises `error` on the stream. Every
+> child stdio stream and every log stream needs an `error` listener; the probe
+> that found this killed the whole session.
+
+> **Gotcha**: running the full suite inside a myflow sub-agent fails 11–23 tests.
+>
+> Happens when: a `myflow-implement` / `myflow-check` sub-agent runs `npm test`.
+> The child inherits `MYFLOW_AGENT_TYPE`, so the extension tests see a sub-agent
+> session and the dispatch/background guards refuse what the tests expect.
+> Handle it by `env -u MYFLOW_AGENT_TYPE -u MYFLOW_CONTEXT_ID -u PI_SESSION_ID -u MYFLOW_WRITES_UNDER npm test`
+> (a plain terminal has none of them) — and never "fix" those tests to match.
+
+> **Gotcha**: `rmSync` on a killed child's directory needs a short await loop.
+>
+> Happens when: a run settles before its child exits, so the first `rmSync` hits
+> `EPERM`. `maxRetries` with Node's backoff just burns the timeout and then
+> gives up, leaving `%TEMP%/myflow-*` behind on every case (134 accumulated
+> before this was noticed). Await the death in a tight retry loop, and keep the
+> prefix in `tests/leak-audit.test.ts`'s audited list.
+
+> **Gotcha**: the panel re-reads both registries every second, so a key's effect
+> must survive a refresh.
+>
+> Happens when: a key changes what is selected. `refresh()` re-locates the cursor
+> from an anchor, so the anchor has to describe the row the cursor moved *to* —
+> `selectionAnchor(state, ...)` reads `state.selection`, i.e. the row it came
+> *from*, and the refresh then silently undoes every move (this shipped once: the
+> cursor looked dead while every key was handled). Anchor against the new
+> selection, and keep a test that presses an arrow and asserts the marked row
+> changed.
 
 ## Quality Check
 

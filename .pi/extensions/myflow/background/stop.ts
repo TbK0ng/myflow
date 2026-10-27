@@ -119,8 +119,34 @@ async function waitForProcessExit(pid: number): Promise<boolean> {
   return !isAlive(pid);
 }
 
-function bgStopError(message: string, taskId: string) {
-  return textResult(
+/**
+ * Where {@link stopBackgroundTask} takes its one test seam.
+ *
+ * The override exists so a test can prove the "never claim a stop that did not
+ * happen" rule without needing an unkillable process; the real path
+ * (`terminateTree`) is exercised by the process-tree test.
+ */
+export interface BackgroundStopDeps {
+  /** Override the platform kill (tests); defaults to `terminateTree`. */
+  terminate?: (pid: number) => KillOutcome;
+}
+
+/**
+ * What one stop attempt reports: the tool's `details` object plus the text it
+ * shows. One shape for every outcome keeps the tool a one-line wrapper.
+ */
+export interface BackgroundStopOutcome {
+  details: Record<string, unknown>;
+  text: string;
+  isError: boolean;
+}
+
+function stopFailed(details: Record<string, unknown>, text: string): BackgroundStopOutcome {
+  return { details, text, isError: true };
+}
+
+function bgStopError(message: string, taskId: string): BackgroundStopOutcome {
+  return stopFailed(
     {
       task_id: taskId,
       stopped: false,
@@ -132,17 +158,16 @@ function bgStopError(message: string, taskId: string) {
       error: message,
     },
     message,
-    true,
   );
 }
 
 /** The human-readable refusal for a task that is not addressable yet (R7). */
-function bgStopStartingError(taskId: string, pid: number) {
+function bgStopStartingError(taskId: string, pid: number): BackgroundStopOutcome {
   const message =
     `Task ${taskId} is still "starting": its wrapper has not confirmed a pid yet ` +
     `(no <id>.pid, no live pid). It is not addressable yet — retry in a moment. ` +
     "Nothing was killed and the registry entry was left untouched.";
-  return textResult(
+  return stopFailed(
     {
       task_id: taskId,
       stopped: false,
@@ -154,7 +179,6 @@ function bgStopStartingError(taskId: string, pid: number) {
       error: message,
     },
     message,
-    true,
   );
 }
 
@@ -244,117 +268,133 @@ export function createBgStopTool(registration: BgStopRegistration = {}): Record<
       const refusal = bgSubAgentRefusal(registration);
       if (refusal) return refusal;
 
-      const taskId = typeof params?.task_id === "string" ? params.task_id.trim() : "";
-      if (!taskId) {
-        return bgStopError("`task_id` must be a non-empty string.", "");
-      }
-
       const root = findProjectRoot(ctx?.cwd ?? process.cwd()) ?? ctx?.cwd ?? process.cwd();
-      const dir = backgroundDir(root);
-      const entry = readEntry(dir, taskId);
-      if (!entry) {
-        return bgStopError(
-          `No background task "${taskId}" is registered. Use myflow_bg_list to see known task ids.`,
-          taskId,
-        );
-      }
-
-      // One pid source for every reader (`design.md` §2.3): the wrapper's
-      // `<id>.pid` handshake first, then the entry's cached pid. The cache can
-      // still be `0` when the wrapper already wrote the handshake, so reading
-      // the entry directly would refuse to address a live task.
-      const pid = readPid(dir, entry);
-      const resolved = resolveStatus(dir, entry);
-
-      // Idempotent path: the task already ended (an `.exit` record, a
-      // persisted `stopped`, or a sticky `exited`). Report the existing verdict
-      // and write nothing, so a repeated stop can never overwrite a real exit
-      // code with null — and, just as important, never `taskkill` a pid the OS
-      // may have handed to an unrelated process (D1).
-      if (isFinishedStatus(resolved.status)) {
-        const result: BgStopResult = {
-          task_id: taskId,
-          stopped: false,
-          already_finished: true,
-          status: resolved.status,
-          exit_code: resolved.exit_code,
-          pid,
-          ended_at: typeof entry.ended_at === "string" ? entry.ended_at : null,
-          ...(resolved.signal ? { signal: resolved.signal } : {}),
-        };
-        return textResult(result as unknown as Record<string, unknown>, stopHumanText(result));
-      }
-
-      // Not addressable yet (R7): the entry exists but no pid has been
-      // confirmed. This is the window that used to make `stop` either miss the
-      // task entirely or — worse — signal "pid 0" (the process group). Refuse
-      // explicitly: no kill, no `stopped` write, so a later call (after `.pid`
-      // appears, or after the `starting` timeout self-heals the entry) still
-      // sees the truth.
-      if (resolved.status === "starting") {
-        return bgStopStartingError(taskId, pid);
-      }
-
-      const terminate = registration.terminate ?? terminateTree;
-      const outcome = terminate(pid);
-      const gone = await waitForProcessExit(pid);
-      if (!gone) {
-        // The process survived. Do not write `stopped`: a later list/output
-        // would contradict it. The raw stderr travels with the refusal.
-        const result: BgStopResult = {
-          task_id: taskId,
-          stopped: false,
-          already_finished: false,
-          status: "running",
-          exit_code: resolved.exit_code,
-          pid,
-          ended_at: null,
-          ...(outcome.stderr ? { stderr: outcome.stderr } : {}),
-        };
-        return textResult(
-          result as unknown as Record<string, unknown>,
-          stopFailureText(result),
-          true,
-        );
-      }
-
-      // The tree is gone. Keep an exit code the wrapper raced in with (its
-      // `.exit` record is authoritative); a forced stop with no record has no
-      // code to report, which `design.md` §8 accepts.
-      const exitRecord = readExitRecord(dir, entry);
-      const exitCode = exitRecord ? normalizeExitCode(exitRecord.exit_code) : resolved.exit_code;
-      const signal = exitRecord ? normalizeReason(exitRecord.signal) : null;
-      const endedAt = new Date().toISOString();
-      const updated: BackgroundEntry = {
-        ...entry,
-        status: "stopped",
-        exit_code: exitCode,
-        ended_at: endedAt,
-      };
-      try {
-        writeEntry(dir, updated);
-      } catch (error) {
-        return bgStopError(
-          `Task ${taskId} was terminated, but its registry entry could not be updated: ${messageOf(error)}`,
-          taskId,
-        );
-      }
-
-      const result: BgStopResult = {
-        task_id: taskId,
-        stopped: true,
-        already_finished: false,
-        status: "stopped",
-        exit_code: exitCode,
-        pid,
-        ended_at: endedAt,
-        ...(signal ? { signal } : {}),
-        // A non-zero kill status is kept as a note, even though `isAlive` is
-        // what decided success: it explains an unexpected-but-effective kill.
-        ...(outcome.status !== 0 && outcome.stderr ? { stderr: outcome.stderr } : {}),
-      };
-      return textResult(result as unknown as Record<string, unknown>, stopHumanText(result));
+      const outcome = await stopBackgroundTask(backgroundDir(root), params?.task_id, {
+        ...(registration.terminate ? { terminate: registration.terminate } : {}),
+      });
+      return textResult(outcome.details, outcome.text, outcome.isError);
     },
   };
 }
 
+/**
+ * Stop one background task by its id, against an already-resolved registry
+ * directory.
+ *
+ * Split out of the tool so the board's `x` key reaches the identical rules —
+ * idempotence, the `starting` refusal, and "never claim a stop that did not
+ * happen" — instead of re-implementing them.
+ */
+export async function stopBackgroundTask(
+  dir: string,
+  requestedId: unknown,
+  deps: BackgroundStopDeps = {},
+): Promise<BackgroundStopOutcome> {
+  const taskId = typeof requestedId === "string" ? requestedId.trim() : "";
+  if (!taskId) {
+    return bgStopError("`task_id` must be a non-empty string.", "");
+  }
+  const entry = readEntry(dir, taskId);
+  if (!entry) {
+    return bgStopError(
+      `No background task "${taskId}" is registered. Use myflow_bg_list to see known task ids.`,
+      taskId,
+    );
+  }
+
+  // One pid source for every reader (`design.md` §2.3): the wrapper's
+  // `<id>.pid` handshake first, then the entry's cached pid. The cache can
+  // still be `0` when the wrapper already wrote the handshake, so reading
+  // the entry directly would refuse to address a live task.
+  const pid = readPid(dir, entry);
+  const resolved = resolveStatus(dir, entry);
+
+  // Idempotent path: the task already ended (an `.exit` record, a
+  // persisted `stopped`, or a sticky `exited`). Report the existing verdict
+  // and write nothing, so a repeated stop can never overwrite a real exit
+  // code with null — and, just as important, never `taskkill` a pid the OS
+  // may have handed to an unrelated process (D1).
+  if (isFinishedStatus(resolved.status)) {
+    const result: BgStopResult = {
+      task_id: taskId,
+      stopped: false,
+      already_finished: true,
+      status: resolved.status,
+      exit_code: resolved.exit_code,
+      pid,
+      ended_at: typeof entry.ended_at === "string" ? entry.ended_at : null,
+      ...(resolved.signal ? { signal: resolved.signal } : {}),
+    };
+    return { details: result as unknown as Record<string, unknown>, text: stopHumanText(result), isError: false };
+  }
+
+  // Not addressable yet (R7): the entry exists but no pid has been
+  // confirmed. This is the window that used to make `stop` either miss the
+  // task entirely or — worse — signal "pid 0" (the process group). Refuse
+  // explicitly: no kill, no `stopped` write, so a later call (after `.pid`
+  // appears, or after the `starting` timeout self-heals the entry) still
+  // sees the truth.
+  if (resolved.status === "starting") {
+    return bgStopStartingError(taskId, pid);
+  }
+
+  const terminate = deps.terminate ?? terminateTree;
+  const outcome = terminate(pid);
+  const gone = await waitForProcessExit(pid);
+  if (!gone) {
+    // The process survived. Do not write `stopped`: a later list/output
+    // would contradict it. The raw stderr travels with the refusal.
+    const result: BgStopResult = {
+      task_id: taskId,
+      stopped: false,
+      already_finished: false,
+      status: "running",
+      exit_code: resolved.exit_code,
+      pid,
+      ended_at: null,
+      ...(outcome.stderr ? { stderr: outcome.stderr } : {}),
+    };
+    return {
+      details: result as unknown as Record<string, unknown>,
+      text: stopFailureText(result),
+      isError: true,
+    };
+  }
+
+  // The tree is gone. Keep an exit code the wrapper raced in with (its
+  // `.exit` record is authoritative); a forced stop with no record has no
+  // code to report, which `design.md` §8 accepts.
+  const exitRecord = readExitRecord(dir, entry);
+  const exitCode = exitRecord ? normalizeExitCode(exitRecord.exit_code) : resolved.exit_code;
+  const signal = exitRecord ? normalizeReason(exitRecord.signal) : null;
+  const endedAt = new Date().toISOString();
+  const updated: BackgroundEntry = {
+    ...entry,
+    status: "stopped",
+    exit_code: exitCode,
+    ended_at: endedAt,
+  };
+  try {
+    writeEntry(dir, updated);
+  } catch (error) {
+    return bgStopError(
+      `Task ${taskId} was terminated, but its registry entry could not be updated: ${messageOf(error)}`,
+      taskId,
+    );
+  }
+
+  const result: BgStopResult = {
+    task_id: taskId,
+    stopped: true,
+    already_finished: false,
+    status: "stopped",
+    exit_code: exitCode,
+    pid,
+    ended_at: endedAt,
+    ...(signal ? { signal } : {}),
+    // A non-zero kill status is kept as a note, even though `isAlive` is
+    // what decided success: it explains an unexpected-but-effective kill.
+    ...(outcome.status !== 0 && outcome.stderr ? { stderr: outcome.stderr } : {}),
+  };
+  return { details: result as unknown as Record<string, unknown>, text: stopHumanText(result), isError: false };
+}
