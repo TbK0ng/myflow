@@ -17,7 +17,7 @@ title: 文件地图
 | 扩展 / 运行注册表 | `.pi/extensions/myflow/runs.ts` | `<runId>.json` 的读写、`displayStatus` 的 stale 推断、分类与清理 |
 | 扩展 / 上下文注入 | `.pi/extensions/myflow/context-injection.ts` | `buildTaskContext`：artifact 与 jsonl 的读取顺序、三层字节预算、trusted roots、omission notice |
 | 扩展 / 每轮状态 | `.pi/extensions/myflow/turn-cache.ts` | 活动任务解析、`workflow-state` 组装、1500 ms 缓存 |
-| 扩展 / 跳过关键词 | `.pi/extensions/myflow/escape-hatch.ts` | 读 `prompt_injection.skip_keyword`，判定本轮是否抑制面包屑 |
+| 扩展 / 跳过关键词 | `.pi/extensions/myflow/escape-hatch.ts` | 用内置关键词 `no-myflow` 判定本轮是否抑制面包屑 |
 | 扩展 / 状态报告 | `.pi/extensions/myflow/status.ts` | `/myflow-status` 的数据与措辞，不调模型 |
 | 扩展 / 提问工具 | `.pi/extensions/myflow/ask.ts` | `myflow_ask_user`：一次选择、追加 `questions.jsonl`、无 UI 时不编造答案 |
 | 扩展 / 批准工具 | `.pi/extensions/myflow/approval.ts` | `myflow_request_approval`：四项前置检查、从 `gate-info` 取数、只在确认后写 `approval.json` |

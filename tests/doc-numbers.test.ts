@@ -63,27 +63,28 @@ test("the tuning-constants table matches the defaults the code reads", () => {
     read(".pi/extensions/myflow/escape-hatch.ts"),
   );
   assert.ok(skip, "escape-hatch.ts must define the default skip keyword");
-  assert.equal(rows.get("prompt_injection.skip_keyword"), skip[1]);
+  assert.equal(rows.get("DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD"), skip[1]);
 
   const injection = read(".pi/extensions/myflow/context-injection.ts");
   for (const key of ["max_file_bytes", "max_artifact_bytes", "max_total_bytes"]) {
-    assert.equal(rows.get(`context_injection.${key}`), String(objectNumber(injection, key)), key);
+    assert.equal(rows.get(key), String(objectNumber(injection, key)), key);
   }
 
   const channel = read(".myflow/scripts/channel.py");
   assert.equal(
-    rows.get("channel.worker_guard.max_live_workers"),
+    rows.get("DEFAULT_MAX_LIVE_WORKERS"),
     String(numericConstant(channel, "DEFAULT_MAX_LIVE_WORKERS")),
   );
   assert.equal(
-    rows.get("channel.worker_guard.idle_timeout"),
+    rows.get("DEFAULT_IDLE_TIMEOUT"),
     String(numericConstant(channel, "DEFAULT_IDLE_TIMEOUT")),
   );
 
-  // These two have no constant to compare: the parser's fallback is the code.
-  // Assert they are listed so the table stays complete for every key read.
-  assert.ok(rows.has("channel.trusted_context_dirs"));
-  assert.ok(rows.has("channel.auto_trust_myflow_symlinks"));
+  // `task.py validate` warns at its own literal; the table must agree.
+  const taskPy = read(".myflow/scripts/task.py");
+  const validateDefault = /CONTEXT_MAX_FILE_BYTES = (\d+)/.exec(taskPy);
+  assert.ok(validateDefault, "task.py must define CONTEXT_MAX_FILE_BYTES");
+  assert.equal(rows.get("CONTEXT_MAX_FILE_BYTES"), validateDefault[1]);
 });
 
 test("the background timeouts in the docs match the constants", () => {

@@ -37,7 +37,7 @@ title: 字节预算，而不是塞满 prompt
 
 降级是文本化的，三种标记：`[myflow: omitted <path> (<n> bytes) — <reason>]`、`[myflow: truncated at <N> bytes — read <path> for the full content]`，以及只发一次的 `[myflow: context limit reached; omitted entries remain authoritative on disk …]`。三条都在说同一件事：**被丢掉的字节还在磁盘上，你必须自己去读**；这也是模型唯一能看到的缺失信号。
 
-读取有信任边界：清单里写一个项目外的路径，只有在 `realpath` 之后落在项目根、或落在 `channel.trusted_context_dirs` 声明的目录里才会被读；`.myflow/tasks` 本身是符号链接时，它的真实目标被自动信任。清单文件读取上限 1 MiB。不存在的 artifact 静默跳过；被两个清单同时引用的文件按 `realpath` 去重。
+读取有信任边界：清单里写一个项目外的路径，只有在 `realpath` 之后落在项目根、或落在受信任的根里才会被读；唯一会被自动信任的根是符号链接走的 `.myflow/tasks`。清单文件读取上限 1 MiB。不存在的 artifact 静默跳过；被两个清单同时引用的文件按 `realpath` 去重。
 
 ## 为什么换成这个
 

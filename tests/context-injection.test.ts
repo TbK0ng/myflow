@@ -7,7 +7,6 @@ import {
   taskContextJsonlNames,
   taskContextInputPaths,
   taskContextSignature,
-  readContextInjectionLimits,
   ContextBudget,
   materialize,
   readJsonlLines,
@@ -43,7 +42,7 @@ test("taskContextJsonlNames: custom agent gets no manifest", () => {
   assert.deepEqual(taskContextJsonlNames("my-custom-agent"), []);
 });
 
-test("taskContextInputPaths: includes config, prd, design, implement, info", () => {
+test("taskContextInputPaths: includes prd, design, implement, info", () => {
   const dir = makeProject();
   const taskDir = join(dir, ".myflow", "tasks", "test");
   mkdirSync(taskDir, { recursive: true });
@@ -53,7 +52,6 @@ test("taskContextInputPaths: includes config, prd, design, implement, info", () 
   writeFileSync(join(taskDir, "info.md"), "# Info");
   try {
     const paths = taskContextInputPaths(dir, taskDir);
-    assert.ok(paths.includes(join(dir, ".myflow", "config.yaml")));
     assert.ok(paths.includes(join(taskDir, "prd.md")));
     assert.ok(paths.includes(join(taskDir, "design.md")));
     assert.ok(paths.includes(join(taskDir, "implement.md")));
@@ -86,34 +84,7 @@ test("taskContextSignature: includes file paths", () => {
   writeFileSync(join(taskDir, "prd.md"), "# PRD v1");
   const sig = taskContextSignature(dir, taskDir);
   assert.ok(sig.includes(join(taskDir, "prd.md")));
-  assert.ok(sig.includes("config.yaml"));
   rmSync(dir, { recursive: true, force: true });
-});
-
-test("readContextInjectionLimits: default when no config", () => {
-  const dir = makeProject();
-  try {
-    const limits = readContextInjectionLimits(dir);
-    assert.deepEqual(limits, DEFAULT_CONTEXT_INJECTION_LIMITS);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("readContextInjectionLimits: custom limits", () => {
-  const dir = makeProject();
-  writeFileSync(
-    join(dir, ".myflow", "config.yaml"),
-    "context_injection:\n  max_file_bytes: 1024\n  max_total_bytes: 2048\n",
-  );
-  try {
-    const limits = readContextInjectionLimits(dir);
-    assert.equal(limits.max_file_bytes, 1024);
-    assert.equal(limits.max_total_bytes, 2048);
-    assert.equal(limits.max_artifact_bytes, DEFAULT_CONTEXT_INJECTION_LIMITS.max_artifact_bytes);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 test("ContextBudget: hasRoom within limit", () => {
@@ -392,10 +363,6 @@ test("buildTaskContext: absent design.md / implement.md are skipped silently", (
 
 test("buildTaskContext: design/implement truncate like prd.md under max_artifact_bytes", () => {
   const dir = makeProject();
-  writeFileSync(
-    join(dir, ".myflow", "config.yaml"),
-    "context_injection:\n  max_artifact_bytes: 40\n  max_total_bytes: 100000\n",
-  );
   try {
     const taskDir = join(dir, ".myflow", "tasks", "demo");
     mkdirSync(taskDir, { recursive: true });
@@ -404,7 +371,11 @@ test("buildTaskContext: design/implement truncate like prd.md under max_artifact
     writeFileSync(join(taskDir, "design.md"), big("Design"));
     writeFileSync(join(taskDir, "implement.md"), big("Plan"));
     writeFileSync(join(taskDir, "info.md"), big("Info"));
-    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement", {
+      ...DEFAULT_CONTEXT_INJECTION_LIMITS,
+      max_artifact_bytes: 40,
+      max_total_bytes: 100000,
+    });
     const truncations = ctx.match(/truncated at 40 bytes/g) ?? [];
     assert.equal(truncations.length, 4, "all four artifacts share the max_artifact_bytes cap");
   } finally {
@@ -442,10 +413,6 @@ test("buildTaskContext: artifacts precede the curated jsonl files", () => {
 
 test("buildTaskContext: total budget still holds after design/implement are added", () => {
   const dir = makeProject();
-  writeFileSync(
-    join(dir, ".myflow", "config.yaml"),
-    "context_injection:\n  max_artifact_bytes: 300\n  max_total_bytes: 1200\n",
-  );
   try {
     const taskDir = join(dir, ".myflow", "tasks", "demo");
     mkdirSync(taskDir, { recursive: true });
@@ -460,10 +427,14 @@ test("buildTaskContext: total budget still holds after design/implement are adde
       join(taskDir, "implement.jsonl"),
       JSON.stringify({ file: "spec/ref.md", reason: "curated" }) + "\n",
     );
-    const ctx = buildTaskContext(dir, taskDir, "myflow-implement");
+    const ctx = buildTaskContext(dir, taskDir, "myflow-implement", {
+      ...DEFAULT_CONTEXT_INJECTION_LIMITS,
+      max_artifact_bytes: 300,
+      max_total_bytes: 1200,
+    });
     assert.ok(
       Buffer.byteLength(ctx, "utf-8") <= 1200,
-      "context must stay within context_injection.max_total_bytes",
+      "context must stay within the total byte budget",
     );
     // Degradation is never silent: the budget gives way with a notice, and the
     // jsonl entry (emitted last) is the first thing dropped.
@@ -479,8 +450,8 @@ test("the max_file_bytes default has one value across TypeScript and Python", ()
   // it. Two languages, two literals, so the pair is compared here rather than
   // trusted to stay in sync.
   const taskPy = readFileSync(join(import.meta.dirname, "..", ".myflow", "scripts", "task.py"), "utf-8");
-  const match = /def _context_max_file_bytes\(\)[\s\S]*?default = (\d+)/.exec(taskPy);
-  assert.ok(match, "task.py must keep the max_file_bytes default in _context_max_file_bytes");
+  const match = /CONTEXT_MAX_FILE_BYTES = (\d+)/.exec(taskPy);
+  assert.ok(match, "task.py must define CONTEXT_MAX_FILE_BYTES");
   assert.equal(
     Number(match[1]),
     DEFAULT_CONTEXT_INJECTION_LIMITS.max_file_bytes,

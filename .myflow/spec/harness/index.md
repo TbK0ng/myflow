@@ -100,7 +100,7 @@ Payload tour and inventory:
   every dispatched child, and `session_before_compact` re-injects.
 - **Value/shape**: task artifacts in a fixed order — `prd.md` → `design.md` →
   `implement.md` → `info.md` — each materialized as an `artifact` and bounded
-  by `context_injection.max_artifact_bytes`; then the files referenced by
+  by `DEFAULT_CONTEXT_INJECTION_LIMITS.max_artifact_bytes`; then the files referenced by
   `implement.jsonl` / `check.jsonl`, each bounded by `max_file_bytes`; every
   block scored against `max_total_bytes`.
 - **Invariant**: `design.md` and `implement.md` get exactly the treatment
@@ -533,11 +533,10 @@ after `stdin.end()` 5s, and each ends in `clearTimers()` + exactly one terminal
       against the handlers the copied extension actually registers, so it fails
       until they follow. No other file states a hook count; `myflow-check`
       points at the table.
-- [ ] A new config key read by `.pi/extensions/myflow/` or `.myflow/scripts/` is
-      added to the Config Keys table in
+- [ ] A new tuning constant in `.pi/extensions/myflow/` or `.myflow/scripts/`
+      is added to the tuning table in
       `.pi/skills/myflow-meta/references/harness-conventions.md` in the same
-      change. A `channel.worker_guard` key also updates the `myflow-channel`
-      skill.
+      change. A worker-guard constant also updates the `myflow-channel` skill.
 - [ ] The approval gate's contract copies agree: `.myflow/workflow.md`, the
       `myflow-meta` harness conventions, the `myflow-brainstorm` skill, and
       `.pi/prompts/myflow-continue.md`. No copy still describes `task.py start`

@@ -98,7 +98,7 @@ machine state: put it in `.gitignore`, never commit it.
 - Injected read order inside a sub-agent: `prd.md` → `design.md` if present →
   `implement.md` if present → `info.md` → `implement.jsonl` / `check.jsonl`
   referenced files. The extension materializes each into `<task-context>` —
-  artifacts bounded by `context_injection.max_artifact_bytes`, jsonl files by
+  artifacts bounded by the per-artifact byte budget, jsonl files by
   `max_file_bytes` — so they are read, not merely named; a missing artifact is
   skipped silently.
 

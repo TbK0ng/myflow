@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { isSafeWriteScope, isWithinWriteScope } from "./agents.ts";
 import { findProjectRoot } from "./find-project-root.ts";
 import { TurnContextCache, resolveActiveTaskStatus } from "./turn-cache.ts";
-import { readPromptInjectionSkipKeyword, shouldSkipWorkflowState } from "./escape-hatch.ts";
+import { DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD, shouldSkipWorkflowState } from "./escape-hatch.ts";
 import { type AgentType, buildTaskContext } from "./context-injection.ts";
 import {
   MYFLOW_AGENT_ENV,
@@ -391,11 +391,11 @@ export default function extension(pi: ExtensionAPI): void {
     if (!projectRoot) return;
 
     const contextKey = deriveContextKey(ctx);
-    const skipKeyword = readPromptInjectionSkipKeyword(projectRoot);
     // Delegated processes (channel workers) run with this set: their input is a
     // work order, not a user turn, so the per-turn breadcrumb would derail them.
     const skipThisTurn =
-      process.env[SKIP_BREADCRUMB_ENV] === "1" || shouldSkipWorkflowState(inputEvent.text ?? "", skipKeyword);
+      process.env[SKIP_BREADCRUMB_ENV] === "1" ||
+      shouldSkipWorkflowState(inputEvent.text ?? "", DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD);
     turnCache.beginTurn(skipThisTurn);
     turnCache.get(projectRoot, contextKey);
   });

@@ -52,6 +52,19 @@ async function waitForProcessGone(pid: number, deadlineMs = 15_000): Promise<boo
   }
 }
 
+/**
+ * The log stream opens the file asynchronously (`createWriteStream`), so a run's
+ * recorded `logPath` can be correct a tick before the file exists on disk.
+ */
+async function waitForFile(path: string, deadlineMs = 2_000): Promise<boolean> {
+  const start = Date.now();
+  for (;;) {
+    if (existsSync(path)) return true;
+    if (Date.now() - start >= deadlineMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 /** A project with one active task and a session pointing at it. */
 function makeScopedProject(): string {
   const root = mkdtempSync(join(tmpdir(), "myflow-guard-"));
@@ -313,7 +326,8 @@ test("myflow_subagent: a run inside its cap is unaffected", async () => {
     assert.equal(result.content[0].text, "done early");
     assert.ok(!result.isError);
     assert.ok(!result.details.runs[0].timedOut);
-    assert.ok(existsSync(String(result.details.runs[0].logPath)));
+    const logPath = String(result.details.runs[0].logPath);
+    assert.ok(await waitForFile(logPath), `the run log must reach the disk: ${logPath}`);
   } finally {
     process.argv[1] = argv1;
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });

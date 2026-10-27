@@ -215,18 +215,19 @@ Keep these consistent across files; change them together or not at all:
   breaks as soon as the prompt grows a newline. Assert the recorded state
   (registry/plan) instead of the shim's view of argv.
 
-## Tuning constants (code defaults)
+## Tuning constants
 
-| Key | Default | Effect |
+These are code constants, not settings: nothing in a project overrides them.
+
+| Constant | Value | Effect |
 | --- | --- | --- |
-| `prompt_injection.skip_keyword` | `no-myflow` | Word that suppresses the per-turn workflow breadcrumb |
-| `context_injection.max_file_bytes` | 32768 | Per-file task-context budget |
-| `context_injection.max_artifact_bytes` | 65536 | Per-artifact (prd/design/implement/info) budget |
-| `context_injection.max_total_bytes` | 131072 | Total task-context budget |
-| `channel.trusted_context_dirs` | `[]` | Extra roots JSONL-referenced files may live in |
-| `channel.auto_trust_myflow_symlinks` | `true` | Auto-trust a symlinked `.myflow/tasks` directory |
-| `channel.worker_guard.max_live_workers` | `3` | Cap on live workers; `spawn` refuses above it |
-| `channel.worker_guard.idle_timeout` | `900` | Seconds before the guard stops an idle worker |
+| `DEFAULT_PROMPT_INJECTION_SKIP_KEYWORD` | `no-myflow` | Word that suppresses the per-turn workflow breadcrumb |
+| `max_file_bytes` | 32768 | Per-file task-context budget |
+| `max_artifact_bytes` | 65536 | Per-artifact (prd/design/implement/info) budget |
+| `max_total_bytes` | 131072 | Total task-context budget |
+| `DEFAULT_MAX_LIVE_WORKERS` | `3` | Cap on live workers; `spawn` refuses above it |
+| `DEFAULT_IDLE_TIMEOUT` | `900` | Seconds before the guard stops an idle worker |
+| `CONTEXT_MAX_FILE_BYTES` | 32768 | `task.py validate` warns above this size |
 
 ## Pre-Development Checklist
 

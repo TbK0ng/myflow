@@ -13,7 +13,7 @@ interface Sandbox {
   home: string;
 }
 
-function makeSandbox(config?: string): Sandbox {
+function makeSandbox(): Sandbox {
   const base = mkdtempSync(join(tmpdir(), "myflow-channel-"));
   const project = join(base, "project");
   const home = join(base, "home");
@@ -22,7 +22,6 @@ function makeSandbox(config?: string): Sandbox {
   mkdirSync(home, { recursive: true });
   cpSync(CHANNEL_PY, join(project, ".myflow", "scripts", "channel.py"));
   cpSync(join(ROOT, ".myflow", "agents"), join(project, ".myflow", "agents"), { recursive: true });
-  if (config) writeFileSync(join(project, ".myflow", "config.yaml"), config, "utf-8");
   return { project, home };
 }
 
@@ -188,35 +187,36 @@ test("channel spawn --dry-run: builds a worker command from the runtime agent", 
 });
 
 test("channel worker guard: refuses to exceed max_live_workers", () => {
-  const sandbox = makeSandbox("channel:\n  worker_guard:\n    max_live_workers: 1\n");
+  const sandbox = makeSandbox();
   try {
     channel(sandbox, ["create", "review"]);
     const store = projectStore(sandbox);
+    const guard = JSON.parse(channel(sandbox, ["workers", "--json"])).guard;
     writeFileSync(
       join(store, "workers.json"),
       JSON.stringify({
-        workers: [
-          {
-            handle: "busy",
-            channel: "review",
-            scope: "project",
-            agent: "check",
-            pid: process.pid,
-            started_at: "2026-01-01T00:00:00Z",
-            log: "x.log",
-          },
-        ],
+        workers: Array.from({ length: guard.max_live_workers }, (_, index) => ({
+          handle: `busy${index}`,
+          channel: "review",
+          scope: "project",
+          agent: "check",
+          pid: process.pid,
+          started_at: "2026-01-01T00:00:00Z",
+          log: `x${index}.log`,
+        })),
       }),
       "utf-8",
     );
 
     const workers = JSON.parse(channel(sandbox, ["workers", "--json"]));
     assert.equal(workers.workers[0].alive, true);
-    assert.equal(workers.guard.max_live_workers, 1);
+    assert.equal(workers.guard.max_live_workers, guard.max_live_workers);
 
     assert.match(
       channel(sandbox, ["spawn", "review", "--agent", "reviewer", "--prompt", "go"], true),
-      /worker guard: 1 live worker\(s\) >= max_live_workers=1/,
+      new RegExp(
+        `worker guard: ${guard.max_live_workers} live worker\\(s\\) >= max_live_workers=${guard.max_live_workers}`,
+      ),
     );
   } finally {
     cleanup(sandbox);

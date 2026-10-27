@@ -51,7 +51,7 @@ title: 上下文注入
 
 清单里的一行不是"读这个路径"，而是"指向项目内的这个文件"。`resolveProjectFile` 先做 `realpath`，再判断是否落在项目根或某个 trusted root 内；都不在就**静默跳过**，连 notice 都不留。
 
-trusted roots 来自两处：一份可配置的白名单 `channel.trusted_context_dirs`（默认空集），以及自动信任被符号链接走的 `.myflow/tasks`（`AUTO_TRUST_ENTRIES`），除非显式写了 `channel.auto_trust_myflow_symlinks: false`。后者是为"任务目录被链接到另一个工作树"这种布局准备的。
+trusted root 只有一个来源：被符号链接走的 `.myflow/tasks`（`AUTO_TRUST_ENTRIES`），它的真实目标被自动信任。这是为"任务目录被链接到另一个工作树"这种布局准备的。
 
 二进制或非 UTF-8 的文件不内联，换成一条 omitted notice；磁盘上的文件存在但读不出来时，notice 说的是 `artifact is missing or unreadable`。
 

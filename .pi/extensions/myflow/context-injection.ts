@@ -39,7 +39,6 @@ export function taskContextInputPaths(
   agentType?: AgentType,
 ): string[] {
   const paths = new Set<string>([
-    join(projectRoot, ".myflow", "config.yaml"),
     join(taskDir, "prd.md"),
     join(taskDir, "design.md"),
     join(taskDir, "implement.md"),
@@ -82,43 +81,6 @@ export function taskContextSignature(
       }
     })
     .join("\n");
-}
-
-/** Read the context injection limits from config.yaml. */
-export function readContextInjectionLimits(projectRoot: string): ContextInjectionLimits {
-  let config = "";
-  try {
-    config = readFileSync(join(projectRoot, ".myflow", "config.yaml"), "utf-8").replace(/^\uFEFF/, "");
-  } catch {
-    return { ...DEFAULT_CONTEXT_INJECTION_LIMITS };
-  }
-
-  const limits = { ...DEFAULT_CONTEXT_INJECTION_LIMITS };
-  let inSection = false;
-  let sectionIndent = -1;
-  for (const rawLine of config.split(/\r?\n/)) {
-    const trimmed = rawLine.trim();
-    if (!inSection) {
-      if (/^context_injection\s*:\s*(#.*)?$/.test(trimmed)) {
-        inSection = true;
-        sectionIndent = rawLine.length - rawLine.trimStart().length;
-      }
-      continue;
-    }
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const indent = rawLine.length - rawLine.trimStart().length;
-    if (indent <= sectionIndent) break;
-    const match = trimmed.match(/^(\w+)\s*:\s*(.*)$/);
-    if (!match) continue;
-    const key = match[1]!;
-    const value = parseInt(match[2]!.trim(), 10);
-    if (Number.isFinite(value)) {
-      if (key === "max_file_bytes") limits.max_file_bytes = value;
-      else if (key === "max_artifact_bytes") limits.max_artifact_bytes = value;
-      else if (key === "max_total_bytes") limits.max_total_bytes = value;
-    }
-  }
-  return limits;
 }
 
 /** Context budget manager. */
@@ -288,97 +250,18 @@ function isInsideRoot(root: string, target: string): boolean {
 
 const AUTO_TRUST_ENTRIES = ["tasks"];
 
-function stripTrustValue(s: string): string {
-  return s.trim().replace(/\s*#.*$/, "").trim().replace(/^['"]|['"]$/g, "");
-}
-
-function parseChannelTrustSection(content: string): { trustedDirs: string[]; autoTrustSymlinks?: boolean } {
-  const lines = content.split("\n");
-  const trustedDirs: string[] = [];
-  let autoTrustSymlinks: boolean | undefined;
-  let inChannel = false;
-  let inList = false;
-
-  for (const raw of lines) {
-    const line = raw.replace(/\r$/, "");
-    const trimmed = line.trimEnd();
-    if (trimmed.trim().startsWith("#")) continue;
-
-    if (/^channel:\s*$/.test(trimmed)) {
-      inChannel = true;
-      inList = false;
-      continue;
-    }
-    if (!inChannel) continue;
-
-    if (trimmed.trim() !== "" && /^\S/.test(line)) {
-      inChannel = false;
-      inList = false;
-      continue;
-    }
-    if (trimmed.trim() === "") continue;
-
-    if (inList) {
-      const item = trimmed.match(/^ {4}-\s*(.+)$/);
-      if (item) {
-        const val = stripTrustValue(item[1]!);
-        if (val) trustedDirs.push(val);
-        continue;
-      }
-      inList = false;
-    }
-
-    if (/^ {2}trusted_context_dirs:\s*$/.test(trimmed)) {
-      inList = true;
-      continue;
-    }
-
-    const boolMatch = trimmed.match(/^ {2}auto_trust_myflow_symlinks:\s*(.+)$/);
-    if (boolMatch) {
-      const val = stripTrustValue(boolMatch[1]!).toLowerCase();
-      if (val === "false") autoTrustSymlinks = false;
-      else if (val === "true") autoTrustSymlinks = true;
-      else process.stderr.write(`[channel] channel.auto_trust_myflow_symlinks: invalid value '${val}', ignoring\n`);
-      continue;
-    }
-  }
-
-  return { trustedDirs, autoTrustSymlinks };
-}
-
 export function resolveTrustedRoots(projectRoot: string): string[] {
-  const configPath = join(projectRoot, ".myflow", "config.yaml");
-  let config: { trustedDirs: string[]; autoTrustSymlinks?: boolean } = { trustedDirs: [] };
-  if (existsSync(configPath)) {
-    try {
-      config = parseChannelTrustSection(readFileSync(configPath, "utf-8").replace(/^\uFEFF/, ""));
-    } catch {
-      // ignore
-    }
-  }
-
   const roots: string[] = [];
-  for (const entry of config.trustedDirs) {
+  for (const entryName of AUTO_TRUST_ENTRIES) {
+    const entryPath = join(projectRoot, ".myflow", entryName);
     try {
-      roots.push(realpathSync(resolve(projectRoot, entry)));
-    } catch {
-      // entry not found or invalid — skip
-    }
-  }
-
-  if (config.autoTrustSymlinks !== false) {
-    for (const entryName of AUTO_TRUST_ENTRIES) {
-      const entryPath = join(projectRoot, ".myflow", entryName);
-      try {
-        if (lstatSync(entryPath).isSymbolicLink()) {
-          roots.push(realpathSync(entryPath));
-        }
-      } catch {
-        // missing / broken symlink — nothing to trust
+      if (lstatSync(entryPath).isSymbolicLink()) {
+        roots.push(realpathSync(entryPath));
       }
+    } catch {
+      // missing / broken symlink -- nothing to trust
     }
   }
-
   return [...new Set(roots)];
 }
 
@@ -417,11 +300,15 @@ export function displayProjectPath(projectRoot: string, filePath: string, taskDi
 }
 
 /** Build the budgeted task context. */
-export function buildTaskContext(projectRoot: string, taskDir: string, agentType?: AgentType): string {
+export function buildTaskContext(
+  projectRoot: string,
+  taskDir: string,
+  agentType?: AgentType,
+  limits: ContextInjectionLimits = DEFAULT_CONTEXT_INJECTION_LIMITS,
+): string {
   const trustedRoots = resolveTrustedRoots(projectRoot);
   const parts: string[] = [];
-  const limits = readContextInjectionLimits(projectRoot);
-  const prefix = "<task-context>\nContext is bounded by .myflow/config.yaml. Files marked [truncated] or [omitted] remain authoritative on disk; use their required_read path before relying on missing detail.\n\n";
+  const prefix = "<task-context>\nContext is bounded by built-in byte budgets. Files marked [truncated] or [omitted] remain authoritative on disk; use their required_read path before relying on missing detail.\n\n";
   const suffix = "\n</task-context>";
   const wrapperBytes = Buffer.byteLength(prefix + suffix, "utf-8");
   if (limits.max_total_bytes > 0 && limits.max_total_bytes < wrapperBytes) return "";

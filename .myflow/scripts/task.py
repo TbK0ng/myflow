@@ -76,6 +76,8 @@ SESSIONS_DIR = PROJECT_ROOT / ".myflow" / ".runtime" / "sessions"
 # exists but carries no truthy `file` row means a dispatched sub-agent would
 # run with zero spec context, which `start` refuses unless overridden.
 CONTEXT_MANIFESTS = ("implement.jsonl", "check.jsonl")
+#: Per-file truncation point, kept equal to the extension's DEFAULT_CONTEXT_INJECTION_LIMITS.
+CONTEXT_MAX_FILE_BYTES = 32768
 
 # The plan artifacts the approval gate binds to, in a fixed order. The order is
 # part of the contract: the hash is computed over this exact list, so a
@@ -211,39 +213,6 @@ def _resolve_context_entry(path_str: str) -> Path:
     return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
 
 
-def _context_max_file_bytes() -> int:
-    """Read ``context_injection.max_file_bytes`` from ``.myflow/config.yaml``.
-
-    Mirrors the extension's parser and default so `validate` warns at the same
-    threshold the injection actually truncates at.
-    """
-    default = 32768
-    config = PROJECT_ROOT / ".myflow" / "config.yaml"
-    if not config.is_file():
-        return default
-    try:
-        text = config.read_text(encoding="utf-8-sig")
-    except OSError:
-        return default
-    in_section = False
-    section_indent = -1
-    for raw in text.splitlines():
-        stripped = raw.strip()
-        if not in_section:
-            if re.match(r"^context_injection\s*:\s*(#.*)?$", stripped):
-                in_section = True
-                section_indent = len(raw) - len(raw.lstrip())
-            continue
-        if not stripped or stripped.startswith("#"):
-            continue
-        if len(raw) - len(raw.lstrip()) <= section_indent:
-            break
-        match = re.match(r"^max_file_bytes\s*:\s*(\d+)", stripped)
-        if match:
-            return int(match.group(1))
-    return default
-
-
 def _validate_jsonl(jsonl_file: Path, task_dir: Path, max_file_bytes: int) -> int:
     """Validate one manifest; return its error count (0 curated entries = 1 error).
 
@@ -325,7 +294,7 @@ def _validate_jsonl(jsonl_file: Path, task_dir: Path, max_file_bytes: int) -> in
             if size is not None and size > max_file_bytes:
                 print(
                     f"  {name}:{line_num}: warning: {file_path} is {size} bytes, exceeds "
-                    f"context_injection.max_file_bytes ({max_file_bytes})"
+                    f"CONTEXT_MAX_FILE_BYTES ({max_file_bytes})"
                 )
 
     if errors == 0 and real_entries == 0:
@@ -1040,7 +1009,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
     print("=== Validating context files ===")
     print(f"target: {_relative(task_dir)}")
-    max_file_bytes = _context_max_file_bytes()
+    max_file_bytes = CONTEXT_MAX_FILE_BYTES
     total_errors = 0
     for name in CONTEXT_MANIFESTS:
         jsonl_file = task_dir / name

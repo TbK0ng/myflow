@@ -18,7 +18,7 @@ Configuration: `.myflow/worktree.yaml` (all optional)
 
     worktree_dir: ../worktrees     # relative to the project root
     copy:                          # files/dirs copied into each new worktree
-      - .myflow/config.yaml
+      - .env
     post_create:                   # commands run in the new worktree
       - npm install
     verify:                        # commands that must pass to settle a check

@@ -103,8 +103,8 @@ channel is unlistable and its worker unkillable from the default scope.
   worker of that channel is alive. Stop it (`kill <channel>`) or use
   `rm --force`, which stops the workers before deleting.
 - The worker guard caps live workers **per channel** and stops idle ones
-  (`channel.worker_guard.*`; the defaults are in the Config Keys table in
-  `myflow-meta/references/harness-conventions.md`).
+  (`DEFAULT_MAX_LIVE_WORKERS`, `DEFAULT_IDLE_TIMEOUT`; both are in the tuning
+  table in `myflow-meta/references/harness-conventions.md`).
 
 ## Not For
 

@@ -26,12 +26,9 @@ scope. Never `~/.myflow`: that name is the project-root marker. Worker
 processes and logs live beside them. Writes take a lock file, allocate a
 monotonic `seq`, and honor `--idempotency-key`.
 
-Worker guard: `.myflow/config.yaml`
-
-    channel:
-      worker_guard:
-        max_live_workers: 3
-        idle_timeout: 900      # seconds
+Worker guard: `spawn` refuses a channel that already has `max_live_workers`
+live workers, and `prune` stops a worker that has been idle for `idle_timeout`
+seconds. Both are code constants.
 
 Runtime agent definitions live in `.myflow/agents/<name>.md`.
 """
@@ -71,7 +68,6 @@ PROJECT_ROOT = _find_project_root()
 # user-level store of that name would make every project under the home
 # directory resolve its root to the home directory.
 HOME_STORE = Path.home() / ".pi" / "myflow" / "channels"
-CONFIG_PATH = PROJECT_ROOT / ".myflow" / "config.yaml"
 AGENTS_DIR = PROJECT_ROOT / ".myflow" / "agents"
 
 DEFAULT_MAX_LIVE_WORKERS = 3
@@ -134,45 +130,8 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _parse_scalar(raw: str) -> str:
-    value = raw.strip()
-    if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
-        return value[1:-1]
-    return value
-
-
 def read_worker_guard() -> dict:
-    guard = {"max_live_workers": DEFAULT_MAX_LIVE_WORKERS, "idle_timeout": DEFAULT_IDLE_TIMEOUT}
-    if not CONFIG_PATH.is_file():
-        return guard
-    try:
-        lines = CONFIG_PATH.read_text(encoding="utf-8-sig").splitlines()
-    except OSError:
-        return guard
-    in_channel = False
-    in_guard = False
-    for raw in lines:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        stripped = raw.strip()
-        if indent == 0:
-            in_channel = stripped in {"channel:", "channel :"}
-            in_guard = False
-            continue
-        if not in_channel:
-            continue
-        if stripped.startswith("worker_guard:"):
-            in_guard = True
-            continue
-        if in_guard and ":" in stripped:
-            key, _, value = stripped.partition(":")
-            number = int(_parse_scalar(value) or 0) if value.strip().lstrip("-").isdigit() else 0
-            if key.strip() == "max_live_workers" and number > 0:
-                guard["max_live_workers"] = number
-            elif key.strip() == "idle_timeout" and number > 0:
-                guard["idle_timeout"] = number
-    return guard
+    return {"max_live_workers": DEFAULT_MAX_LIVE_WORKERS, "idle_timeout": DEFAULT_IDLE_TIMEOUT}
 
 
 # ---------------------------------------------------------------------------
